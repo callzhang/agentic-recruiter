@@ -154,7 +154,7 @@ def _coerce_int(value: Any, default: int) -> int:
 
 def _build_scheduler_payload(base_url: str, options: Dict[str, Any]) -> Dict[str, Any]:
     opts = dict(options)
-    criteria_path = opts.get('criteria_path', 'jobs/criteria.yaml')
+    criteria_path = opts.get('criteria_path', 'config/jobs.yaml')
     payload: Dict[str, Any] = {
         'base_url': base_url,
         'criteria_path': os.path.abspath(criteria_path),
@@ -192,7 +192,7 @@ def start_service(*, run_scheduler: bool = False, scheduler_options: Optional[Di
         base_url = scheduler_config.pop('base_url', None) or f"http://{host}:{port}"
         env['BOSS_SERVICE_BASE_URL'] = base_url
         env['BOSS_CRITERIA_PATH'] = os.path.abspath(
-            scheduler_config.get('criteria_path', 'jobs/criteria.yaml')
+            scheduler_config.get('criteria_path', 'config/jobs.yaml')
         )
 
         # 检查端口是否被占用
@@ -249,7 +249,7 @@ def start_service(*, run_scheduler: bool = False, scheduler_options: Optional[Di
                 "--disable-default-apps",
                 "--disable-sync",
                 "--disable-translate",
-                "--disable-web-security",
+                # "--disable-web-security",
                 "--disable-features=VizDisplayCompositor",
                 # "--no-sandbox",
                 "--window-size=1200,800",
@@ -391,7 +391,7 @@ def _parse_args() -> argparse.Namespace:
 
     schedule_parser = subparsers.add_parser("schedule", help="启动API服务并运行BRD调度")
     schedule_parser.add_argument("--role-id", default="default", help="岗位画像ID")
-    schedule_parser.add_argument("--criteria", default="jobs/criteria.yaml", help="画像配置文件路径")
+    schedule_parser.add_argument("--criteria", default="config/jobs.yaml", help="画像配置文件路径")
     schedule_parser.add_argument("--base-url", help="FastAPI服务地址，默认基于HOST/PORT推断")
     schedule_parser.add_argument("--poll-interval", type=int, default=120, help="主动沟通轮询周期(秒)")
     schedule_parser.add_argument("--recommend-interval", type=int, default=600, help="推荐候选人轮询周期(秒)")
