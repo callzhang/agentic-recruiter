@@ -2,11 +2,15 @@
 """
 启动Boss直聘后台服务
 """
+import argparse
 import subprocess
 import sys
 import os
 import time
 import signal
+from typing import Any, Dict, Optional
+
+import requests
 
 def install_dependencies():
     """安装依赖"""
@@ -127,9 +131,51 @@ def kill_existing_chrome(user_data: str):
     except Exception:
         pass
 
-def start_service():
+
+def _wait_for_service_ready(base_url: str, timeout: int = 60) -> bool:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            response = requests.get(f"{base_url}/status", timeout=5)
+            if response.status_code == 200:
+                return True
+        except requests.RequestException:
+            pass
+        time.sleep(2)
+    return False
+
+
+def _coerce_int(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _build_scheduler_payload(base_url: str, options: Dict[str, Any]) -> Dict[str, Any]:
+    opts = dict(options)
+    criteria_path = opts.get('criteria_path', 'jobs/criteria.yaml')
+    payload: Dict[str, Any] = {
+        'base_url': base_url,
+        'criteria_path': os.path.abspath(criteria_path),
+        'role_id': opts.get('role_id', 'default'),
+        'poll_interval': _coerce_int(opts.get('poll_interval', 120), 120),
+        'recommend_interval': _coerce_int(opts.get('recommend_interval', 600), 600),
+        'followup_interval': _coerce_int(opts.get('followup_interval', 3600), 3600),
+        'report_interval': _coerce_int(opts.get('report_interval', 604800), 604800),
+        'inbound_limit': _coerce_int(opts.get('inbound_limit', 40), 40),
+        'recommend_limit': _coerce_int(opts.get('recommend_limit', 20), 20),
+    }
+    greeting_template = opts.get('greeting_template')
+    if greeting_template:
+        payload['greeting_template'] = greeting_template
+    return payload
+
+def start_service(*, run_scheduler: bool = False, scheduler_options: Optional[Dict[str, Any]] | None = None):
     """启动服务"""
     print("[*] 启动Boss直聘后台服务...")
+    scheduler_config = dict(scheduler_options or {})
+    scheduler_started = False
     
     # 安装依赖
     # if not install_dependencies():
@@ -143,6 +189,12 @@ def start_service():
         cdp_port = env.get('CDP_PORT', '9222')
         user_data = env.get('BOSSZP_USER_DATA', '/tmp/bosszhipin_profile')
         force_cleanup = env.get('FORCE_CLEANUP_PORT', 'true').lower() == 'true'
+        base_url = scheduler_config.pop('base_url', None) or f"http://{host}:{port}"
+        env['BOSS_SERVICE_BASE_URL'] = base_url
+        env['BOSS_CRITERIA_PATH'] = os.path.abspath(
+            scheduler_config.get('criteria_path', 'jobs/criteria.yaml')
+        )
+
         # 检查端口是否被占用
         try:
             import socket
@@ -236,7 +288,28 @@ def start_service():
         ]
         # 新建进程组，以便整体发送信号
         process = subprocess.Popen(cmd, env=env, preexec_fn=os.setsid)
-        
+
+        if run_scheduler:
+            if _wait_for_service_ready(base_url, timeout=90):
+                try:
+                    payload = _build_scheduler_payload(base_url, scheduler_config)
+                    response = requests.post(
+                        f"{base_url}/automation/scheduler/start",
+                        json=payload,
+                        timeout=30,
+                    )
+                    data = response.json() if response.ok else {}
+                    if response.ok and data.get('success'):
+                        scheduler_started = True
+                        print("[+] BRD调度器已启动")
+                    else:
+                        detail = data.get('details') if isinstance(data, dict) else response.text
+                        print(f"[!] 启动调度器失败: {detail}")
+                except Exception as exc:
+                    print(f"[!] 调度器启动请求失败: {exc}")
+            else:
+                print("[!] API 服务未就绪，跳过调度器启动")
+
         def signal_handler(sig, frame):
             print("\n[*] 正在停止服务...")
             try:
@@ -248,12 +321,17 @@ def start_service():
                     os.killpg(os.getpgid(process.pid), signal.SIGKILL)
                 except Exception:
                     pass
-            
+
             # 可选：清理Chrome进程（通常保留以便下次使用）
             cleanup_chrome = os.environ.get('CLEANUP_CHROME_ON_EXIT', 'false').lower() == 'true'
             if cleanup_chrome:
                 print("[*] 清理Chrome进程...")
                 kill_existing_chrome(user_data)
+            if scheduler_started:
+                try:
+                    requests.post(f"{base_url}/automation/scheduler/stop", timeout=10)
+                except Exception:
+                    pass
             
             print("[+] 服务已停止")
             sys.exit(0)
@@ -267,6 +345,11 @@ def start_service():
         
         # 等待进程结束
         process.wait()
+        if scheduler_started:
+            try:
+                requests.post(f"{base_url}/automation/scheduler/stop", timeout=10)
+            except Exception:
+                pass
         
     except KeyboardInterrupt:
         print("\n[*] 正在停止服务...")
@@ -281,12 +364,67 @@ def start_service():
                 os.killpg(os.getpgid(process.pid), signal.SIGKILL)
             except Exception:
                 pass
+        if scheduler_started:
+            try:
+                requests.post(f"{base_url}/automation/scheduler/stop", timeout=10)
+            except Exception:
+                pass
         print("[+] 服务已停止")
     except Exception as e:
         print(f"[!] 启动服务失败: {e}")
+        if scheduler_started:
+            try:
+                requests.post(f"{base_url}/automation/scheduler/stop", timeout=10)
+            except Exception:
+                pass
         return False
     
     return True
 
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Boss直聘自动化服务")
+    subparsers = parser.add_subparsers(dest="command")
+    parser.set_defaults(command="start")
+
+    subparsers.add_parser("start", help="仅启动API服务")
+
+    schedule_parser = subparsers.add_parser("schedule", help="启动API服务并运行BRD调度")
+    schedule_parser.add_argument("--role-id", default="default", help="岗位画像ID")
+    schedule_parser.add_argument("--criteria", default="jobs/criteria.yaml", help="画像配置文件路径")
+    schedule_parser.add_argument("--base-url", help="FastAPI服务地址，默认基于HOST/PORT推断")
+    schedule_parser.add_argument("--poll-interval", type=int, default=120, help="主动沟通轮询周期(秒)")
+    schedule_parser.add_argument("--recommend-interval", type=int, default=600, help="推荐候选人轮询周期(秒)")
+    schedule_parser.add_argument("--followup-interval", type=int, default=3600, help="跟进周期(秒)")
+    schedule_parser.add_argument("--report-interval", type=int, default=604800, help="报表生成间隔(秒)")
+    schedule_parser.add_argument("--inbound-limit", type=int, default=40, help="每轮处理主动沟通数量")
+    schedule_parser.add_argument("--recommend-limit", type=int, default=20, help="每轮处理推荐数量")
+    schedule_parser.add_argument("--greeting-template", help="自定义打招呼话术")
+
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = _parse_args()
+    if args.command == "schedule":
+        scheduler_options = {
+            'role_id': args.role_id,
+            'criteria_path': args.criteria,
+            'poll_interval': args.poll_interval,
+            'recommend_interval': args.recommend_interval,
+            'followup_interval': args.followup_interval,
+            'report_interval': args.report_interval,
+            'inbound_limit': args.inbound_limit,
+            'recommend_limit': args.recommend_limit,
+        }
+        if args.greeting_template:
+            scheduler_options['greeting_template'] = args.greeting_template
+        if args.base_url:
+            scheduler_options['base_url'] = args.base_url
+        start_service(run_scheduler=True, scheduler_options=scheduler_options)
+    else:
+        start_service()
+
+
 if __name__ == "__main__":
-    start_service()
+    main()
