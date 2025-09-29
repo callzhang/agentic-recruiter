@@ -24,7 +24,8 @@
       "subProcess": true,
       "env": {
         "HEADLESS": "0",
-        "PYTHONUNBUFFERED": "1"
+        "PYTHONUNBUFFERED": "1",
+        "FORCE_CLEANUP_PORT": "true"
       }
     }
   ]
