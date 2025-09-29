@@ -2,3 +2,7 @@ vendor/get_jobs/
 .venv/
 .pyc
 */__pycache__/
+.pytest_cache/
+.cursor/
+__pycache__/
+config/secrets.yaml
