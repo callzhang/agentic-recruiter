@@ -37,14 +37,22 @@ from src.chat_actions import (
 from src.recommendation_actions import (
     list_recommended_candidates_action,
     view_recommend_candidate_resume_action,
+    greet_recommend_candidate_action,
 )
 from src.blacklist import load_blacklist, NEGATIVE_HINTS
 from src.events import EventManager
 from src import mappings as mapx
 from src.global_logger import get_logger
+from src.scheduler import BRDWorkScheduler
 
 # Get global logger once at module level
 logger = get_logger()
+
+DEFAULT_GREET_MESSAGE = (
+    "您好，我们是一家AI科技公司，是奔驰全球创新代表中唯一的中国公司，"
+    "代表中国参加中德Autobahn汽车大会，是华为云自动驾驶战略合作伙伴中唯一创业公司，"
+    "也是经过华为严选的唯一产品级AI数据合作伙伴。您对我们岗位有没有兴趣？"
+)
 
 class BossService:
     _instance = None
@@ -122,11 +130,86 @@ class BossService:
             self.notifications = []
             self.shutdown_requested = False
             self.startup_complete = threading.Event() # Event to signal startup completion
+            self.scheduler: BRDWorkScheduler | None = None
+            self.scheduler_lock = threading.Lock()
+            self.scheduler_config: dict[str, Any] = {}
             self.initialized = True
             self.setup_routes()
             # 事件驱动的消息缓存和响应监听器
             self.event_manager = EventManager(logger=logging.getLogger(__name__))
             
+    def _service_base_url(self) -> str:
+        return os.environ.get('BOSS_SERVICE_BASE_URL', 'http://127.0.0.1:5001')
+
+    def _scheduler_status(self) -> Dict[str, Any]:
+        with self.scheduler_lock:
+            running = self.scheduler is not None
+            config = dict(self.scheduler_config) if running else {}
+        return {
+            'running': running,
+            'config': config,
+        }
+
+    def _stop_scheduler(self) -> tuple[bool, str]:
+        with self.scheduler_lock:
+            if not self.scheduler:
+                return False, '调度器未运行'
+            scheduler = self.scheduler
+            self.scheduler = None
+            self.scheduler_config = {}
+        try:
+            scheduler.stop()
+            return True, '已停止调度器'
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.error(f"停止调度器失败: {exc}")
+            return False, f'停止调度器失败: {exc}'
+
+    def _start_scheduler(self, payload: Dict[str, Any]) -> tuple[bool, str]:
+        with self.scheduler_lock:
+            if self.scheduler:
+                return False, '调度器已运行'
+            try:
+                options = self._build_scheduler_options(payload)
+                scheduler = BRDWorkScheduler(**options)
+                scheduler.start()
+                self.scheduler = scheduler
+                self.scheduler_config = options
+                return True, '调度器已启动'
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.error(f"启动调度器失败: {exc}")
+                self.scheduler = None
+                self.scheduler_config = {}
+                return False, f'启动调度器失败: {exc}'
+
+    @staticmethod
+    def _coerce_int(value: Any, default: int) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _build_scheduler_options(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        base_url = payload.get('base_url') or self._service_base_url()
+        criteria_path = payload.get('criteria_path') or os.environ.get('BOSS_CRITERIA_PATH', 'jobs/criteria.yaml')
+
+        options: Dict[str, Any] = {
+            'base_url': base_url.rstrip('/'),
+            'criteria_path': os.path.abspath(criteria_path),
+            'role_id': payload.get('role_id', 'default'),
+            'poll_interval': self._coerce_int(payload.get('poll_interval'), 120),
+            'recommend_interval': self._coerce_int(payload.get('recommend_interval'), 600),
+            'followup_interval': self._coerce_int(payload.get('followup_interval'), 3600),
+            'report_interval': self._coerce_int(payload.get('report_interval'), 604800),
+            'inbound_limit': self._coerce_int(payload.get('inbound_limit'), 40),
+            'recommend_limit': self._coerce_int(payload.get('recommend_limit'), 20),
+        }
+
+        greeting_template = payload.get('greeting_template')
+        if isinstance(greeting_template, str) and greeting_template.strip():
+            options['greeting_template'] = greeting_template
+
+        return options
+
     def _startup_sync(self):
         """Synchronous startup tasks executed in a thread pool.
         
@@ -155,6 +238,7 @@ class BossService:
         """
         logger.info("开始同步关闭任务...")
         self._graceful_shutdown()
+        self._stop_scheduler()
         logger.info("同步关闭任务完成。")
 
     @asynccontextmanager
@@ -288,6 +372,19 @@ class BossService:
             self._ensure_browser_session()
             result = view_recommend_candidate_resume_action(self.page, index)
             return JSONResponse(result)
+
+        @self.app.post('/recommend/candidate/{index}/greet')
+        def greet_recommended_candidate(index: int, payload: Dict[str, Any] | None = Body(default=None)):
+            """Send greeting message to recommended candidate by index."""
+            self._ensure_browser_session()
+            message = (payload or {}).get('message') or DEFAULT_GREET_MESSAGE
+            result = greet_recommend_candidate_action(self.page, index, message)
+            return JSONResponse({
+                'success': result.get('success', False),
+                'chat_id': result.get('chat_id'),
+                'details': result.get('details', ''),
+                'timestamp': datetime.now().isoformat()
+            })
             
 
         @self.app.get('/search')
@@ -327,7 +424,25 @@ class BossService:
                 'params': params,
             }
             return JSONResponse({'success': True, 'preview': preview, 'timestamp': datetime.now().isoformat()})
-        
+
+        @self.app.get('/automation/scheduler/status')
+        def scheduler_status():
+            return JSONResponse(self._scheduler_status())
+
+        @self.app.post('/automation/scheduler/start')
+        def scheduler_start(payload: Dict[str, Any] | None = Body(default=None)):
+            success, details = self._start_scheduler(payload or {})
+            status = self._scheduler_status()
+            status.update({'success': success, 'details': details})
+            return JSONResponse(status)
+
+        @self.app.post('/automation/scheduler/stop')
+        def scheduler_stop():
+            success, details = self._stop_scheduler()
+            status = self._scheduler_status()
+            status.update({'success': success, 'details': details})
+            return JSONResponse(status)
+
         @self.app.post('/chat/{chat_id}/greet')
         def greet_candidate(chat_id: str, message: str | None = None):
             """Send a greeting message to a candidate.
