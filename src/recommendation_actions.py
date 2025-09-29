@@ -104,3 +104,93 @@ def view_recommend_candidate_resume_action(page, index: int) -> Dict[str, Any]:
     if not result.get('success'):
         result['debug'] = collect_resume_debug_info(page)
     return result
+
+
+def greet_recommend_candidate_action(page, index: int, message: str) -> Dict[str, Any]:
+    """发送标准化打招呼消息给推荐候选人。"""
+    frame = _prepare_recommendation_page(page)
+
+    card = frame.locator(CANDIDATE_CARD_SELECTOR).all()[index]
+    card.scroll_into_view_if_needed(timeout=1000)
+    card.click(timeout=1000)
+
+    greet_selectors = [
+        "button:has-text('打招呼')",
+        "span:has-text('打招呼')",
+        "text=打招呼",
+    ]
+
+    greeted = False
+    for selector in greet_selectors:
+        target = page.locator(selector).first
+        if not target.count():
+            continue
+        try:
+            target.wait_for(state="visible", timeout=2000)
+            target.click(timeout=2000)
+            greeted = True
+            break
+        except Exception:
+            continue
+
+    if not greeted:
+        return {'success': False, 'details': '未找到打招呼按钮'}
+
+    input_selectors = [
+        "#boss-chat-editor-input",
+        "textarea",
+        "div.editor textarea",
+    ]
+    input_box = None
+    for selector in input_selectors:
+        candidate = page.locator(selector).first
+        if candidate.count():
+            input_box = candidate
+            break
+
+    if input_box:
+        try:
+            input_box.click()
+            input_box.fill("")
+            input_box.type(message)
+        except Exception:
+            try:
+                input_box.evaluate("(el, value) => { if (el.value !== undefined) el.value = value; }", message)
+            except Exception:
+                pass
+
+    send_selectors = [
+        "div.submit:has-text('发送')",
+        "button:has-text('发送')",
+        "span:has-text('发送')",
+    ]
+    sent = False
+    for selector in send_selectors:
+        btn = page.locator(selector).first
+        if not btn.count():
+            continue
+        try:
+            btn.click(timeout=2000)
+            sent = True
+            break
+        except Exception:
+            continue
+
+    close_overlay_dialogs(page)
+
+    chat_id = None
+    try:
+        selected = page.locator("div.geek-item.selected").first
+        if selected.count():
+            chat_id = selected.get_attribute('data-id')
+    except Exception:
+        pass
+
+    if not sent:
+        return {'success': False, 'details': '发送消息失败', 'chat_id': chat_id}
+
+    return {
+        'success': True,
+        'details': '已发送打招呼',
+        'chat_id': chat_id,
+    }
