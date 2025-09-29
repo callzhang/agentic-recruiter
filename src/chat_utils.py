@@ -61,7 +61,7 @@ def close_overlay_dialogs(page, logger=lambda msg, level: None, timeout_ms: int 
     """Close any overlay dialogs that might be blocking the page.
     """
     # Close boss-layer__wrapper overlays (like resume dialogs)
-    overlay_resume = page.locator("div.boss-layer__wrapper, div.boss-popup__close")
+    overlay_resume = page.locator("div.boss-layer__wrapper, div.boss-popup__close, div[class*='boss-popup__close'], div[ka][class*='boss-popup__close']")
     for btn in overlay_resume.all():
         logger("检测到在线简历对话框，正在关闭", "info")
         btn.click(timeout=timeout_ms)

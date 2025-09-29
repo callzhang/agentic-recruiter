@@ -7,7 +7,6 @@ import sys
 import os
 import time
 import signal
-import socket
 
 def install_dependencies():
     """安装依赖"""
@@ -22,20 +21,69 @@ def install_dependencies():
     return True
 
 def free_port(port: str):
-    """在macOS上释放占用端口的进程(lsof -ti :port; kill pid)。"""
+    """释放占用端口的进程 - 只清理我们自己的服务进程"""
     try:
-        pids = subprocess.check_output(["lsof", "-ti", f":{port}"]).decode().strip().splitlines()
-        print(f'found pids: {pids}')
-        for pid in pids:
-            if pid:
-                try:
-                    os.kill(int(pid), signal.SIGTERM)
-                    os.kill(int(pid), signal.SIGKILL)
-                except Exception:
-                    pass
-        print(f'released port: {port}')
-    except Exception:
-        pass
+        # 验证端口号
+        port_num = int(port)
+        if not (1 <= port_num <= 65535):
+            print(f"[!] 无效端口号: {port}")
+            return
+    except ValueError:
+        print(f"[!] 端口号必须是数字: {port}")
+        return
+    
+    try:
+        if sys.platform == "win32":
+            # Windows: 只清理uvicorn和boss_service相关进程
+            result = subprocess.run(
+                ["netstat", "-ano"], capture_output=True, text=True
+            )
+            for line in result.stdout.split('\n'):
+                if f":{port}" in line and "LISTENING" in line:
+                    parts = line.split()
+                    if len(parts) > 4:
+                        pid = parts[-1]
+                        # 检查进程是否是我们自己的服务
+                        try:
+                            tasklist_result = subprocess.run(
+                                ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV"],
+                                capture_output=True, text=True
+                            )
+                            if "uvicorn" in tasklist_result.stdout or "python" in tasklist_result.stdout:
+                                subprocess.run(["taskkill", "/F", "/PID", pid], 
+                                             capture_output=True)
+                                print(f'[+] 清理了端口 {port} 上的服务进程')
+                        except Exception:
+                            pass
+        else:
+            # Unix-like systems: 只清理uvicorn和boss_service相关进程
+            try:
+                pids = subprocess.check_output(["lsof", "-ti", f":{port}"]).decode().strip().splitlines()
+                if pids and pids[0]:
+                    for pid in pids:
+                        if pid:
+                            try:
+                                # 检查进程是否是我们自己的服务
+                                ps_result = subprocess.run(
+                                    ["ps", "-p", pid, "-o", "comm="],
+                                    capture_output=True, text=True
+                                )
+                                if "uvicorn" in ps_result.stdout or "python" in ps_result.stdout:
+                                    os.kill(int(pid), signal.SIGTERM)
+                                    time.sleep(1)
+                                    os.kill(int(pid), signal.SIGKILL)
+                                    print(f'[+] 清理了端口 {port} 上的服务进程')
+                                else:
+                                    print(f'[!] 端口 {port} 被其他进程占用，跳过清理')
+                            except Exception:
+                                pass
+                    print(f'[+] 端口 {port} 检查完成')
+                else:
+                    print(f'[+] 端口 {port} 可用')
+            except subprocess.CalledProcessError:
+                print(f'[+] 端口 {port} 可用')
+    except Exception as e:
+        print(f"[!] 检查端口失败: {e}")
 
 def is_chrome_running(cdp_port: str) -> bool:
     """检查Chrome是否已经在运行"""
@@ -49,22 +97,33 @@ def is_chrome_running(cdp_port: str) -> bool:
 def kill_existing_chrome(user_data: str):
     """杀死现有的Chrome进程（基于user-data-dir）"""
     try:
-        # 查找使用相同user-data-dir的Chrome进程
-        result = subprocess.run(
-            ["pgrep", "-f", f"--user-data-dir={user_data}"],
-            capture_output=True, text=True
-        )
-        if result.stdout.strip():
-            pids = result.stdout.strip().split('\n')
-            for pid in pids:
-                if pid:
-                    try:
-                        os.kill(int(pid), signal.SIGTERM)
-                        time.sleep(0.5)
-                        os.kill(int(pid), signal.SIGKILL)
-                    except Exception:
-                        pass
-            print(f"[*] 已清理现有Chrome进程")
+        if sys.platform == "win32":
+            # Windows: 使用tasklist和taskkill
+            result = subprocess.run(
+                ["tasklist", "/FI", f"WINDOWTITLE eq *Chrome*", "/FO", "CSV"],
+                capture_output=True, text=True
+            )
+            if result.returncode == 0 and "chrome.exe" in result.stdout:
+                subprocess.run(["taskkill", "/F", "/IM", "chrome.exe"], 
+                             capture_output=True)
+                print(f"[*] 已清理现有Chrome进程")
+        else:
+            # Unix-like systems: 使用pgrep
+            result = subprocess.run(
+                ["pgrep", "-f", f"--user-data-dir={user_data}"],
+                capture_output=True, text=True
+            )
+            if result.stdout.strip():
+                pids = result.stdout.strip().split('\n')
+                for pid in pids:
+                    if pid:
+                        try:
+                            os.kill(int(pid), signal.SIGTERM)
+                            time.sleep(0.5)
+                            os.kill(int(pid), signal.SIGKILL)
+                        except Exception:
+                            pass
+                print(f"[*] 已清理现有Chrome进程")
     except Exception:
         pass
 
@@ -83,14 +142,31 @@ def start_service():
         port = env.get('BOSS_SERVICE_PORT', '5001')
         cdp_port = env.get('CDP_PORT', '9222')
         user_data = env.get('BOSSZP_USER_DATA', '/tmp/bosszhipin_profile')
-        # 启动前释放端口
-        free_port(port)
-        # 确保不存在残留的 uvicorn 进程（例如上一次reloader未退出干净）
+        force_cleanup = env.get('FORCE_CLEANUP_PORT', 'true').lower() == 'true'
+        # 检查端口是否被占用
         try:
-            subprocess.run(["pkill", "-f", "uvicorn.*boss_service:app"], check=False)
-            time.sleep(0.5)
+            import socket
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            result = sock.connect_ex(('127.0.0.1', int(port)))
+            sock.close()
+            if result == 0:
+                print(f"[!] 端口 {port} 已被占用")
+                print(f"[*] 如果这是您的主服务，请使用不同的端口:")
+                if force_cleanup:
+                    free_port(port)
+                    # 启动前释放端口（只清理我们自己的服务）
+                    # 确保不存在残留的 uvicorn 进程（例如上一次reloader未退出干净）
+                    try:
+                        subprocess.run(["pkill", "-f", "uvicorn.*boss_service:app"], check=False)
+                        time.sleep(0.5)
+                    except Exception:
+                        pass
+                else:
+                    return False
         except Exception:
             pass
+        
+
 
         # 检查Chrome是否已经在运行
         if is_chrome_running(cdp_port):
@@ -101,9 +177,16 @@ def start_service():
             kill_existing_chrome(user_data)
             
             # 启动独立的 Chrome (CDP)，确保浏览器长驻，与 API 进程解耦
+            # 检测Chrome路径
+            if sys.platform == "darwin":
+                chrome_path = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+            elif sys.platform == "win32":
+                chrome_path = "chrome.exe"  # 假设Chrome在PATH中
+            else:
+                chrome_path = "google-chrome"  # Linux
+            
             chrome_cmd = [
-                "google-chrome" if sys.platform != "darwin" else \
-                "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+                chrome_path,
                 f"--remote-debugging-port={cdp_port}",
                 f"--user-data-dir={user_data}",
                 "--no-first-run",
@@ -116,7 +199,7 @@ def start_service():
                 "--disable-translate",
                 "--disable-web-security",
                 "--disable-features=VizDisplayCompositor",
-                "--no-sandbox",
+                # "--no-sandbox",
                 "--window-size=1200,800",
                 # 限制Chrome只处理特定URL，避免干扰正常浏览
                 "--restrict-http-scheme",
@@ -145,10 +228,9 @@ def start_service():
             "boss_service:app",
             "--host", host,
             "--port", port,
-            "--log-level", "info",
-            # "--reload", 
+            # "--log-level", "info",
+            "--reload", 
             "--reload-include", "boss_service.py",
-            "--reload-include", "boss_client.py",
             "--reload-dir", "src",
             '--reload-delay', '3.0'
         ]
