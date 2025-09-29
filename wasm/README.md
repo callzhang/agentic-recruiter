@@ -1,6 +1,6 @@
 # WASM Loader Patch Summary
 
-This folder contains a patched copy of `wasm_canvas-1.0.2-5030.js` that differs from the CDN version used by the resume iframe. Two functional changes were introduced so downstream Playwright scripts can extract full resume details:
+This folder contains a patched copy of `wasm_canvas-1.0.2-5030_patched.js` that differs from the CDN version used by the resume iframe. Two functional changes were introduced so downstream Playwright scripts can extract full resume details:
 
 1. **Bootstrap hook inside `__wbg_finalize_init`**  
    After the WebAssembly exports are initialised, the script now guarantees a global `window.__resume_data_store` object exists. This is the coordination point that our Playwright tooling reads after the module finishes rendering.

@@ -19,7 +19,6 @@ if str(ROOT) not in sys.path:
 from src.config import settings  # noqa: E402
 from src.resume_capture import (  # noqa: E402
     capture_resume_from_chat,
-    prepare_resume_context,
 )
 
 CaptureFn = Callable[[str, Optional[Any]], None]
