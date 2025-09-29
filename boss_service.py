@@ -23,27 +23,28 @@ import shutil # Import shutil
 
 from src.config import settings
 from src.utils import export_records
-from src.chat_utils import ensure_on_chat_page, find_chat_item
-from src.extractors import extract_candidates, extract_messages, extract_chat_history
+from src.ui_utils import ensure_on_chat_page, find_chat_item
 from src.chat_actions import (
     request_resume_action,
     send_message_action,
     view_full_resume_action,
     discard_candidate_action,
-    get_candidates_list_action,
     get_messages_list_action,
     get_chat_history_action,
     view_online_resume_action,
+    accept_resume_action,
 )
 from src.recommendation_actions import (
     list_recommended_candidates_action,
-    view_candidate_resume_action,
+    view_recommend_candidate_resume_action,
 )
-from src import page_selectors as sel
 from src.blacklist import load_blacklist, NEGATIVE_HINTS
 from src.events import EventManager
 from src import mappings as mapx
-from src.resume_capture import capture_resume_from_chat
+from src.global_logger import get_logger
+
+# Get global logger once at module level
+logger = get_logger()
 
 class BossService:
     _instance = None
@@ -54,32 +55,61 @@ class BossService:
         return cls._instance
 
     def _setup_logging(self):
-        """Set up file and console logging."""
+        """Set up file and console logging.
+        
+        Configures logging with both file and console handlers.
+        Creates a log file in the project root directory and sets up
+        the global logger for use throughout the application.
+        """
+
         # Correctly set the log file path to the project's root directory
         log_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'service.log')
-        logging.basicConfig(
-            level=logging.INFO,
-            format='%(asctime)s - %(levelname)s - %(message)s',
-            handlers=[
-                logging.FileHandler(log_file, mode='a'),
-                logging.StreamHandler()
-            ]
-        )
-        self.logger = logging.getLogger(__name__)
+        
+        # Create a logger specifically for this service
+        service_logger = logging.getLogger("boss_service")
+        service_logger.setLevel(logging.INFO)
+        
+        # Only add handlers if they don't exist
+        if not service_logger.handlers:
+            # File handler
+            file_handler = logging.FileHandler(log_file, mode='a')
+            file_handler.setLevel(logging.INFO)
+            
+            # Console handler
+            console_handler = logging.StreamHandler()
+            console_handler.setLevel(logging.INFO)
+            
+            # File formatter (no colors for file)
+            file_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+            file_handler.setFormatter(file_formatter)
+            
+            # Console formatter (with colors, no logger name)
+            from src.global_logger import ColoredFormatter
+            console_formatter = ColoredFormatter('%(asctime)s - %(levelname)s - %(message)s')
+            console_handler.setFormatter(console_formatter)
+            
+            # Add handlers
+            service_logger.addHandler(file_handler)
+            service_logger.addHandler(console_handler)
 
     def add_notification(self, message: str, level: str = "info"):
-        """Add a notification and log it."""
+        """Add a notification and log it.
+        
+        Args:
+            message (str): The notification message to add
+            level (str): The log level ('info', 'warning', 'error')
+        """
         timestamp = datetime.now().isoformat()
         self.notifications.append({"timestamp": timestamp, "level": level, "message": message})
         
-        # Log to file
-        if hasattr(self, 'logger'):
-            if level == "error":
-                self.logger.error(message)
-            elif level == "warning":
-                self.logger.warning(message)
-            else:
-                self.logger.info(message)
+        # Log to file using global logger
+        if level == "error":
+            logger.error(message)
+        elif level == "warning":
+            logger.warning(message)
+        else:
+            logger.info(message)
+
 
     def __init__(self):
         if not hasattr(self, 'initialized'):
@@ -98,45 +128,69 @@ class BossService:
             self.event_manager = EventManager(logger=logging.getLogger(__name__))
             
     def _startup_sync(self):
-        """Synchronous startup tasks executed in a thread pool."""
+        """Synchronous startup tasks executed in a thread pool.
+        
+        Initializes Playwright, starts the browser, and sets up the service.
+        This method is called during FastAPI startup to prepare the service
+        for handling requests.
+        """
         try:
-            self.add_notification("正在初始化Playwright...", "info")
+            logger.info("正在初始化Playwright...")
             self.playwright = sync_playwright().start()
-            self.add_notification("Playwright初始化成功。", "success")
+            logger.info("Playwright初始化成功。")
             self.start_browser()
             # Do NOT call ensure_login here. Let it be called lazily.
         except Exception as e:
-            self.add_notification(f"同步启动任务失败: {e}", "error")
+            logger.error(f"同步启动任务失败: {e}")
             import traceback
             self.add_notification(traceback.format_exc(), "error")
         finally:
             self.startup_complete.set() # Signal that startup is finished
 
     def _shutdown_sync(self):
-        """Synchronous shutdown tasks executed in a thread pool."""
-        self.add_notification("开始同步关闭任务...", "info")
+        """Synchronous shutdown tasks executed in a thread pool.
+        
+        Performs graceful shutdown of the service, including cleanup of
+        Playwright resources and browser contexts.
+        """
+        logger.info("开始同步关闭任务...")
         self._graceful_shutdown()
-        self.add_notification("同步关闭任务完成。", "success")
+        logger.info("同步关闭任务完成。")
 
     @asynccontextmanager
     async def lifespan(self, app: FastAPI):
+        """FastAPI lifespan context manager.
+        
+        Handles startup and shutdown events for the FastAPI application.
+        Ensures proper initialization and cleanup of browser resources.
+        
+        Args:
+            app (FastAPI): The FastAPI application instance
+        """
         # Startup logic
-        self.add_notification("FastAPI lifespan: Startup event triggered.", "info")
+        logger.info("FastAPI lifespan: Startup event triggered.")
         await run_in_threadpool(self._startup_sync)
         
         yield
         # Shutdown logic
-        self.add_notification("FastAPI lifespan: Shutdown event triggered.", "info")
+        logger.info("FastAPI lifespan: Shutdown event triggered.")
         await run_in_threadpool(self._shutdown_sync)
 
     def setup_routes(self):
-        """设置API路由"""
+        """设置API路由
         
-        # REMOVED the middleware that was causing race conditions.
-        # Login will now be handled explicitly in each endpoint that needs it.
+        Configures all FastAPI routes and endpoints for the Boss直聘 service.
+        Includes endpoints for candidates, messages, resumes, and other operations.
+        """
+        
 
         @self.app.get('/status')
         def get_status():
+            """Get service status and login state.
+            
+            Returns:
+                JSONResponse: Service status including login state and notification count
+            """
             return JSONResponse({
                 'status': 'running',
                 'logged_in': self.is_logged_in,
@@ -146,6 +200,14 @@ class BossService:
         
         @self.app.get('/notifications')
         def get_notifications(limit: int = Query(20, ge=1, le=200)):
+            """Get service notifications.
+            
+            Args:
+                limit (int): Maximum number of notifications to return (1-200)
+                
+            Returns:
+                JSONResponse: List of notifications with total count
+            """
             return JSONResponse({
                 'notifications': self.notifications[-limit:],
                 'total': len(self.notifications)
@@ -153,6 +215,11 @@ class BossService:
         
         @self.app.post('/login')
         def login():
+            """Check login status.
+            
+            Returns:
+                JSONResponse: Login status and success message
+            """
             self._ensure_browser_session()
             return JSONResponse({
                 'success': self.is_logged_in,
@@ -160,31 +227,42 @@ class BossService:
                 'timestamp': datetime.now().isoformat()
             })
         
-        @self.app.get('/chat/candidates')
-        def get_candidates(limit: int = Query(10, ge=1, le=100)):
-            # 确保浏览器会话正常
+        
+        
+        @self.app.get('/chat/dialogs')
+        def get_messages(limit: int = Query(10, ge=1, le=100)):
+            """Get list of chat dialogs/messages.
+            
+            Args:
+                limit (int): Maximum number of messages to return (1-100)
+                
+            Returns:
+                JSONResponse: List of messages with count and timestamp
+            """
             self._ensure_browser_session()
-            
-            if not self.is_logged_in:
-                raise Exception("未登录")
-            
-            candidates = get_candidates_list_action(
+
+            messages = get_messages_list_action(
                 self.page, 
                 limit, 
-                logger=self.add_notification,
-                black_companies=getattr(self, 'black_companies', None),
-                save_candidates_func=self.save_candidates_to_file
+                chat_cache=self.event_manager.chat_cache
             )
             return JSONResponse({
                 'success': True,
-                'candidates': candidates,
-                'count': len(candidates),
+                'messages': messages,
+                'count': len(messages),
                 'timestamp': datetime.now().isoformat()
             })
 
         @self.app.get('/recommend/candidates')
         def get_recommended_candidates(limit: int = Query(20, ge=1, le=100)):
-            """获取推荐候选人列表"""
+            """Get list of recommended candidates.
+            
+            Args:
+                limit (int): Maximum number of candidates to return (1-100)
+                
+            Returns:
+                JSONResponse: List of recommended candidates with success status
+            """
             self._ensure_browser_session()
             result = list_recommended_candidates_action(self.page, limit=limit)
 
@@ -199,28 +277,18 @@ class BossService:
 
         @self.app.get('/recommend/candidate/{index}')
         def view_recommended_candidate_resume(index: int):
+            """View resume of a recommended candidate by index.
+            
+            Args:
+                index (int): Index of the candidate in the recommended list
+                
+            Returns:
+                JSONResponse: Candidate resume information
+            """
             self._ensure_browser_session()
-            result = view_candidate_resume_action(self.page, index)
+            result = view_recommend_candidate_resume_action(self.page, index)
             return JSONResponse(result)
             
-
-        @self.app.get('/chat/dialogs')
-        def get_messages(limit: int = Query(10, ge=1, le=100)):
-            # 确保浏览器会话正常
-            self._ensure_browser_session()
-
-            messages = get_messages_list_action(
-                self.page, 
-                limit, 
-                logger=self.add_notification,
-                chat_cache=self.event_manager.chat_cache
-            )
-            return JSONResponse({
-                'success': True,
-                'messages': messages,
-                'count': len(messages),
-                'timestamp': datetime.now().isoformat()
-            })
 
         @self.app.get('/search')
         def search_preview(
@@ -231,6 +299,19 @@ class BossService:
             degree: str = Query('不限'),
             industry: str = Query('不限')
         ):
+            """Preview search parameters and URL construction.
+            
+            Args:
+                city (str): City for job search
+                job_type (str): Type of job (full-time, part-time, etc.)
+                salary (str): Salary range
+                experience (str): Required experience level
+                degree (str): Required education level
+                industry (str): Industry sector
+                
+            Returns:
+                JSONResponse: Search parameters and constructed URL preview
+            """
             # 将人类可读配置映射为站点参数
             params = {
                 'city': mapx.map_value(city, mapx.CITY_CODE),
@@ -249,6 +330,15 @@ class BossService:
         
         @self.app.post('/chat/{chat_id}/greet')
         def greet_candidate(chat_id: str, message: str | None = None):
+            """Send a greeting message to a candidate.
+            
+            Args:
+                chat_id (str): ID of the chat/conversation
+                message (str, optional): Custom greeting message. Defaults to standard greeting.
+                
+            Returns:
+                JSONResponse: Success status and message
+            """
             result = self.send_greeting(chat_id, message or '您好，我对您的简历很感兴趣，希望能进一步沟通。')
             return JSONResponse({
                 'success': result,
@@ -259,10 +349,17 @@ class BossService:
 
         @self.app.post('/resume/request')
         def request_resume_api(chat_id: str = Body(..., embed=True)):
-            # 确保浏览器会话和登录
+            """Request resume from a candidate.
+            
+            Args:
+                chat_id (str): ID of the chat/conversation
+                
+            Returns:
+                JSONResponse: Success status and details
+            """
             self._ensure_browser_session()
 
-            result = request_resume_action(self.page, chat_id, logger=self.add_notification)
+            result = request_resume_action(self.page, chat_id)
             return JSONResponse({
                 'success': result.get('success', False),
                 'chat_id': chat_id,
@@ -273,11 +370,18 @@ class BossService:
 
         @self.app.post('/chat/{chat_id}/send')
         def send_message_api(chat_id: str, message: str = Body(..., embed=True)):
-            """发送文本消息到指定对话"""
-            # 确保浏览器会话和登录
+            """Send a text message to a specific conversation.
+            
+            Args:
+                chat_id (str): ID of the chat/conversation
+                message (str): Message content to send
+                
+            Returns:
+                JSONResponse: Success status and details
+            """
             self._ensure_browser_session()
 
-            result = send_message_action(self.page, chat_id, message, logger=self.add_notification)
+            result = send_message_action(self.page, chat_id, message)
             return JSONResponse({
                 'success': result.get('success', False),
                 'chat_id': chat_id,
@@ -288,11 +392,17 @@ class BossService:
 
         @self.app.get('/chat/{chat_id}/messages')
         def get_message_history(chat_id: str):
-            """获取指定会话的聊天历史（右侧面板）"""
-            # 确保会话
+            """Get chat history for a specific conversation.
+            
+            Args:
+                chat_id (str): ID of the chat/conversation
+                
+            Returns:
+                JSONResponse: Chat history with message count
+            """
             self._ensure_browser_session()
 
-            history = get_chat_history_action(self.page, chat_id, logger=self.add_notification)
+            history = get_chat_history_action(self.page, chat_id)
             return JSONResponse({
                 'success': True,
                 'chat_id': chat_id,
@@ -303,20 +413,32 @@ class BossService:
 
         @self.app.post('/resume/view')
         def view_resume_api(chat_id: str = Body(..., embed=True)):
-            """点击查看候选人的附件简历"""
-            # 确保浏览器会话和登录
+            """View candidate's attached resume.
+            
+            Args:
+                chat_id (str): ID of the chat/conversation
+                
+            Returns:
+                JSONResponse: Resume viewing result
+            """
             self._ensure_browser_session()
 
-            result = view_full_resume_action(self.page, chat_id, logger=self.add_notification)
+            result = view_full_resume_action(self.page, chat_id)
             return result
 
         @self.app.post('/candidate/discard')
         def discard_candidate_api(chat_id: str = Body(..., embed=True)):
-            """丢弃候选人 - 点击"不合适"按钮"""
-            # 确保浏览器会话和登录
+            """Discard a candidate by clicking "不合适" button.
+            
+            Args:
+                chat_id (str): ID of the chat/conversation
+                
+            Returns:
+                JSONResponse: Success status and details
+            """
             self._ensure_browser_session()
 
-            result = discard_candidate_action(self.page, chat_id, logger=self.add_notification)
+            result = discard_candidate_action(self.page, chat_id)
             return JSONResponse({
                 'success': result.get('success', False),
                 'chat_id': chat_id,
@@ -326,15 +448,21 @@ class BossService:
 
         @self.app.post('/resume/online')
         def view_online_resume_api(chat_id: str = Body(..., embed=True)):
-            """打开会话并查看在线简历，返回canvas图像base64等信息
+            """View online resume and return canvas image base64 data.
+            
+            Opens the conversation and views the online resume, capturing
+            canvas content and returning base64 encoded image data.
             
             Args:
-                chat_id: 聊天ID
+                chat_id (str): ID of the chat/conversation
+                
+            Returns:
+                JSONResponse: Resume data including text, HTML, images, and metadata
             """
             # 会话与登录
             self._ensure_browser_session()
 
-            result = view_online_resume_action(self.page, chat_id, logger=self.add_notification)
+            result = view_online_resume_action(self.page, chat_id)
             return JSONResponse({
                 'success': result.get('success', False),
                 'chat_id': chat_id,
@@ -353,11 +481,17 @@ class BossService:
 
         @self.app.post('/resume/accept')
         def accept_resume_api(chat_id: str = Body(..., embed=True)):
-            """接受候选人 - 点击"接受"按钮"""
-            # 确保浏览器会话和登录
+            """Accept a candidate by clicking "接受" button.
+            
+            Args:
+                chat_id (str): ID of the chat/conversation
+                
+            Returns:
+                JSONResponse: Success status and details
+            """
             self._ensure_browser_session()
             
-            result = accept_resume_action(self.page, chat_id, logger=self.add_notification)
+            result = accept_resume_action(self.page, chat_id)
             return JSONResponse({
                 'success': result.get('success', False),
                 'chat_id': chat_id,
@@ -368,7 +502,11 @@ class BossService:
         
         @self.app.post('/restart')
         def soft_restart():
-            """软重启API服务，保持浏览器会话"""
+            """Soft restart the API service while keeping browser session.
+            
+            Returns:
+                JSONResponse: Success status and message
+            """
             self.soft_restart()
             return JSONResponse({
                 'success': True,
@@ -378,8 +516,11 @@ class BossService:
         
         @self.app.get('/debug/page')
         def debug_page():
-            """调试接口 - 获取当前页面内容"""
-            # 确保浏览器会话正常
+            """Debug endpoint - get current page content.
+            
+            Returns:
+                JSONResponse: Page information including URL, title, content, and metadata
+            """
             self._ensure_browser_session()
             
             # 等待页面完全渲染（事件驱动）
@@ -417,7 +558,11 @@ class BossService:
         
         @self.app.get('/debug/cache')
         def get_cache_stats():
-            """获取事件缓存统计信息"""
+            """Get event cache statistics.
+            
+            Returns:
+                JSONResponse: Cache statistics and performance metrics
+            """
             stats = self.event_manager.get_cache_stats()
             return JSONResponse({
                 'success': True,
@@ -426,10 +571,15 @@ class BossService:
             })
     
     def _resolve_storage_state_path(self):
-        """优先从环境变量注入登录态。
-        - BOSS_STORAGE_STATE_JSON: 直接提供storage_state JSON字符串
-        - BOSS_STORAGE_STATE_FILE: 指定storage_state文件路径
-        - 否则: 使用settings.STORAGE_STATE
+        """Resolve storage state path with environment variable priority.
+        
+        Priority order:
+        1. BOSS_STORAGE_STATE_JSON: Direct JSON string from environment
+        2. BOSS_STORAGE_STATE_FILE: File path from environment
+        3. settings.STORAGE_STATE: Default configuration
+        
+        Returns:
+            str: Path to the storage state file
         """
         env_json = os.environ.get("BOSS_STORAGE_STATE_JSON")
         if env_json:
@@ -438,7 +588,7 @@ class BossService:
             _ = json.loads(env_json)
             with open(settings.STORAGE_STATE, "w", encoding="utf-8") as f:
                 f.write(env_json)
-            self.add_notification("已从环境变量写入登录状态(JSON)", "success")
+            logger.info("已从环境变量写入登录状态(JSON)")
             return settings.STORAGE_STATE
         
         env_path = os.environ.get("BOSS_STORAGE_STATE_FILE")
@@ -447,96 +597,107 @@ class BossService:
         return settings.STORAGE_STATE
     
     def _get_user_data_dir(self):
-        """Get the path to the user data directory."""
+        """Get the path to the user data directory.
+        
+        Returns:
+            str: Path to the temporary user data directory for browser session
+        """
         # Use a temporary directory to store browser session data
         # This will persist across service restarts but be cleaned up on system reboot
         return os.path.join(tempfile.gettempdir(), "bosszhipin_playwright_user_data")
         
 
     def start_browser(self):
-        """Launch a persistent browser context with recovery."""
-        self.add_notification("正在启动持久化浏览器会话...", "info")
+        """Launch a persistent browser context with recovery.
+        
+        Connects to an external Chrome instance via CDP and sets up
+        the browser context for automation. Configures event listeners
+        and navigates to the chat page.
+        """
+        logger.info("正在启动持久化浏览器会话...")
         user_data_dir = self._get_user_data_dir()
-        self.add_notification(f"使用用户数据目录: {user_data_dir}", "info")
+        logger.info(f"使用用户数据目录: {user_data_dir}")
 
-        # 确保 playwright 已启动
         if not getattr(self, 'playwright', None):
-            self.add_notification("Playwright尚未初始化，正在启动...", "info")
+            logger.info("Playwright尚未初始化，正在启动...")
             self.playwright = sync_playwright().start()
 
-        # 仅通过 CDP 连接外部持久化浏览器，失败则直接中止（不再本地回退）
-        self.add_notification(f"尝试通过CDP连接浏览器: {settings.CDP_URL}", "info")
+        logger.info(f"尝试通过CDP连接浏览器: {settings.CDP_URL}")
         browser = self.playwright.chromium.connect_over_cdp(settings.CDP_URL)
         self.context = browser.contexts[0] if browser.contexts else browser.new_context()
 
-        # （可选）本地存储态仅适用于本地持久化；CDP模式下依靠浏览器自身profile
 
         
-        # 复用持久化上下文的初始页：若存在则使用第一个页面，否则新建
         pages = list(self.context.pages)
         if pages:
             self.page = pages[0]
         else:
             self.page = self.context.new_page()
 
-        # 设置事件管理器（事件驱动的消息列表获取）
         if self.context:
             self.event_manager.setup(self.context)
-            self.add_notification("事件管理器设置成功", "success")
+            logger.info("事件管理器设置成功")
 
-        # 导航到聊天页面
         if settings.BASE_URL not in getattr(self.page, 'url', ''):
-            self.add_notification("导航到聊天页面...", "info")
+            logger.info("导航到聊天页面...")
             self.page.goto(settings.CHAT_URL, wait_until="domcontentloaded", timeout=3000)
         else:
-            self.add_notification("已导航到聊天页面", "info")
+            logger.info("已导航到聊天页面")
 
-        self.add_notification("持久化浏览器会话启动成功！", "success")
+        logger.info("持久化浏览器会话启动成功！")
         
-        # 文件监控已禁用（使用 uvicorn --reload）
             
     def _load_saved_login_state(self):
-        """尝试加载已保存的登录状态"""
+        """Load saved login state from storage.
+        
+        Checks for existing login state file and validates cookies
+        to determine if user was previously logged in.
+        """
         if os.path.exists(settings.STORAGE_STATE):
-            # 检查保存的登录状态文件
             with open(settings.STORAGE_STATE, 'r') as f:
                 storage_state = json.load(f)
             
-            # 如果有cookies，说明可能已经登录过
             if storage_state.get('cookies'):
-                self.add_notification("发现已保存的登录状态", "info")
-                # 注意：这里不直接设置 is_logged_in = True，因为需要验证
-                # 实际的登录状态会在 ensure_login 中验证
+                logger.info("发现已保存的登录状态")
 
     def save_login_state(self):
-        """保存登录状态"""
-        # 确保目录存在
+        """Save current login state to storage.
+        
+        Persists browser context state including cookies and session data
+        to enable login persistence across service restarts.
+        
+        Returns:
+            bool: True if login state was saved successfully
+        """
         os.makedirs(os.path.dirname(settings.STORAGE_STATE), exist_ok=True)
         
-        # 保存当前上下文状态
         context = self.page.context
         context.storage_state(path=settings.STORAGE_STATE)
         
-        self.add_notification(f"登录状态已保存到: {settings.STORAGE_STATE}", "success")
+        logger.info(f"登录状态已保存到: {settings.STORAGE_STATE}")
         
-        # 标记为已登录
         self.is_logged_in = True
-        self.add_notification("用户登录状态已确认并保存", "success")
+        logger.info("用户登录状态已确认并保存")
         return True
     
     def check_login_status(self):
-        """检查登录状态"""
-        # 访问聊天页面
+        """Check current login status.
+        
+        Navigates to the chat page and analyzes page content to determine
+        if the user is logged in. Handles various login states including
+        slider verification and login redirects.
+        
+        Returns:
+            bool: True if user is logged in, False otherwise
+        """
         self.page.goto(settings.BASE_URL.rstrip('/') + "/web/chat/index",
                          wait_until="domcontentloaded", timeout=10000)
         self.page.wait_for_load_state("networkidle", timeout=5000)
             
         page_text = self.page.locator("body").inner_text()
         current_url = self.page.url
-        # 滑块验证检测与提示
         if "/web/user/safe/verify-slider" in current_url:
-            self.add_notification("检测到滑块验证页面，请在浏览器中完成验证...", "warning")
-            # 等待验证通过或超时（最多5分钟）
+            logger.warning("检测到滑块验证页面，请在浏览器中完成验证...")
             start = time.time()
             while time.time() - start < 300:
                 self.page.wait_for_timeout(1000)
@@ -544,114 +705,111 @@ class BossService:
                 if "/web/user/safe/verify-slider" not in current_url:
                     break
             
-            # 检查是否在登录页面
             if ("登录" in page_text and ("立即登录" in page_text or "登录/注册" in page_text)) or "login" in current_url.lower():
-                self.add_notification("检测到需要登录", "warning")
+                logger.warning("检测到需要登录")
                 return False
             
-            # 检查是否有聊天相关元素
             if any(keyword in page_text for keyword in ["消息", "沟通", "聊天", "候选人", "简历"]):
-                self.add_notification("登录状态正常", "success")
+                logger.info("登录状态正常")
                 return True
             
-            self.add_notification("登录状态不明确", "warning")
+            logger.warning("登录状态不明确")
             return False
     
     
     
     def _graceful_shutdown(self):
-        """Gracefully shut down Playwright resources."""
-        self.add_notification("执行优雅关闭...", "info")
-        # For external CDP-attached browser, do not close the shared context; just detach listeners.
+        """Gracefully shut down Playwright resources.
+        
+        Performs cleanup of browser contexts and Playwright instances.
+        For CDP-attached browsers, only detaches listeners without closing
+        the shared browser context.
+        """
+        logger.info("执行优雅关闭...")
         if hasattr(self, 'context') and self.context:
-            # Best effort: remove response listeners if needed
             pass
         
         if self.playwright:
             self.playwright.stop()
-            self.add_notification("Playwright已停止。", "success")
+            logger.info("Playwright已停止。")
         
         self.context = None
         self.page = None
         self.playwright = None
-        self.add_notification("Playwright资源已清理", "success")
+        logger.info("Playwright资源已清理")
     
 
     def _ensure_browser_session(self, max_wait_time=600):
-        """确保浏览器会话和登录状态"""
-        # Context present?
+        """Ensure browser session and login status.
+        
+        Verifies that browser context and page are available, and that
+        the user is logged in. Handles session recovery and login verification
+        with configurable timeout.
+        
+        Args:
+            max_wait_time (int): Maximum time to wait for login (seconds)
+            
+        Raises:
+            Exception: If login timeout is exceeded
+        """
         if not self.context:
-            self.add_notification("浏览器Context不存在，将重新启动。", "warning")
+            logger.warning("浏览器Context不存在，将重新启动。")
             self.start_browser()
             return
 
-        # Page present?
         if not self.page or self.page.is_closed():
             pages = list(self.context.pages)
-            # First, try to find a page that already has CHAT_URL
             for page in pages:
                 if settings.CHAT_URL in getattr(page, 'url', ''):
                     self.page = page
                     break
             else:
-                # If no page with CHAT_URL found, use first available page or create new one
                 self.page = pages[0] if pages else self.context.new_page()
                 if settings.CHAT_URL not in getattr(self.page, 'url', ''):
                     self.page.goto(settings.CHAT_URL, wait_until="domcontentloaded", timeout=10000)
                     self.page.wait_for_load_state("networkidle", timeout=5000)
 
-        # Lightweight liveness check
         _ = self.page.title()
 
-        # Login verification - merged from ensure_login
         if not self.is_logged_in:
-            self.add_notification("正在检查登录状态...", "info")
+            logger.info("正在检查登录状态...")
             
-            # If the current page is on chat URL, check login status
             if settings.BASE_URL in self.page.url and "加载中" not in self.page.content():
                 page_text = self.page.locator("body").inner_text()
-                # More comprehensive login detection
                 login_indicators = ["消息", "聊天", "对话", "沟通", "候选人", "简历", "打招呼"]
                 if any(indicator in page_text for indicator in login_indicators):
                     self.is_logged_in = True
                     self.save_login_state()
-                    self.add_notification("已在聊天页面，登录状态确认。", "success")
+                    logger.info("已在聊天页面，登录状态确认。")
                     return
                 
-                # Also check for the presence of conversation list elements
                 conversation_elements = self.page.locator("xpath=//li[contains(@class, 'conversation') or contains(@class, 'chat') or contains(@class, 'item')]")
                 if conversation_elements.count() > 0:
                     self.is_logged_in = True
                     self.save_login_state()
-                    self.add_notification("检测到对话列表，登录状态确认。", "success")
+                    logger.info("检测到对话列表，登录状态确认。")
                     return
             
-            # Wait for page to load and check if we were redirected to login page
             self.page.wait_for_load_state("networkidle", timeout=5000)
             current_url = self.page.url
             
-            # Check if we were redirected to login page
             if settings.LOGIN_URL in current_url or "web/user" in current_url or "login" in current_url.lower() or "bticket" in current_url:
-                self.add_notification("检测到登录页面，请手动完成登录...", "warning")
-                self.add_notification("等待用户登录，最多等待10分钟...", "info")
+                logger.warning("检测到登录页面，请手动完成登录...")
+                logger.info("等待用户登录，最多等待10分钟...")
                 
-                # Wait for user to complete login with countdown display
                 start_time = time.time()
                 while time.time() - start_time < max_wait_time:
                     current_url = self.page.url
                     page_text = self.page.locator("body").inner_text()
                     
-                    # Check if user has logged in
                     if (settings.CHAT_URL in current_url or 
                         any(keyword in page_text for keyword in ["消息", "沟通", "聊天", "候选人", "简历"])):
-                        self.add_notification("检测到用户已登录！", "success")
+                        logger.info("检测到用户已登录！")
                         break
                     
-                    # Check if still on login page
                     if "登录" in page_text and ("立即登录" in page_text or "登录/注册" in page_text):
-                        self.add_notification("请在浏览器中完成登录...", "info")
+                        logger.info("请在浏览器中完成登录...")
                     
-                    # Display countdown
                     elapsed = time.time() - start_time
                     remaining = max_wait_time - elapsed
                     minutes = int(remaining // 60)
@@ -660,48 +818,58 @@ class BossService:
                     
                     time.sleep(3)
                 
-                # Clear the countdown line
                 print("\r" + " " * 50 + "\r", end="", flush=True)
                 
                 if not self.is_logged_in:
                     raise Exception("等待登录超时，请手动登录后重试")
             else:
-                # If we reached the chat page directly, wait for it to load
-                self.add_notification("等待聊天页面加载...", "info")
+                logger.info("等待聊天页面加载...")
                 self.page.wait_for_url(
                     settings.BASE_URL,
                     timeout=6000, # 10 minutes
                 )
             
-            # Final verification after navigation/login
             self.page.wait_for_function(
                 "() => !document.body.innerText.includes('加载中，请稍候')",
                 timeout=30000
             )
             self.is_logged_in = True
             self.save_login_state()
-            self.add_notification("登录成功并已在聊天页面。", "success")
+            logger.info("登录成功并已在聊天页面。")
 
 
     
     def _shutdown_thread(self, keep_browser=False):
-        """Run graceful shutdown in a separate thread to avoid blocking."""
-        self.add_notification(f"在单独的线程中执行关闭(keep_browser={keep_browser})...", "info")
+        """Run graceful shutdown in a separate thread to avoid blocking.
+        
+        Args:
+            keep_browser (bool): Whether to keep browser session alive
+        """
+        logger.info(f"在单独的线程中执行关闭(keep_browser={keep_browser})...")
         self._graceful_shutdown()
 
     def _handle_signal(self, signum, frame):
-        """处理信号"""
-        self.add_notification(f"收到信号: {signum}", "info")
+        """Handle system signals for graceful shutdown.
+        
+        Args:
+            signum: Signal number
+            frame: Current stack frame
+        """
+        logger.info(f"收到信号: {signum}")
         # Run shutdown in a separate thread to avoid greenlet/asyncio conflicts
         keep_browser = (signum == signal.SIGTERM)
         shutdown_thread = threading.Thread(target=self._shutdown_thread, args=(keep_browser,))
         shutdown_thread.start()
 
     def run(self, host='127.0.0.1', port=5001):
-        """运行服务 (使用uvicorn由外部启动)"""
+        """Run the service using uvicorn (called externally).
+        
+        Args:
+            host (str): Host address to bind to
+            port (int): Port number to bind to
+        """
         import uvicorn
-        self.add_notification("启动Boss直聘后台服务(FastAPI)...", "info")
-        # 禁用自动重载，避免 WatchFiles 导致浏览器上下文被反复重启
+        logger.info("启动Boss直聘后台服务(FastAPI)...")
         uvicorn.run("boss_service:app", host=host, port=port, reload=True, log_level="info")
 
 service = BossService()
