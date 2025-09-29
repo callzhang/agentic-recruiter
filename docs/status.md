@@ -14,7 +14,7 @@
 ### 核心服务
 - ✅ FastAPI后台服务 (`boss_service.py`)
 - ✅ 自动启动脚本 (`start_service.py`)
-- ✅ 客户端API调用 (`boss_client.py`)
+- ✅ 教程文档 (`tutorial.ipynb`)
 - ✅ 热重载支持 (Uvicorn --reload)
 - ✅ 端口冲突自动处理
 
@@ -47,7 +47,7 @@
 
 ### 配置管理
 - ✅ 参数映射系统 (`src/mappings.py`)
-- ✅ 选择器管理 (`src/page_selectors.py`)
+- ✅ 简化选择器 (内联单选择器)
 - ✅ 黑名单管理 (`src/blacklist.py`)
 - ✅ 环境变量配置
 - ✅ 简历捕获配置 (`src/resume_capture.py`)
@@ -147,13 +147,13 @@ python start_service.py
 ### 客户端调用
 ```bash
 # 获取候选人
-python boss_client.py candidates --limit 10
+curl "http://127.0.0.1:5001/chat/candidates?limit=10"
 
 # 获取消息
-python boss_client.py messages --limit 5
+curl "http://127.0.0.1:5001/chat/dialogs?limit=5"
 
 # 搜索预览
-python boss_client.py search --city 北京 --job Python开发
+curl "http://127.0.0.1:5001/search?city=北京&job_type=全职"
 ```
 
 ### 直接API调用
@@ -164,8 +164,8 @@ curl "http://127.0.0.1:5001/candidates?limit=5"
 ## 架构图
 ```
 ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   boss_client   │───▶│  boss_service   │───▶│   Playwright    │
-│   (API调用)     │    │  (FastAPI服务)  │    │   (浏览器自动化) │
+│   tutorial.ipynb│───▶│  boss_service   │───▶│   Playwright    │
+│   (教程文档)     │    │  (FastAPI服务)  │    │   (浏览器自动化) │
 └─────────────────┘    └─────────────────┘    └─────────────────┘
                                 │
                                 ▼
@@ -187,13 +187,13 @@ curl "http://127.0.0.1:5001/candidates?limit=5"
 ```
 bosszhipin_bot/
 ├── boss_service.py          # 主服务
-├── boss_client.py           # 客户端
+├── tutorial.ipynb           # 教程文档
 ├── start_service.py         # 启动脚本
 ├── command.ipynb            # 演示Notebook
 ├── src/
 │   ├── config.py            # 配置管理
 │   ├── mappings.py          # 参数映射
-│   ├── page_selectors.py    # 页面选择器
+│   ├── chat_utils.py         # 聊天工具
 │   ├── blacklist.py         # 黑名单管理
 │   ├── resume_capture.py    # 简历捕获
 │   ├── ocr_service.py       # OCR服务
