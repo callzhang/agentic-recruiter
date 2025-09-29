@@ -43,7 +43,11 @@ from src.blacklist import load_blacklist, NEGATIVE_HINTS
 from src.events import EventManager
 from src import mappings as mapx
 from src.global_logger import get_logger
+from src.qa_store import qa_store
+from src.qa_workflow import qa_workflow, DEFAULT_GREETING
 from src.scheduler import BRDWorkScheduler
+from typing import Any, Dict, List, Optional, Callable, Tuple, Union
+
 
 # Get global logger once at module level
 logger = get_logger()
@@ -133,6 +137,12 @@ class BossService:
             self.scheduler: BRDWorkScheduler | None = None
             self.scheduler_lock = threading.Lock()
             self.scheduler_config: dict[str, Any] = {}
+            self.qa_store = qa_store
+            if getattr(self.qa_store, "enabled", False):
+                logger.info("QA store initialised and connected to Zilliz")
+            else:
+                logger.info("QA store disabled or not configured")
+            self.qa_workflow = qa_workflow
             self.initialized = True
             self.setup_routes()
             # 事件驱动的消息缓存和响应监听器
@@ -141,7 +151,7 @@ class BossService:
     def _service_base_url(self) -> str:
         return os.environ.get('BOSS_SERVICE_BASE_URL', 'http://127.0.0.1:5001')
 
-    def _scheduler_status(self) -> Dict[str, Any]:
+    def _scheduler_status(self):
         with self.scheduler_lock:
             running = self.scheduler is not None
             config = dict(self.scheduler_config) if running else {}
@@ -164,7 +174,7 @@ class BossService:
             logger.error(f"停止调度器失败: {exc}")
             return False, f'停止调度器失败: {exc}'
 
-    def _start_scheduler(self, payload: Dict[str, Any]) -> tuple[bool, str]:
+    def _start_scheduler(self, payload) -> tuple[bool, str]:
         with self.scheduler_lock:
             if self.scheduler:
                 return False, '调度器已运行'
@@ -188,11 +198,11 @@ class BossService:
         except (TypeError, ValueError):
             return default
 
-    def _build_scheduler_options(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    def _build_scheduler_options(self, payload):
         base_url = payload.get('base_url') or self._service_base_url()
-        criteria_path = payload.get('criteria_path') or os.environ.get('BOSS_CRITERIA_PATH', 'jobs/criteria.yaml')
+        criteria_path = payload.get('criteria_path') or os.environ.get('BOSS_CRITERIA_PATH', 'config/jobs.yaml')
 
-        options: Dict[str, Any] = {
+        options = {
             'base_url': base_url.rstrip('/'),
             'criteria_path': os.path.abspath(criteria_path),
             'role_id': payload.get('role_id', 'default'),
@@ -210,9 +220,59 @@ class BossService:
 
         return options
 
+    def _compose_greeting_context(self, chat_id: str) -> str:
+        cache_entry = None
+        try:
+            cache_entry = self.event_manager.chat_cache.get(chat_id)
+        except Exception:
+            cache_entry = None
+        if cache_entry:
+            candidate = cache_entry.get('candidate') or cache_entry.get('name') or ''
+            job_title = cache_entry.get('job_title') or ''
+            latest_message = cache_entry.get('message') or ''
+            parts = [
+                f"候选人: {candidate}" if candidate else None,
+                f"意向岗位: {job_title}" if job_title else None,
+                f"最近留言: {latest_message}" if latest_message else None,
+            ]
+            context = "；".join(part for part in parts if part)
+            if context:
+                return context
+        return f"Chat ID: {chat_id}"
+
+    def send_greeting(self, chat_id: str, message: str | None = None) -> Dict[str, Any]:
+        self._ensure_browser_session()
+        context = self._compose_greeting_context(chat_id)
+        final_message = message if message else self.qa_workflow.generate_greeting(context, DEFAULT_GREETING)
+        result = send_message_action(self.page, chat_id, final_message)
+        success = result.get('success', False)
+        if success and getattr(self.qa_workflow, 'enabled', False):
+            try:
+                cache_entry = self.event_manager.chat_cache.get(chat_id)
+            except Exception:
+                cache_entry = None
+            job_title = (cache_entry or {}).get('job_title', '')
+            keywords = ['greeting']
+            if job_title:
+                keywords.append(job_title)
+            try:
+                self.qa_workflow.record_qa(
+                    qa_id=f"greet_{chat_id}",
+                    question=context,
+                    answer=final_message,
+                    keywords=keywords,
+                )
+            except Exception as exc:
+                logger.debug("Failed to persist greeting QA: %s", exc)
+        return {
+            'success': success,
+            'message': final_message,
+            'details': result.get('details', ''),
+        }
+
     def _startup_sync(self):
         """Synchronous startup tasks executed in a thread pool.
-        
+
         Initializes Playwright, starts the browser, and sets up the service.
         This method is called during FastAPI startup to prepare the service
         for handling requests.
@@ -374,7 +434,7 @@ class BossService:
             return JSONResponse(result)
 
         @self.app.post('/recommend/candidate/{index}/greet')
-        def greet_recommended_candidate(index: int, payload: Dict[str, Any] | None = Body(default=None)):
+        def greet_recommended_candidate(index: int, payload: dict | None = Body(default=None)):
             """Send greeting message to recommended candidate by index."""
             self._ensure_browser_session()
             message = (payload or {}).get('message') or DEFAULT_GREET_MESSAGE
@@ -430,7 +490,7 @@ class BossService:
             return JSONResponse(self._scheduler_status())
 
         @self.app.post('/automation/scheduler/start')
-        def scheduler_start(payload: Dict[str, Any] | None = Body(default=None)):
+        def scheduler_start(payload: dict | None = Body(default=None)):
             success, details = self._start_scheduler(payload or {})
             status = self._scheduler_status()
             status.update({'success': success, 'details': details})
@@ -444,7 +504,7 @@ class BossService:
             return JSONResponse(status)
 
         @self.app.post('/chat/{chat_id}/greet')
-        def greet_candidate(chat_id: str, message: str | None = None):
+        def greet_candidate(chat_id: str, message: str | None = Body(default=None)):
             """Send a greeting message to a candidate.
             
             Args:
@@ -454,10 +514,11 @@ class BossService:
             Returns:
                 JSONResponse: Success status and message
             """
-            result = self.send_greeting(chat_id, message or '您好，我对您的简历很感兴趣，希望能进一步沟通。')
+            result = self.send_greeting(chat_id, message)
             return JSONResponse({
-                'success': result,
-                'message': '打招呼成功' if result else '打招呼失败',
+                'success': result.get('success', False),
+                'message': result.get('message'),
+                'details': result.get('details', ''),
                 'timestamp': datetime.now().isoformat()
             })
         
@@ -884,7 +945,21 @@ class BossService:
                     self.page.goto(settings.CHAT_URL, wait_until="domcontentloaded", timeout=10000)
                     self.page.wait_for_load_state("networkidle", timeout=5000)
 
-        _ = self.page.title()
+        # Check if page is still valid without causing errors
+        try:
+            _ = self.page.title()
+        except Exception:
+            # Page context was destroyed, recreate it
+            logger.warning("Page context lost, recreating browser session...")
+            try:
+                self.page = self.context.new_page()
+                self.page.goto(settings.CHAT_URL, wait_until="domcontentloaded", timeout=10000)
+                self.page.wait_for_load_state("networkidle", timeout=5000)
+            except Exception as e:
+                logger.error(f"Failed to recreate page: {e}")
+                # If context is also broken, restart browser
+                self.start_browser()
+                return
 
         if not self.is_logged_in:
             logger.info("正在检查登录状态...")
