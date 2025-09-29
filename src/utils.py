@@ -31,9 +31,14 @@ def try_exists(page: Page, selectors: List[str], timeout_ms: int = 2000) -> bool
     return False
 
 def detect_and_pause_for_captcha(page: Page) -> bool:
-    from .page_selectors import captcha_iframes
+    # Single selector for captcha iframes
+    captcha_selectors = [
+        "iframe[src*='geetest']",
+        "iframe[src*='captcha']",
+        "iframe[id*='captcha']"
+    ]
     try:
-        if try_exists(page, captcha_iframes(), timeout_ms=1000):
+        if try_exists(page, captcha_selectors, timeout_ms=1000):
             print("[!] 可能出现验证码，请在浏览器中完成验证后，回到终端按回车继续...")
             input()
             return True
@@ -66,9 +71,9 @@ def export_records(records: List[Dict[str, Any]], prefix: str) -> Tuple[str, str
 
 def extract_resume_blocks(page: Page) -> Dict[str, str]:
     # 兜底：通过标题定位块，然后抓取相邻容器文本
-    from .page_selectors import resume_sections
+    resume_sections = ["基本信息", "工作经历", "教育经历", "项目经历", "技能特长", "自我评价"]
     result = {}
-    for title in resume_sections():
+    for title in resume_sections:
         try:
             h = page.get_by_text(title, exact=True).first
             # 往上找卡片容器，再取文本

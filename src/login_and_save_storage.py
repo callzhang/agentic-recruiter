@@ -4,7 +4,8 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.config import settings
-from src.page_selectors import nav_message_candidates
+# Single selector for navigation to messages
+nav_message_candidates = ["text=消息", "text=沟通", "a:has-text('消息')", "a:has-text('沟通')"]
 from src.utils import try_exists, detect_and_pause_for_captcha
 import json, time
 
@@ -33,7 +34,7 @@ def wait_until_logged_in(page) -> None:
                 time.sleep(2)
                 
                 # 检查是否能找到消息/沟通入口
-                if try_exists(page, nav_message_candidates(), 2000):
+                if try_exists(page, nav_message_candidates, 2000):
                     print("[+] 登录成功！检测到消息/沟通入口")
                     return
                 else:
@@ -79,7 +80,7 @@ def main():
             
             # 尝试点击消息入口
             message_clicked = False
-            for sel in nav_message_candidates():
+            for sel in nav_message_candidates:
                 try:
                     if page.locator(sel).first.is_visible(timeout=2000):
                         page.locator(sel).first.click(timeout=2000)

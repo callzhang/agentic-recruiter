@@ -6,25 +6,24 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.config import settings
-from src.page_selectors import (
-    nav_message_candidates,
-    filter_greeting_candidates,
-    conversation_list_items,
-    open_resume_actions,
-)
+# Single selectors (replace with actual selectors as needed)
+nav_message_candidates = ["text=消息", "text=沟通", "a:has-text('消息')", "a:has-text('沟通')"]
+filter_greeting_candidates = ["text=打招呼", "button:has-text('打招呼')"]
+conversation_list_items = ["xpath=//li[contains(@class, 'conversation') or contains(@class, 'chat') or contains(@class, 'item')]"]
+open_resume_actions = ["text=查看简历", "a:has-text('简历')", "button:has-text('简历')"]
 from src.utils import human_delay, try_click, try_exists, detect_and_pause_for_captcha, extract_resume_blocks, export_records
 
 def open_messages_and_filter_greetings(page) -> None:
     # 进入“消息/沟通”并点击“打招呼”筛选（若有）
-    if not try_click(page, nav_message_candidates(), timeout_ms=2500):
+    if not try_click(page, nav_message_candidates, timeout_ms=2500):
         page.goto(settings.BASE_URL.rstrip('/') + "/web/chat/index", wait_until="domcontentloaded")
     detect_and_pause_for_captcha(page)
-    try_click(page, filter_greeting_candidates(), timeout_ms=1500)  # 若无该入口会忽略
+    try_click(page, filter_greeting_candidates, timeout_ms=1500)  # 若无该入口会忽略
 
 def iter_conversations(page, limit: int) -> List[Any]:
     # 获取左侧会话条目
     items = []
-    for sel in conversation_list_items():
+    for sel in conversation_list_items:
         try:
             loc = page.locator(sel)
             count = loc.count()
@@ -38,7 +37,7 @@ def iter_conversations(page, limit: int) -> List[Any]:
 
 def open_resume(page) -> bool:
     # 在会话里尝试打开“查看简历”
-    if try_click(page, open_resume_actions(), timeout_ms=1200):
+    if try_click(page, open_resume_actions, timeout_ms=1200):
         return True
     # 兜底：查找包含“简历”的链接/按钮
     try:
