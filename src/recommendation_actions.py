@@ -32,6 +32,7 @@ def _prepare_recommendation_page(page, *, wait_timeout: int = 8000) -> tuple[Opt
     
     if frame := iframe.content_frame():
         frame.wait_for_selector(CANDIDATE_CARD_SELECTOR, timeout=wait_timeout)
+        logger.info("已导航到推荐页面")
     else:
         page.wait_for_selector(CANDIDATE_CARD_SELECTOR, timeout=wait_timeout)
     return frame

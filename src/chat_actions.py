@@ -19,16 +19,23 @@ RESUME_IFRAME_SELECTOR = "iframe.attachment-box"
 PDF_VIEWER_SELECTOR = "div.pdfViewer"
 
 
+def _prepare_chat_page(page, *, wait_timeout: int = 5000) -> tuple[Optional[Locator], Optional[Dict[str, Any]]]:
+    close_overlay_dialogs(page)
+    # If current URL is not the chat page, click the chat menu to navigate
+    if not settings.CHAT_URL in page.url:
+        menu_chat = page.locator(CHAT_MENU_SELECTOR).first
+        menu_chat.click()
+        page.wait_for_selector(CHAT_ITEM_SELECTORS, timeout=wait_timeout)
+    
+        # wait for chat box
+        page.wait_for_selector('div.chat-box', timeout=wait_timeout)
+        logger.info("已导航到聊天页面")
+
+    return page
 
 def _go_to_chat_dialog(page, chat_id: str, *, wait_timeout: int = 5000) -> tuple[Optional[Locator], Optional[Dict[str, Any]]]:
     # Ensure we are on the chat page; if not, click the chat menu
     # If current URL is not the chat page, click the chat menu to navigate
-    close_overlay_dialogs(page)
-    if not settings.CHAT_URL in page.url:
-        menu_chat = page.locator(CHAT_MENU_SELECTOR).first
-        menu_chat.click()
-        # Wait for chat list to appear
-        page.wait_for_selector(CHAT_ITEM_SELECTORS, timeout=wait_timeout)
     """Ensure the chat is focused and the conversation panel is ready."""
 
     direct_selectors = [
@@ -46,7 +53,7 @@ def _go_to_chat_dialog(page, chat_id: str, *, wait_timeout: int = 5000) -> tuple
         return None
 
     # move to chat dialog
-    target.hover(timeout=1000)
+    target.hover()
     if 'selected' not in target.get_attribute('class'):
         target.click()
         page.wait_for_selector(CONVERSATION_SELECTOR, timeout=wait_timeout)
@@ -57,6 +64,7 @@ def _go_to_chat_dialog(page, chat_id: str, *, wait_timeout: int = 5000) -> tuple
 
 def request_resume_action(page, chat_id: str) -> Dict[str, Any]:
     """Send a resume request in the open chat panel for the given chat_id"""
+    _prepare_chat_page(page)
     dialog = _go_to_chat_dialog(page, chat_id)
     if not dialog:
         return { 'success': False, 'details': '未找到指定对话项' }
@@ -99,6 +107,7 @@ def request_resume_action(page, chat_id: str) -> Dict[str, Any]:
 
 def send_message_action(page, chat_id: str, message: str) -> Dict[str, Any]:
     """Send a text message in the open chat panel for the given chat_id"""
+    _prepare_chat_page(page)
     dialog = _go_to_chat_dialog(page, chat_id)
     if not dialog:
         return { 'success': False, 'details': '未找到指定对话项' }
@@ -152,7 +161,7 @@ def view_full_resume_action(page, chat_id: str) -> Dict[str, Any]:
     ├── page.wait_for_selector(RESUME_IFRAME_SELECTOR)
     └── close_overlay_dialogs(page) [ui_utils.py:66]
     """
-
+    _prepare_chat_page(page)
     dialog = _go_to_chat_dialog(page, chat_id)
     if not dialog:
         return { 'success': False, 'details': '未找到指定对话项' }
@@ -198,6 +207,7 @@ def view_full_resume_action(page, chat_id: str) -> Dict[str, Any]:
 
 def discard_candidate_action(page, chat_id: str) -> Dict[str, Any]:
     """丢弃候选人 - 点击"不合适"按钮"""
+    _prepare_chat_page(page)
     dialog = _go_to_chat_dialog(page, chat_id)
     if not dialog:
         return { 'success': False, 'details': '未找到指定对话项' }
@@ -219,19 +229,18 @@ def discard_candidate_action(page, chat_id: str) -> Dict[str, Any]:
     if dialog is None:
         return { 'success': True, 'details': f'确认已丢弃' }
     else:
-        return { 'success': False, 'details': f'确认丢弃失败: {error}' }
+        return { 'success': False, 'details': f'确认丢弃失败: 未删除对话' }
 
 
 
 def get_messages_list_action(page, limit: int = 10, *, chat_cache=None):
     """获取消息列表"""
-    logger.info(f"获取消息列表 (限制: {limit})")
-    close_overlay_dialogs(page)
+    _prepare_chat_page(page)
     # Simple text extraction for messages
     messages = []
     items = page.locator("div.geek-item").all()
     for item in items[:limit]:
-        item.scroll_into_view_if_needed(timeout=1000)
+        # item.scroll_into_view_if_needed(timeout=1000)
         messages.append({
             'id': item.get_attribute('data-id'),
             'text': item.inner_text(),
@@ -248,18 +257,69 @@ def get_messages_list_action(page, limit: int = 10, *, chat_cache=None):
 
 def get_chat_history_action(page, chat_id: str) -> List[Dict[str, Any]]:
     """读取右侧聊天历史，返回结构化消息列表"""
-    
+    _prepare_chat_page(page)
     dialog = _go_to_chat_dialog(page, chat_id)
     if not dialog:
         return { 'success': False, 'details': '未找到指定对话项' }
     
     # Simple text extraction for chat history
     message_box = page.locator("div.conversation-message")
-    history = message_box.inner_text()
-    logger.info(f"Chat history: {history}")
+    ''' multiple div.message-time item
+    1. 
+    - div.message-time: timestamp
+    - div.item-resume: background info
+    2. div.item-myself > div.text: my message
+    3. div.item-system: system message
+    4. div.item-friend > div.text: candidate message
+    '''
+    messages = message_box.locator("div.message-item").all()
+    last_timestamp = None
+    history = []
+    for message in messages:
+        type, message_str, status = None, None, None
+        try:
+            timestamp = message.locator("div.message-time").inner_text(timeout=100)
+            # Convert timestamp to full datetime: if only time, prepend today's date
+            import dateutil.parser as parser
+            from datetime import date
+
+            ts = timestamp.strip()
+            # Try to detect if it's only time (e.g., "14:23" or "14:23:01")
+            if len(ts) <= 8 and ':' in ts and not any(c in ts for c in ('年', '月', '日', '-', '/')):
+                # Only time, prepend today's date
+                today_str = date.today().strftime("%Y-%m-%d")
+                timestamp = f"{today_str} {ts}"
+            dt = parser.parse(timestamp)
+            timestamp = dt.strftime("%Y-%m-%d %H:%M:%S")
+            last_timestamp = timestamp
+        except Exception:
+            timestamp = last_timestamp
+        try:
+            message_str = message.locator("div.item-resume, div.item-system").inner_text(timeout=100)
+            type = 'system'
+        except Exception:
+            pass
+        try:
+            message_str = message.locator("div.item-myself >> span").inner_text(timeout=100)
+            status = message.locator('i.status').inner_text(timeout=100)
+            type = 'recruiter'
+        except Exception:
+            pass
+        try:
+            message_str = message.locator("div.item-friend").inner_text(timeout=100)
+            type = 'candidate'
+        except Exception:
+            pass
+        if message_str:
+            history.append({
+                'type': type,
+                'timestamp': timestamp,
+                'message': message_str,
+                'status': status,
+            })
+
+    logger.info(f"chat_id: {chat_id}, messages: {history}")
     return history
-
-
 
 
 def accept_resume_action(page, chat_id: str) -> Dict[str, Any]:
