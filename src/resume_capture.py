@@ -15,26 +15,20 @@ This module is intentionally verbose and defensive.
 """
 
 from __future__ import annotations
-
 import re, json
 import time
 from textwrap import dedent
 from typing import Any, Dict, Optional, TYPE_CHECKING
-
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 if TYPE_CHECKING:
     from playwright.sync_api import Frame
 
-try:
-    from .chat_utils import close_overlay_dialogs
-except ImportError:
-    from chat_utils import close_overlay_dialogs
 
 INLINE_RESUME_SELECTORS = [
-    '.resume-box',
-    '.resume-content-wrap',
-    '.new-resume-online-main-ui',
+    'div.resume-box', # inner div
+    'div.resume-content-wrap', # middle div
+    'div.new-resume-online-main-ui', # outer div
 ]
 
 INLINE_SECTION_HEADINGS = [
@@ -345,9 +339,15 @@ def _setup_wasm_route(context):
     """如果启用且本地存在 wasm 文件，则用它替换远程资源."""
 
     from pathlib import Path
-    local_wasm = Path(__file__).resolve().parents[1] / 'wasm' / 'wasm_canvas-1.0.2-5030.js'
-    if not local_wasm.exists():
-        print("本地 wasm_canvas-1.0.2-5030.js 未找到，跳过路由拦截")
+
+    wasm_dir = Path(__file__).resolve().parents[1] / 'wasm'
+    patched_map = {}
+    for patched in wasm_dir.glob('wasm_canvas-*_patched.js'):
+        original = patched.name.replace('_patched', '')
+        patched_map[original] = patched
+
+    if not patched_map:
+        print("本地 wasm_canvas_*_patched.js 未找到，跳过路由拦截")
         return
 
     glob_pattern = "**/wasm_canvas-*.js"
@@ -355,9 +355,13 @@ def _setup_wasm_route(context):
     def _route_resume(route, request):
         if request.method.upper() != 'GET':
             return route.continue_()
-        print("---->拦截wasm_canvas脚本，使用本地patched版本", "info")
+        filename = request.url.rsplit('/', 1)[-1]
+        local_path = patched_map.get(filename)
+        if not local_path:
+            return route.continue_()
+        print(f"----> 拦截 {filename}，使用本地 patched 版本{local_path}")
         return route.fulfill(
-            path=str(local_wasm),
+            path=str(local_path),
             content_type='application/javascript; charset=utf-8',
         )
 
@@ -416,16 +420,12 @@ def _capture_inline_resume(
     return None
 
 
-def _try_open_online_resume(page, chat_id: str, logger=None) -> Dict[str, Any]:
+def _open_online_resume(page, chat_id: str, logger=None) -> Dict[str, Any]:
     """Open the target chat and click the online resume button.
     Returns { success, details } and leaves the UI on the online resume dialog.
     """
-    # Close existing overlay if present
-    try:
-        from .chat_utils import close_overlay_dialogs
-    except ImportError:
-        from chat_utils import close_overlay_dialogs
-    close_overlay_dialogs(page, logger)
+    # Close existing overlay if present=
+    # close_overlay_dialogs(page, logger)
 
     # Focus the chat item
     target = None
@@ -472,73 +472,97 @@ def _try_open_online_resume(page, chat_id: str, logger=None) -> Dict[str, Any]:
     return { 'success': True, 'details': '已打开在线简历' }
 
 
-
-def _wait_for_resume_entry(page, timeout_ms: int, logger=None) -> Dict[str, Any]:
-    # first wait for message
-    t0 = time.time()
-
-    selector = (
-        "iframe[src*='c-resume'], "
-        ".resume-box"
-    )
-    try:
-        handle = page.wait_for_selector(selector, timeout=timeout_ms)
-        print("已检测到iframe或inline", time.time() - t0)
-    except PlaywrightTimeoutError:
-        return {'mode': None}
-    # while not (handle:=page.query_selector(selector)):
-    #     time.sleep(1)
-    #     print(f'{time.time() - t0} 等待iframe或inline')
-
-    tag = handle.evaluate("el => el.tagName.toLowerCase()")
-    print(f'已经检测到iframe或inline：{tag}')
-    if tag == 'iframe':
-        frame = handle.content_frame() or page.frame(url=re.compile(r"/c-resume"))
-        return {
-            'mode': 'iframe',
-            'iframe_handle': handle,
-            'frame': frame,
-        }
-
-    return {
-        'mode': 'inline',
-    }
-
-
-def _frame_is_usable(frame: Optional[Any]) -> bool:
-    return frame is not None and not frame.is_detached()
-
-
-def _get_resume_frame(page, logger=None, timeout_ms: int = 10000):
-    start = time.time()
-    entry = _wait_for_resume_entry(page, timeout_ms, logger)
-    if entry.get('mode') == 'iframe' and _frame_is_usable(entry.get('frame')):
-        _log(logger, "info", f"iframe[src*='c-resume'] time: {time.time() - start}")
-        return entry.get('iframe_handle'), entry.get('frame')
-    return None, None
-
-
-def prepare_resume_context(
-    page,
-    chat_id: str,
-    logger=None,
-    *,
-    total_timeout: float = 12000,
-    inline_html_limit: int = 20000,
-) -> Dict[str, Any]:
-    """Prepare resume context by opening resume and detecting mode.
-
-    This is a high-level orchestrator that coordinates the resume preparation process.
+def _get_resume_handle(page, timeout_ms=10000, logger=None) -> Dict[str, Any]:
     """
-    _install_parent_message_listener(page, logger)
+    Detects and returns the handle to the resume overlay or iframe for further processing.
+
+    This function inspects the current page for the presence of the resume overlay or iframe,
+    and returns a dictionary describing the mode and relevant handles for downstream capture logic.
+
+    Args:
+        page: The Playwright page object.
+        timeout_ms (int): Timeout in milliseconds to wait for the resume overlay or iframe to appear.
+        logger: Optional logger for debug output.
+
+    Returns:
+        Dict[str, Any]: A dictionary with keys:
+            - 'mode': One of 'inline', 'iframe', or 'unknown'.
+            - 'frame': The Playwright frame or page object containing the resume.
+            - 'iframe_handle': (optional) The locator for the iframe element, if applicable.
+
+    Raises:
+        Exception: If neither the overlay nor the iframe is found within the timeout.
+    """
+    t0 = time.time()
+    tag = None
+    from .ui_utils import IFRAME_OVERLAY_SELECTOR, RESUME_OVERLAY_SELECTOR
+    iframe = page.locator(IFRAME_OVERLAY_SELECTOR)
+    overlay = page.locator(RESUME_OVERLAY_SELECTOR)
+    if overlay.count() > 0:
+        ''' `wait_for()` ANYTHING WILL cause the canvas pressits'''
+        # overlay.wait_for(timeout=timeout_ms)
+        # page.wait_for_selector(RESUME_OVERLAY_SELECTOR, timeout=timeout_ms)
+        # page.wait_for_selector(INLINE_RESUME_SELECTORS[0], timeout=timeout_ms)
+        ''' try waiting the iframe to be destroyed'''
+        # page.wait_for_selector(IFRAME_OVERLAY_SELECTOR, state="detached", timeout=timeout_ms)
+        ''' use polling methods '''
+        # while iframe.count() > 0 and time.time() - t0 < timeout_ms/1000:
+        #     time.sleep(1)
+        #     iframe = page.locator(IFRAME_OVERLAY_SELECTOR)
+        ''' use page.evaluate() to wait for the iframe to be destroyed'''
+        # Wait for the inline resume selector to appear, but with a timeout
+        # result = page.evaluate(
+        #     """({ sel, timeout }) => new Promise(resolve => {
+        #         const start = Date.now();
+        #         const check = () => {
+        #             if (document.querySelector(sel)) {
+        #                 resolve(true);
+        #             } else if (Date.now() - start > timeout) {
+        #                 resolve(false);
+        #             } else {
+        #                 setTimeout(check, 1000);
+        #             }
+        #         };
+        #         check();
+        #     })""",
+        #     { "sel": INLINE_RESUME_SELECTORS[0], "timeout": timeout_ms }
+        # )
+        # print(f"发现inline resume handle: {INLINE_RESUME_SELECTORS[0]}: {result}")
+        ''' non of the above methods worked, so we just wait for the timeout '''
+        time.sleep(timeout_ms/1000)
+        return {
+            'mode': 'inline',
+            'frame': overlay,
+        }
+    elif iframe.count() > 0:
+        iframe.wait_for(state="attached", timeout=timeout_ms)
+        tag = iframe.first.evaluate("el => el.tagName.toLowerCase()")
+        if tag == 'iframe':
+            iframe_handle = iframe.first.element_handle()
+            frame = iframe_handle.content_frame() if iframe_handle else None
+            entry = frame.locator(RESUME_OVERLAY_SELECTOR)
+            # entries = frame.wait_for_selector(RESUME_OVERLAY_SELECTOR, timeout=timeout_ms) if frame else None
+            time.sleep(timeout_ms/1000)
+            if entry.count() > 0:
+                return {
+                    'mode': 'inline',
+                    'iframe_handle': iframe,
+                    'frame': frame,
+                    'entry': entry,
+                }
+            else:
+                return {
+                    'mode': 'iframe',
+                    'iframe_handle': iframe,
+                    'frame': frame,
+                }
+        else:
+            return {
+                'mode': 'unkown',
+                'frame': iframe,
+            }
+
     
-    open_result = _try_open_online_resume(page, chat_id, logger)
-    if not open_result.get('success'):
-        return _create_error_result(open_result, '无法打开在线简历')
-    # time.sleep(10)
-    entry = _wait_for_resume_entry(page, total_timeout, logger)
-    entry.update(open_result)
-    return entry
 
 
 def _create_error_result(open_result: Dict[str, Any], details: str) -> Dict[str, Any]:
@@ -758,7 +782,7 @@ def _try_wasm_exports(frame, logger=None) -> Optional[Dict[str, Any]]:
                         try {
                             const normalized = new URL(src, window.location.href);
                             const baseHref = normalized.href.replace(/[^/]*$/, '');
-                            pushUrl(`${baseHref}wasm_canvas-1.0.2-5030.js`, 'derived');
+                            pushUrl(`${baseHref}wasm_canvas-1.0.2-5030_patched.js`, 'derived');
                         } catch (_) {}
                     }
                 }
@@ -961,13 +985,27 @@ def _install_canvas_text_hooks(frame, logger=None) -> bool:
 
 
 def _install_parent_message_listener(page, logger=None) -> bool:
-
-    page.evaluate("() => { try { window.__resume_messages = []; } catch (_) {} }")
-    try:
-        return bool(page.evaluate(PARENT_MESSAGE_HOOK_SCRIPT))
-    except Exception as e:
-        _log(logger, "error", f"安装父级消息监听失败: {e}")
+    if page is None:
         return False
+    installed = False
+    try:
+        page.evaluate("() => { try { window.__resume_messages = []; } catch (_) {} }")
+    except Exception:
+        pass
+    try:
+        if page.evaluate(PARENT_MESSAGE_HOOK_SCRIPT):
+            installed = True
+    except Exception as e:
+        _log(logger, 'error', f'安装父级消息监听失败: {e}')
+    for frame in page.frames:
+        if frame is page.main_frame:
+            continue
+        try:
+            frame.evaluate(PARENT_MESSAGE_HOOK_SCRIPT)
+            installed = True
+        except Exception:
+            continue
+    return installed
 
 
 def _collect_parent_messages(page, logger=None) -> Dict[str, Any]:
@@ -976,27 +1014,48 @@ def _collect_parent_messages(page, logger=None) -> Dict[str, Any]:
         return {'success': False, 'text': {}, 'messages': [], 'error': '页面对象缺失', 'method': '消息捕获'}
 
     try:
-        messages = page.evaluate(
-            """
-            () => {
-              try {
-                const store = window.__resume_messages;
-                if (!store || !Array.isArray(store)) {
-                  return [];
+        messages = []
+        def _fetch_messages(frame):
+            return frame.evaluate(
+                """
+                () => {
+                  try {
+                    const store = window.__resume_messages;
+                    if (!store || !Array.isArray(store)) {
+                      return [];
+                    }
+                    return store.slice();
+                  } catch (err) {
+                    return { __error: String(err) };
+                  }
                 }
-                return store.slice();
-              } catch (err) {
-                return { __error: String(err) };
-              }
-            }
-            """
-        )
+                """
+            )
+
+        base = _fetch_messages(page)
+        if isinstance(base, dict) and '__error' in base:
+            messages_info = base
+        else:
+            messages.extend(base if isinstance(base, list) else [])
+            messages_info = None
+        for frame in page.frames:
+            if frame is page.main_frame:
+                continue
+            try:
+                frame_messages = _fetch_messages(frame)
+            except Exception:
+                continue
+            if isinstance(frame_messages, dict) and '__error' in frame_messages:
+                messages_info = frame_messages
+                continue
+            if isinstance(frame_messages, list):
+                messages.extend(frame_messages)
     except Exception as e:
         _log(logger, "error", f"读取父级消息失败: {e}")
         return {'success': False, 'text': {}, 'messages': [], 'error': str(e), 'method': '消息捕获'}
 
-    if isinstance(messages, dict) and '__error' in messages:
-        return {'success': False, 'text': {}, 'messages': [], 'error': messages.get('__error') or '未知错误', 'method': '消息捕获'}
+    if isinstance(messages_info, dict) and '__error' in messages_info:
+        return {'success': False, 'text': {}, 'messages': [], 'error': messages_info.get('__error') or '未知错误', 'method': '消息捕获'}
 
     messages = messages if isinstance(messages, list) else []
 
@@ -1139,51 +1198,121 @@ def _try_trigger_copy_buttons(frame, logger=None) -> None:
             continue
 
 
-def capture_resume_from_chat(page, chat_id: str, logger=None) -> Dict[str, Any]:
-    """Main resume capture function - orchestrates the capture process.
-    
-    Args:
-        page: Playwright page object
-        chat_id: Chat ID to capture resume from
-        logger: Optional logger for debug info
-    """
 
-    # stop 0: inject wasm route
-    _setup_wasm_route(page.context)
 
-    # Step 1: Get resume context
-    context_info = prepare_resume_context(page, chat_id, logger, inline_html_limit=0)
+def collect_resume_debug_info(page, logger=None) -> Dict[str, Any]:
+    """Gather diagnostic information about frames/resources involved in resume rendering."""
 
-    # Step 2: Handle based on resume mode
+    info: Dict[str, Any] = {
+        'frames': [],
+        'resources': [],
+    }
+
+    for frame in page.frames:
+        frame_info: Dict[str, Any] = {
+            'name': frame.name,
+            'url': frame.url,
+        }
+        try:
+            frame_info['canvasCount'] = frame.locator('canvas').count()
+        except Exception:
+            frame_info['canvasCount'] = None
+        try:
+            frame_info['iframeCount'] = frame.locator('iframe').count()
+        except Exception:
+            frame_info['iframeCount'] = None
+        try:
+            frame_info['scripts'] = frame.evaluate(
+                "() => Array.from(document.querySelectorAll('script[src]')).map(s => s.src)"
+            )
+        except Exception:
+            frame_info['scripts'] = 'unavailable'
+        try:
+            frame_info['resumeStore'] = frame.evaluate(
+                "() => { try { return window.__resume_data_store || null; } catch (_) { return 'error'; } }"
+            )
+        except Exception:
+            frame_info['resumeStore'] = 'unavailable'
+        info['frames'].append(frame_info)
+
+    try:
+        info['resources'] = page.evaluate(
+            "() => (performance.getEntriesByType('resource') || [])"
+        )
+    except Exception:
+        info['resources'] = 'unavailable'
+
+    return info
+
+
+
+def _try_canvas_text_hooks(frame, logger=None) -> Dict[str, Any]:
+    """Try canvas text hooks method."""
+    hooked = _install_canvas_text_hooks(frame, logger)
+    if hooked:
+        rebuilt = _rebuild_text_from_logs(frame, logger)
+    if rebuilt and (rebuilt.get('text') or rebuilt.get('html')):
+                return {
+                    'success': True,
+            'text': rebuilt.get('text'),
+            'html': rebuilt.get('html'),
+            'method': "Canvas拦截"
+        }
+    return {'success': False, 'error': 'Canvas拦截失败', 'method': "Canvas拦截"}
+
+
+def _try_clipboard_hooks(frame, logger=None) -> Dict[str, Any]:
+    """Try clipboard hooks method."""
+    _install_clipboard_hooks(frame, logger)
+    _try_trigger_copy_buttons(frame, logger)
+    clip_text = _read_clipboard_logs(frame, logger)
+    if clip_text:
+        return {
+            'success': True,
+            'text': clip_text,
+    'method': '剪贴板拦截'
+    }
+    return {'success': False, 'error': '剪贴板拦截失败', 'method': '剪贴板拦截'}
+
+
+def _process_resume_entry(page, context_info: Dict[str, Any], logger=None) -> Dict[str, Any]:
     mode = context_info.get('mode')
     frame = context_info.get('frame')
+
     if mode == 'inline':
         inline_data = _capture_inline_resume(
-            page,
+            frame or page,
             logger,
             max_attempts=5,
         )
-        rect = inline_data.get('boundingRect') or {}
-        text = inline_data.get('formattedText') or inline_data.get('text')
-        html = inline_data.get('htmlSnippet') or inline_data.get('html')
-        return {
-            'success': True,
-            'text': text,
-            'textLenth': len(text),
-            'htmlLenth': len(html),
-            'width': int(rect.get('width') or 0),
-            'height': int(rect.get('height') or 0),
-            'details': "来自inline简历",
-        }
+        if inline_data:
+            rect = inline_data.get('boundingRect') or {}
+            text = inline_data.get('formattedText') or inline_data.get('text')
+            html = inline_data.get('htmlSnippet') or inline_data.get('html')
+            return {
+                'success': True,
+                'text': text,
+                'textLenth': len(text),
+                'htmlLenth': len(html),
+                'width': int(rect.get('width') or 0),
+                'height': int(rect.get('height') or 0),
+                'details': "来自inline简历",
+            }
+        else:
+            entry = context_info.get('entry')
+            text = entry.inner_text()
+            html = entry.inner_html()
+            return {
+                'success': True,
+                'text': text,
+                # 'html': html,
+                'textLenth': len(text),
+                'htmlLenth': len(html),
+                'details': "来自inner_text简历",
+            }
 
-    elif mode == 'iframe' and frame:
-        """Handle iframe resume capture."""
-
-        # Collect any iframe→parent messages first; the postMessage often contains raw JSON.
+    if mode == 'iframe' and frame:
         parent_result = _collect_parent_messages(page, logger)
-
-        # Route to specific capture method
-        """Capture iframe resume using WASM/Canvas/Hooks/Image method."""
         wasm_result = _try_wasm_exports(frame, logger)
         canvas_result = _try_canvas_text_hooks(frame, logger)
         hooks_result = _try_clipboard_hooks(frame, logger)
@@ -1202,57 +1331,23 @@ def capture_resume_from_chat(page, chat_id: str, logger=None) -> Dict[str, Any]:
                 aggregated_text[result.get('method', '文本')] = payload
 
         error = '\n'.join(filter(None, [result.get('error', '') for result in results]))
-
-        # Close any overlay dialogs including resume frames
-        close_overlay_dialogs(
-            page, 
-            logger=lambda msg, level: _log(logger, level, msg),
-            timeout_ms=1000
-        )
-        
+        if not isinstance(result, dict):
+            debug_info = collect_resume_debug_info(frame)
+            return {
+                'success': False,
+                'details': '未知错误: 简历结果异常',
+                'debug': debug_info,
+            }
         return {
             'success': success,
             'text': aggregated_text,
             'capture_method': methods,
             'error': error
         }
-    return _create_error_result(context_info, 'iframe不可用')
-
-
-
-def _try_canvas_text_hooks(frame, logger=None) -> Dict[str, Any]:
-    """Try canvas text hooks method."""
-    hooked = _install_canvas_text_hooks(frame, logger)
-    if hooked:
-        rebuilt = _rebuild_text_from_logs(frame, logger)
-        if rebuilt and (rebuilt.get('text') or rebuilt.get('html')):
-            return {
-                'success': True,
-                'text': rebuilt.get('text'),
-                'html': rebuilt.get('html'),
-                'method': "Canvas拦截"
-            }
-    return {'success': False, 'error': 'Canvas拦截失败', 'method': "Canvas拦截"}
-
-
-def _try_clipboard_hooks(frame, logger=None) -> Dict[str, Any]:
-    """Try clipboard hooks method."""
-    _install_clipboard_hooks(frame, logger)
-    _try_trigger_copy_buttons(frame, logger)
-    clip_text = _read_clipboard_logs(frame, logger)
-    if clip_text:
-        return {
-            'success': True,
-            'text': clip_text,
-            'method': '剪贴板拦截'
-        }
-    return {'success': False, 'error': '剪贴板拦截失败', 'method': '剪贴板拦截'}
 
 
 def extract_pdf_viewer_text(frame: 'Frame') -> Dict[str, Any]:
     """Return structured text extracted from a pdf.js viewer iframe."""
-    if frame is None:
-        return {'pages': [], 'text': ''}
 
     try:
         frame.locator("div.textLayer").first.wait_for(state="visible", timeout=5000)
@@ -1283,7 +1378,7 @@ def extract_pdf_viewer_text(frame: 'Frame') -> Dict[str, Any]:
                     const [x, y] = viewport.convertToViewportPoint(item.transform[4], item.transform[5]);
                     const height = item.height || Math.abs(item.transform[3]) || 1;
                     const width = item.width || Math.abs(item.transform[0]) || 1;
-                    return {
+        return {
                       text: item.str,
                       x,
                       y,
@@ -1345,10 +1440,9 @@ def extract_pdf_viewer_text(frame: 'Frame') -> Dict[str, Any]:
         return frame.evaluate(script)
 
     try:
-        pages: Any = _collect() 
-    except Exception as e:
+        pages: Any = _collect()
+    except Exception:
         pages = []
-        print(f"extract_pdf_viewer_text: {e}")
         fallback = frame.evaluate("() => document.body.innerText || ''")
         fallback = clean_resume_text(fallback)
         return {'pages': [], 'text': fallback}
@@ -1369,9 +1463,6 @@ def extract_pdf_viewer_text(frame: 'Frame') -> Dict[str, Any]:
     cleaned_text = clean_resume_text('\n'.join(combined))
     return {'pages': pages, 'text': cleaned_text}
 
-
-# Clean up the combined text before returning.
-import re
 
 def clean_resume_text(text: str) -> str:
     # Replace triple or more newlines with a unique marker to preserve them
