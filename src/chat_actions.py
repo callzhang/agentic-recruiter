@@ -3,11 +3,15 @@ from __future__ import annotations
 import time
 from typing import Any, Dict, List, Optional
 from playwright.sync_api import Locator
-from .resume_capture import extract_pdf_viewer_text, capture_resume_from_chat
-from .extractors import extract_candidates, extract_messages, extract_chat_history
+from .resume_capture import extract_pdf_viewer_text
 from src.config import settings
-from .chat_utils import close_overlay_dialogs
-CHAT_ITEM_SELECTORS = ("div.geek-item", "[role='listitem']")
+from .ui_utils import close_overlay_dialogs
+from .global_logger import get_logger
+from .resume_capture import _process_resume_entry
+# Get logger once at module level
+logger = get_logger()
+CHAT_MENU_SELECTOR = "dl.menu-chat"
+CHAT_ITEM_SELECTORS = "div.geek-item"
 CONVERSATION_SELECTOR = "div.conversation-message"
 MESSAGE_INPUT_SELECTOR = "#boss-chat-editor-input"
 RESUME_BUTTON_SELECTOR = "div.resume-btn-file, a.resume-btn-file"
@@ -16,51 +20,46 @@ PDF_VIEWER_SELECTOR = "div.pdfViewer"
 
 
 
-def _prepare_chat_page(page, chat_id: str = None, *, wait_timeout: int = 5000) -> tuple[Optional[Locator], Optional[Dict[str, Any]]]:
+def _go_to_chat_dialog(page, chat_id: str, *, wait_timeout: int = 5000) -> tuple[Optional[Locator], Optional[Dict[str, Any]]]:
     # Ensure we are on the chat page; if not, click the chat menu
     # If current URL is not the chat page, click the chat menu to navigate
     close_overlay_dialogs(page)
     if not settings.CHAT_URL in page.url:
-        menu_chat = page.locator("dl.menu-chat").first
+        menu_chat = page.locator(CHAT_MENU_SELECTOR).first
         menu_chat.click()
         # Wait for chat list to appear
-        page.wait_for_selector("div.geek-item, [role='listitem']", timeout=wait_timeout)
+        page.wait_for_selector(CHAT_ITEM_SELECTORS, timeout=wait_timeout)
     """Ensure the chat is focused and the conversation panel is ready."""
 
-    if not chat_id:
-        return None, None
     direct_selectors = [
-        f"div.geek-item[data-id=\"{chat_id}\"]",
+        f"{CHAT_ITEM_SELECTORS}[data-id=\"{chat_id}\"]",
+        # f"{CHAT_ITEM_SELECTORS}[id=_{chat_id}]",
         # f"div[role='listitem'][key=\"{chat_id}\"]",
     ]
+    target = None
     for selector in direct_selectors:
         locator = page.locator(selector)
         if locator.count():
             target = locator.first
+            break
+    else:
+        return None
 
-    # move to chat target
-    if target:
-        target.scroll_into_view_if_needed(timeout=1000)
-    if target is None:
-        return None, { 'success': False, 'details': '未找到指定对话项' }
-    # 如果已经选中，直接返回
-    if 'selected' in target.get_attribute('class'):
-        return target, None
-    # click chat target
-    target.click()
+    # move to chat dialog
+    target.hover(timeout=1000)
+    if 'selected' not in target.get_attribute('class'):
+        target.click()
+        page.wait_for_selector(CONVERSATION_SELECTOR, timeout=wait_timeout)
 
-    page.wait_for_selector(CONVERSATION_SELECTOR, timeout=wait_timeout)
-
-    return target, None
+    return target
 
 
 
-def request_resume_action(page, chat_id: str, *, logger=lambda msg, level: None) -> Dict[str, Any]:
+def request_resume_action(page, chat_id: str) -> Dict[str, Any]:
     """Send a resume request in the open chat panel for the given chat_id"""
-    _, error = _prepare_chat_page(page, chat_id)
-    if error:
-        error.setdefault('already_sent', False)
-        return error
+    dialog = _go_to_chat_dialog(page, chat_id)
+    if not dialog:
+        return { 'success': False, 'details': '未找到指定对话项' }
 
     # Find the resume request button
     btn = page.locator("span.operate-btn:has-text('求简历')").first
@@ -75,7 +74,7 @@ def request_resume_action(page, chat_id: str, *, logger=lambda msg, level: None)
     # Click the resume request button
     btn.click()
     # Confirm
-    btn0 = page.locator('button:has-text("继续交换")')
+    btn0 = page.locator('div:has-text("继续交换")')
     if btn0.count():
         btn0.click()
     confirm = page.locator("span.boss-btn-primary:has-text('确定')").first
@@ -98,11 +97,11 @@ def request_resume_action(page, chat_id: str, *, logger=lambda msg, level: None)
         return { 'success': False, 'already_sent': False, 'details': '未检测到发送成功提示' }
 
 
-def send_message_action(page, chat_id: str, message: str, *, logger=lambda msg, level: None) -> Dict[str, Any]:
+def send_message_action(page, chat_id: str, message: str) -> Dict[str, Any]:
     """Send a text message in the open chat panel for the given chat_id"""
-    _, error = _prepare_chat_page(page, chat_id)
-    if error:
-        return error
+    dialog = _go_to_chat_dialog(page, chat_id)
+    if not dialog:
+        return { 'success': False, 'details': '未找到指定对话项' }
 
     # Find the message input field
     input_field = page.locator(MESSAGE_INPUT_SELECTOR).first
@@ -143,18 +142,20 @@ def send_message_action(page, chat_id: str, message: str, *, logger=lambda msg, 
     return { 'success': False, 'details': '消息可能未发送成功，输入框仍有内容' }
 
 
-def view_full_resume_action(page, chat_id: str, *, logger=lambda msg, level: None) -> Dict[str, Any]:
-    """点击查看候选人的附件简历"""
+def view_full_resume_action(page, chat_id: str) -> Dict[str, Any]:
+    """点击查看候选人的附件简历
+    view_full_resume_action(page, chat_id)
+    ├── _go_to_chat_dialog(page, chat_id)
+    │   ├── close_overlay_dialogs(page) [ui_utils.py:66]
+    │   └── page.locator(CHAT_MENU_SELECTOR)
+    ├── page.locator(RESUME_BUTTON_SELECTOR)
+    ├── page.wait_for_selector(RESUME_IFRAME_SELECTOR)
+    └── close_overlay_dialogs(page) [ui_utils.py:66]
+    """
 
-    _, error = _prepare_chat_page(page, chat_id, wait_timeout=5000)
-    if error:
-        return error
-    # close existing overlay if present
-    try:
-        close_locator = 'div.boss-popup__close'
-        page.locator(close_locator).click(timeout=100)
-    except Exception:
-        pass
+    dialog = _go_to_chat_dialog(page, chat_id)
+    if not dialog:
+        return { 'success': False, 'details': '未找到指定对话项' }
 
     # Find and click the resume file button
     resume_button = page.locator(RESUME_BUTTON_SELECTOR).first
@@ -176,17 +177,15 @@ def view_full_resume_action(page, chat_id: str, *, logger=lambda msg, level: Non
         # Wait for iframe to appear first
         iframe_handle = page.wait_for_selector(RESUME_IFRAME_SELECTOR, timeout=8000)
         frame = iframe_handle.content_frame()
-        if frame is None:
-            raise RuntimeError('attachment iframe 无法获取到 frame 对象')
         frame.wait_for_selector(PDF_VIEWER_SELECTOR, timeout=5000)
     except Exception as e:
-        page.locator(close_locator).click(timeout=100)
+        close_overlay_dialogs(page)
         return { 'success': False, 'details': '简历查看器未出现', 'error': str(e) }
 
     try:
         content = extract_pdf_viewer_text(frame)
     finally:
-        page.locator(close_locator).click(timeout=500)
+        close_overlay_dialogs(page)
     
     return {
         'success': True,
@@ -197,95 +196,148 @@ def view_full_resume_action(page, chat_id: str, *, logger=lambda msg, level: Non
 
 
 
-def discard_candidate_action(page, chat_id: str, *, logger=lambda msg, level: None) -> Dict[str, Any]:
+def discard_candidate_action(page, chat_id: str) -> Dict[str, Any]:
     """丢弃候选人 - 点击"不合适"按钮"""
-    _, error = _prepare_chat_page(page, chat_id)
-    if error:
-        return error
+    dialog = _go_to_chat_dialog(page, chat_id)
+    if not dialog:
+        return { 'success': False, 'details': '未找到指定对话项' }
 
     # 查找"不合适"按钮
     not_fit_button = page.locator("div.not-fit-wrap").first
-    if not not_fit_button.count():
-        return { 'success': False, 'details': '未找到"不合适"按钮' }
+    # not_fit_button = page.get_by_text('不合适').first
     
     try:
         not_fit_button.wait_for(state="visible", timeout=3000)
+        not_fit_button.hover()
+        time.sleep(2)
         not_fit_button.click()
     except Exception as e:
         return { 'success': False, 'details': f'点击"不合适"按钮失败: {e}' }
 
     # 等待确认对话框
-    try:
-        confirm_button = page.locator("button:has-text('确定'), span:has-text('确定'), a:has-text('确定')").first
-        confirm_button.wait_for(state="visible", timeout=3000)
-        confirm_button.click()
-    except Exception as e:
-        return { 'success': False, 'details': f'确认丢弃失败: {e}' }
-
-    # 验证操作成功
-    page.wait_for_timeout(1000)
-    return { 'success': True, 'details': '候选人已丢弃' }
+    dialog = _go_to_chat_dialog(page, chat_id)
+    if dialog is None:
+        return { 'success': True, 'details': f'确认已丢弃' }
+    else:
+        return { 'success': False, 'details': f'确认丢弃失败: {error}' }
 
 
-def get_candidates_list_action(page, limit: int = 10, *, logger=lambda msg, level: None, black_companies=None, save_candidates_func=None):
-    """获取候选人列表"""
-    logger(f"获取候选人列表 (限制: {limit})", "info")
-    _prepare_chat_page(page)
-    # DOM 提取
-    candidates = extract_candidates(page, limit=limit, logger=logger)
-    
-    # 黑名单过滤（如果存在）
-    if candidates and black_companies:
-        candidates = [c for c in candidates if not (c.get('company') and any(b in c.get('company') for b in black_companies))]
 
-    logger(f"成功获取 {len(candidates)} 个候选人", "success")
-    
-    # 保存候选人数据到文件
-    if candidates and save_candidates_func:
-        save_candidates_func(candidates)
-    
-    return candidates
-
-
-def get_messages_list_action(page, limit: int = 10, *, logger=lambda msg, level: None, chat_cache=None):
+def get_messages_list_action(page, limit: int = 10, *, chat_cache=None):
     """获取消息列表"""
-    logger(f"获取消息列表 (限制: {limit})", "info")
-    _prepare_chat_page(page)
-    messages = extract_messages(page, limit=limit, chat_cache=chat_cache.get_all() if chat_cache else None)
+    logger.info(f"获取消息列表 (限制: {limit})")
+    close_overlay_dialogs(page)
+    # Simple text extraction for messages
+    messages = []
+    items = page.locator("div.geek-item").all()
+    for item in items[:limit]:
+        item.scroll_into_view_if_needed(timeout=1000)
+        messages.append({
+            'id': item.get_attribute('data-id'),
+            'text': item.inner_text(),
+            'timestamp': '',
+            'sender': ''
+        })
+    
+    # Use cache if no messages found
     if not messages and chat_cache:
-        # 使用事件管理器获取缓存的消息
         messages = chat_cache.get_all()
-    if not messages:
-        logger("消息列表为空（DOM+缓存均无）", "warning")
-    logger(f"成功获取 {len(messages)} 条消息", "success")
+    logger.info(f"成功获取 {len(messages)} 条消息")
     return messages
 
 
-def get_chat_history_action(page, chat_id: str, *, logger=lambda msg, level: None) -> List[Dict[str, Any]]:
+def get_chat_history_action(page, chat_id: str) -> List[Dict[str, Any]]:
     """读取右侧聊天历史，返回结构化消息列表"""
-    _, error = _prepare_chat_page(page, chat_id)
-    if error:
-        return []
     
-    history = extract_chat_history(page, chat_id)
+    dialog = _go_to_chat_dialog(page, chat_id)
+    if not dialog:
+        return { 'success': False, 'details': '未找到指定对话项' }
+    
+    # Simple text extraction for chat history
+    message_box = page.locator("div.conversation-message")
+    history = message_box.inner_text()
+    logger.info(f"Chat history: {history}")
     return history
 
 
 
 
-def view_online_resume_action(page, chat_id: str, *, logger=lambda msg, level: None) -> Dict[str, Any]:
-    """点击会话 -> 点击"在线简历" -> 使用多级回退链条输出文本或图像"""
-    _, error = _prepare_chat_page(page, chat_id)
-    if error:
-        return error
+def accept_resume_action(page, chat_id: str) -> Dict[str, Any]:
+    """Accept a candidate by clicking the accept button.
+    
+    Args:
+        page: Playwright page object
+        chat_id: ID of the chat/conversation
+        
+    Returns:
+        Dict with success status and details
+    """
+    dialog = _go_to_chat_dialog(page, chat_id)
+    if not dialog:
+        return { 'success': False, 'details': '未找到指定对话项' }
+    
+    # Look for accept button
+    accept_selectors = [
+        "button:has-text('接受')",
+        "a:has-text('接受')",
+        "xpath=//button[contains(., '接受')]",
+        "xpath=//a[contains(., '接受')]"
+    ]
+    
+    for selector in accept_selectors:
+        try:
+            if page.locator(selector).first.is_visible(timeout=2000):
+                page.locator(selector).first.click(timeout=2000)
+                logger.info(f"Successfully clicked accept button")
+                return {'success': True, 'details': '候选人已接受'}
+        except Exception:
+            continue
+    
+    logger.warning("No accept button found")
+    return {'success': False, 'details': '未找到接受按钮'}
+        
 
-    result = capture_resume_from_chat(page, chat_id, logger=logger)
-    close_overlay_dialogs(page, logger)
-    # 统一加上success存在性
+
+def view_online_resume_action(page, chat_id: str) -> Dict[str, Any]:
+    """点击会话 -> 点击"在线简历" -> 使用多级回退链条输出文本
+    view_online_resume_action(page, chat_id)
+    ├── _go_to_chat_dialog(page, chat_id)
+    │   ├── close_overlay_dialogs(page) [ui_utils.py:66]
+    │   └── page.locator(CHAT_MENU_SELECTOR)
+    ├── _setup_wasm_route()
+    ├── _install_parent_message_listener()
+    ├── _open_online_resume()
+    └── _get_resume_handle()
+    ├── _process_resume_entry(page, context_info, logger) [resume_capture.py:1254]
+    │   ├── (inline)
+    │       ├── _capture_inline_resume()
+    │   └── (iframe)
+    │       ├── _collect_parent_messages()
+    │       ├── _try_wasm_exports()
+    │       ├── _try_canvas_text_hooks()
+    │       └── _try_clipboard_hooks()
+    └── close_overlay_dialogs(page) [ui_utils.py:66]
+"""
+    dialog = _go_to_chat_dialog(page, chat_id)
+    if not dialog:
+        return { 'success': False, 'details': '未找到指定对话项' }
+
+    """Prepare resume context by opening resume and detecting mode."""
+    from .resume_capture import _setup_wasm_route, _install_parent_message_listener, _open_online_resume, _get_resume_handle, _create_error_result
+    _setup_wasm_route(page.context)
+    _install_parent_message_listener(page, logger)
+    open_result = _open_online_resume(page, chat_id, logger)
+    if not open_result.get('success'):
+        return _create_error_result(open_result, '无法打开在线简历')
+    context = _get_resume_handle(page, 10000, logger)
+    context.update(open_result)
+
+    ''' process resume entry '''
+    result = _process_resume_entry(page, context, logger)
+    logger.info(f"处理简历结果: {result}")
+    close_overlay_dialogs(page)
     if not isinstance(result, dict):
         return { 'success': False, 'details': '未知错误: 结果类型异常' }
-    if 'success' not in result:
-        result['success'] = bool(result.get('text') or result.get('image_base64') or result.get('data_url'))
     return result
 
 
