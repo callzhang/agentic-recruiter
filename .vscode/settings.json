@@ -1,3 +1,6 @@
 {
-    "chatgpt.openOnStartup": true
+    "chatgpt.openOnStartup": true,
+    "zenMode.hideActivityBar": false,
+    "workbench.sideBar.location": "left",
+    "workbench.activityBar.orientation": "vertical"
 }
