@@ -6,9 +6,21 @@ from typing import Any, Dict, List, Optional
 
 from playwright.sync_api import Locator
 
+from .resume_capture import (
+    collect_resume_debug_info,
+    CANVAS_TEXT_HOOK_SCRIPT,
+)
+from .ui_utils import close_overlay_dialogs, IFRAME_OVERLAY_SELECTOR, RESUME_OVERLAY_SELECTOR
+from .global_logger import get_logger
+
+# Get logger once at module level
+logger = get_logger()
+
+CANDIDATE_CARD_SELECTOR = "div.candidate-card-wrap"
 
 def _prepare_recommendation_page(page, *, wait_timeout: int = 8000) -> tuple[Optional[Locator], Optional[Dict[str, Any]]]:
     """Ensure the recommendation panel is opened and ready."""
+    close_overlay_dialogs(page)
     # Click the recommendation menu
     if not page.url.startswith("https://www.zhipin.com/web/chat/recommend"):
         menu_locator = page.locator("dl.menu-recommend").first
@@ -16,134 +28,79 @@ def _prepare_recommendation_page(page, *, wait_timeout: int = 8000) -> tuple[Opt
         menu_locator.click()
 
     # Wait for the iframe to appear and get its frame
-    try:
-        iframe = page.wait_for_selector('iframe[name="recommendFrame"]', timeout=wait_timeout)
-        frame = iframe.content_frame()
-        if frame is None:
-            return None, { 'success': False, 'details': '推荐iframe无法获取到frame对象' }
-        
-        frame.wait_for_selector("li.card-item", timeout=5000)
-        return frame, None
-    except Exception as e:
-        return None, { 'success': False, 'details': f'推荐列表未加载: {e}' }
+    iframe = page.wait_for_selector(IFRAME_OVERLAY_SELECTOR, timeout=wait_timeout)
+    
+    if frame := iframe.content_frame():
+        frame.wait_for_selector(CANDIDATE_CARD_SELECTOR, timeout=wait_timeout)
+    else:
+        page.wait_for_selector(CANDIDATE_CARD_SELECTOR, timeout=wait_timeout)
+    return frame
 
 
 def list_recommended_candidates_action(page, *, limit: int = 20) -> Dict[str, Any]:
     """Click the recommended panel and return structured card information."""
-    frame, error = _prepare_recommendation_page(page)
-    if error:
-        return error
+    frame = _prepare_recommendation_page(page)
 
     # Use the frame to locate card items
-    card_locators: List[Locator] = frame.locator("li.card-item").all()
+    card_locators: List[Locator] = frame.locator(CANDIDATE_CARD_SELECTOR).all()
 
-    candidates: List[Dict[str, Any]] = []
-    for idx, card in enumerate(card_locators[:limit]):
-
-        candidate: Dict[str, Any] = { 'index': idx + 1 }
-
-        cand_id = card.get_attribute('data-id') or card.get_attribute('data-geekid') or card.get_attribute('data-uid')
-        if cand_id:
-            candidate['id'] = cand_id
-
-        href = ''
-        link_locator = card.locator("a").first
-        href = link_locator.get_attribute('href') or ''
-        candidate['link'] = href
-
-        raw_text = card.inner_text().strip()
-        if raw_text:
-            candidate['raw_text'] = raw_text
-
-        name = ''
-        for selector in ('.name', '.user-name', '.geek-name', '.card-name', '.recommend-card__user-name', '.info-name', '.title'):
-            sub = card.locator(selector).first
-            if sub.count():
-                text = sub.inner_text().strip()
-                if text:
-                    name = text
-                    break
-        if name:
-            candidate['name'] = name
-
-        job_title = ''
-        for selector in ('.job-name', '.job-title', '.recommend-card__job', '.position', '.card-job-name', '.job-text'):
-            sub = card.locator(selector).first
-            if sub.count():
-                text = sub.inner_text().strip()
-                if text:
-                    job_title = text
-                    break
-        if job_title:
-            candidate['job_title'] = job_title
-
-        company = ''
-        for selector in ('.company', '.company-name', '.recommend-card__company', '.card-company', '.job-company'):
-            sub = card.locator(selector).first
-            if sub.count():
-                text = sub.inner_text().strip()
-                if text:
-                    company = text
-                    break
-        if company:
-            candidate['company'] = company
-
-        salary = ''
-        for selector in ('.salary', '.salary-text', '.job-salary', '.recommend-card__salary'):
-            sub = card.locator(selector).first
-            if sub.count():
-                text = sub.inner_text().strip()
-                if text:
-                    salary = text
-                    break
-        if salary:
-            candidate['salary'] = salary
-
-        location = ''
-        for selector in ('.location', '.job-area', '.job-city', '.recommend-card__city'):
-            sub = card.locator(selector).first
-            if sub.count():
-                text = sub.inner_text().strip()
-                if text:
-                    location = text
-                    break
-        if location:
-            candidate['location'] = location
-
-        experience = ''
-        for selector in ('.experience', '.exp', '.work-exp', '.resume-item-exp'):
-            sub = card.locator(selector).first
-            if sub.count():
-                text = sub.inner_text().strip()
-                if text:
-                    experience = text
-                    break
-        if experience:
-            candidate['experience'] = experience
-
-        education = ''
-        for selector in ('.education', '.edu', '.resume-item-edu', '.card-edu'):
-            sub = card.locator(selector).first
-            if sub.count():
-                text = sub.inner_text().strip()
-                if text:
-                    education = text
-                    break
-        if education:
-            candidate['education'] = education
-
-        tags: List[str] = []
-        for selector in ('.tag', '.tag-item', '.label', '.skill-tag', '.job-tag'):
-            for tag_node in card.locator(selector).all():
-                text = tag_node.inner_text().strip()
-                if text and text not in tags:
-                    tags.append(text)
-        if tags:
-            candidate['tags'] = tags
-
-        if candidate.get('raw_text') or candidate.get('name'):
-            candidates.append(candidate)
-
+    candidates = []
+    for card in card_locators[:limit]:
+        card.scroll_into_view_if_needed(timeout=1000)
+        viewd = 'viewed' in card.get_attribute('class')
+        text = card.inner_text().strip()
+        candidates.append({
+            'viewed': viewd,
+            'text': text,
+        })
     success = bool(candidates)
     details = f"成功获取 {len(candidates)} 个推荐候选人" if success else '未找到推荐候选人'
     return { 'success': success, 'details': details, 'candidates': candidates }
+
+
+def view_recommend_candidate_resume_action(page, index: int) -> Dict[str, Any]:
+    """点击推荐候选人卡片并抓取在线简历内容。
+    view_recommend_candidate_resume_action(page, index)
+    ├── 1. NAVIGATION PHASE
+    │   └── _prepare_recommendation_page(page)
+    │       ├── close_overlay_dialogs(page) [ui_utils.py]
+    │       ├── page.locator("dl.menu-recommend").click() [if not on recommend page]
+    │       └── page.wait_for_selector(IFRAME_OVERLAY_SELECTOR) [wait for iframe]
+    │
+    ├── 2. CANDIDATE SELECTION PHASE
+    │   ├── frame.locator(CANDIDATE_CARD_SELECTOR).all()[index]
+    │   ├── card.scroll_into_view_if_needed(timeout=1000)
+    │   └── card.click(timeout=1000)
+    │
+    ├── 3. RESUME CAPTURE SETUP PHASE
+    │   ├── _setup_wasm_route(page.context) [resume_capture.py]
+    │   └── _install_parent_message_listener(page, logger) [resume_capture.py]
+    │
+    ├── 4. RESUME PROCESSING PHASE
+    │   ├── _get_resume_handle(page, 8000, logger) [resume_capture.py]
+    │   └── _process_resume_entry(page, entry, logger) [resume_capture.py]
+    │
+    └── 5. ERROR HANDLING PHASE (if needed)
+        └── collect_resume_debug_info(page) [resume_capture.py]
+"""
+    frame = _prepare_recommendation_page(page)
+
+    ''' click candidate card '''
+    card = frame.locator(CANDIDATE_CARD_SELECTOR).all()[index]
+    card.scroll_into_view_if_needed(timeout=1000)
+    card.click(timeout=1000)
+
+    ''' prepare resume context '''
+    from .resume_capture import _setup_wasm_route, _install_parent_message_listener, _get_resume_handle, _process_resume_entry
+    _setup_wasm_route(page.context)
+    _install_parent_message_listener(page, logger)
+
+    ''' process resume entry '''
+    context = _get_resume_handle(page, 10000, logger)
+    result = _process_resume_entry(page, context, logger)
+    logger.info(f"处理简历结果: {result}")
+    
+    ''' collect resume debug info '''
+    if not result.get('success'):
+        result['debug'] = collect_resume_debug_info(page)
+    return result
