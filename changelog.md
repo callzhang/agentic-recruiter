@@ -35,7 +35,7 @@
   - 图像预处理优化
 
 #### AI决策系统
-- **YAML岗位配置** (`jobs/criteria.yaml`)
+- **YAML岗位配置** (`config/jobs.yaml`)
   - 结构化岗位要求定义
   - 技能关键词配置
   - 筛选条件设置

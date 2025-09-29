@@ -52,7 +52,7 @@
 - ✅ 环境变量配置
 - ✅ 简历捕获配置 (`src/resume_capture.py`)
 - ✅ OCR服务配置 (`src/ocr_service.py`)
-- ✅ 岗位要求配置 (`jobs/criteria.yaml`)
+- ✅ 岗位要求配置 (`config/jobs.yaml`)
 
 ### 智能简历处理
 - ✅ WASM文本提取 - 直接解析网站数据结构

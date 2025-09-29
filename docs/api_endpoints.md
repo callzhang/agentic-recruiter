@@ -508,3 +508,6 @@ curl -X POST http://127.0.0.1:5001/resume/online \
 
 5. **Error Handling**: All endpoints return structured JSON responses with success indicators and detailed error information.
 
+
+
+
