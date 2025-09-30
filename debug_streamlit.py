@@ -38,13 +38,11 @@ def run_streamlit_debug():
     # Streamlit command with debug options
     cmd = [
         "/opt/homebrew/bin/streamlit", "run", "boss_app.py",
-        "--server.port=8501",
         "--server.address=localhost",
         "--server.headless=false",
         "--server.runOnSave=true",
         "--server.enableCORS=false",
         "--logger.level=debug",
-        "--global.developmentMode=true",
         "--global.showErrorDetails=true"
     ]
     

@@ -1,11 +1,9 @@
 [global]
 # Development settings
-developmentMode = true
 showErrorDetails = true
 
 [server]
 # Server configuration
-port = 8501
 address = "localhost"
 headless = false
 runOnSave = true

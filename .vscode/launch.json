@@ -29,95 +29,15 @@
       }
     },
     {
-      "name": "Streamlit: boss_app.py (Debug)",
-      "type": "debugpy",
-      "request": "launch",
-      "program": "/opt/homebrew/bin/streamlit",
-      "console": "integratedTerminal",
-      "justMyCode": false,
-      "subProcess": true,
-      "env": {
-        "STREAMLIT_ENV": "development",
-        "STREAMLIT_LOGGER_LEVEL": "debug",
-        "STREAMLIT_SERVER_HEADLESS": "false",
-        "STREAMLIT_SERVER_RUN_ON_SAVE": "true",
-        "STREAMLIT_SERVER_ENABLE_CORS": "false",
-        "PYTHONUNBUFFERED": "1"
-      },
-      "args": [
-        "run",
-        "boss_app.py",
-        "--server.port=8501",
-        "--server.address=localhost",
-        "--server.headless=false",
-        "--server.runOnSave=true",
-        "--server.enableCORS=false",
-        "--logger.level=debug"
-      ],
-      "cwd": "${workspaceFolder}"
-    },
-    {
-      "name": "Streamlit: Python Module (Debug)",
+      "name": "Streamlit: boss_app.py",
       "type": "debugpy",
       "request": "launch",
       "module": "streamlit",
       "console": "integratedTerminal",
-      "justMyCode": false,
-      "subProcess": true,
-      "env": {
-        "STREAMLIT_ENV": "development",
-        "STREAMLIT_LOGGER_LEVEL": "debug",
-        "STREAMLIT_SERVER_HEADLESS": "false",
-        "STREAMLIT_SERVER_RUN_ON_SAVE": "true",
-        "STREAMLIT_SERVER_ENABLE_CORS": "false",
-        "PYTHONUNBUFFERED": "1"
-      },
-      "args": [
-        "run",
-        "boss_app.py",
-        "--server.port=8501",
-        "--server.address=localhost",
-        "--server.headless=false",
-        "--server.runOnSave=true",
-        "--server.enableCORS=false",
-        "--logger.level=debug"
-      ],
-      "cwd": "${workspaceFolder}"
-    },
-    {
-      "name": "Streamlit: Python Launcher (Debug)",
-      "type": "debugpy",
-      "request": "launch",
-      "program": "${workspaceFolder}/launch_streamlit.py",
-      "console": "integratedTerminal",
-      "justMyCode": false,
-      "subProcess": true,
-      "env": {
-        "STREAMLIT_ENV": "development",
-        "STREAMLIT_LOGGER_LEVEL": "debug",
-        "STREAMLIT_SERVER_HEADLESS": "false",
-        "STREAMLIT_SERVER_RUN_ON_SAVE": "true",
-        "STREAMLIT_SERVER_ENABLE_CORS": "false",
-        "PYTHONUNBUFFERED": "1"
-      },
-      "cwd": "${workspaceFolder}"
-    },
-    {
-      "name": "Streamlit: boss_app.py (Production)",
-      "type": "debugpy",
-      "request": "launch",
-      "program": "/opt/homebrew/bin/streamlit",
-      "console": "integratedTerminal",
       "justMyCode": true,
-      "env": {
-        "STREAMLIT_ENV": "production"
-      },
-      "args": [
-        "run",
-        "boss_app.py",
-        "--server.port=8501"
-      ],
-      "cwd": "${workspaceFolder}"
+      "args": ["run", "boss_app.py", "--server.runOnSave=true"],
+      "cwd": "${workspaceFolder}",
+      "env": { "PYTHONUNBUFFERED": "1" }
     }
   ]
 }

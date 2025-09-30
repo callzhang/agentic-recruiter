@@ -2,24 +2,17 @@ roles:
 - id: algo
   position: 大模型算法工程师
   keywords:
-    positive:
-    - 大模型
-    - LLM
-    - Transformer
-    - Fine-tuning
-    - LoRA
-    - RLHF
-    - 知识蒸馏
-    - RAG
-    negative:
-    - 爬虫
-    - 外包
-    - 纯NLP规则
-  background: |
-    MorningStar 与 Rosetta 正在把企业内部的“混沌数据”打造成可持续进化的 AI 增长飞轮。
+    positive: []
+    negative: []
+  background: 'MorningStar 与 Rosetta 正在把企业内部的“混沌数据”打造成可持续进化的 AI 增长飞轮。
+
     你将加入一个以第一性原理重新发明企业级数据基础设施的核心团队，服务对象覆盖自动驾驶、
 
+
     金融与大型制造业等头部客户，面对 PB 级数据与高可靠性场景。
+
+
+    ''
 
     '
   responsibilities: '- 设计并迭代企业级大模型训练/推理流水线，涵盖数据治理、特征挖掘与评估机制。

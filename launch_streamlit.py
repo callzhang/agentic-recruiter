@@ -28,7 +28,6 @@ if __name__ == "__main__":
         "streamlit",
         "run",
         "boss_app.py",
-        "--server.port=8501",
         "--server.address=localhost",
         "--server.headless=false",
         "--server.runOnSave=true",
