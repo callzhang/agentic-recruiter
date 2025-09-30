@@ -42,9 +42,7 @@ from src.recommendation_actions import (
     select_recommend_job_action,
     _prepare_recommendation_page,
 )
-from src.blacklist import load_blacklist, NEGATIVE_HINTS
 from src.events import EventManager
-from src import mappings as mapx
 from src.global_logger import get_logger
 from src.qa_store import qa_store
 from src.qa_workflow import qa_workflow, DEFAULT_GREETING
@@ -436,45 +434,6 @@ class BossService:
                 'timestamp': datetime.now().isoformat()
             })
             
-
-        @self.app.get('/search')
-        def search_preview(
-            city: str = Query('北京'),
-            job_type: str = Query('全职'),
-            salary: str = Query('不限'),
-            experience: str = Query('不限'),
-            degree: str = Query('不限'),
-            industry: str = Query('不限')
-        ):
-            """Preview search parameters and URL construction.
-            
-            Args:
-                city (str): City for job search
-                job_type (str): Type of job (full-time, part-time, etc.)
-                salary (str): Salary range
-                experience (str): Required experience level
-                degree (str): Required education level
-                industry (str): Industry sector
-                
-            Returns:
-                JSONResponse: Search parameters and constructed URL preview
-            """
-            # 将人类可读配置映射为站点参数
-            params = {
-                'city': mapx.map_value(city, mapx.CITY_CODE),
-                'jobType': mapx.map_value(job_type, mapx.JOB_TYPE),
-                'salary': mapx.map_value(salary, mapx.SALARY),
-                'experience': mapx.map_value(experience, mapx.EXPERIENCE),
-                'degree': mapx.map_value(degree, mapx.DEGREE),
-                'industry': mapx.map_value(industry, mapx.INDUSTRY),
-            }
-            # 仅返回参数与构造示例，实际搜索页URL以站点逻辑为准
-            preview = {
-                'base': settings.BASE_URL.rstrip('/') + '/web/geek/job?',
-                'params': params,
-            }
-            return JSONResponse({'success': True, 'preview': preview, 'timestamp': datetime.now().isoformat()})
-
 
         '''
         Automation Scheduler Endpoints
