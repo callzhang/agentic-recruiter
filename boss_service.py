@@ -39,6 +39,7 @@ from src.recommendation_actions import (
     list_recommended_candidates_action,
     view_recommend_candidate_resume_action,
     greet_recommend_candidate_action,
+    select_current_job_action,
 )
 from src.blacklist import load_blacklist, NEGATIVE_HINTS
 from src.events import EventManager
@@ -444,6 +445,33 @@ class BossService:
                 'success': result.get('success', False),
                 'chat_id': result.get('chat_id'),
                 'details': result.get('details', ''),
+                'timestamp': datetime.now().isoformat()
+            })
+
+        @self.app.post('/recommend/select-job')
+        def select_current_job(payload: dict = Body(...)):
+            """Select current job from dropdown menu.
+            
+            Args:
+                payload: Dictionary containing 'job_title' key
+                
+            Returns:
+                JSONResponse: Selection result with success status and details
+            """
+            self._ensure_browser_session()
+            job_title = payload.get('job_title')
+            if not job_title:
+                return JSONResponse({
+                    'success': False,
+                    'details': 'Missing required parameter: job_title'
+                })
+            
+            result = select_current_job_action(self.page, job_title)
+            return JSONResponse({
+                'success': result.get('success', False),
+                'details': result.get('details', ''),
+                'selected_job': result.get('selected_job'),
+                'available_jobs': result.get('available_jobs'),
                 'timestamp': datetime.now().isoformat()
             })
             
