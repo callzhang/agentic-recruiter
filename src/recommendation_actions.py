@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
+import time
 
 from playwright.sync_api import Locator
 
@@ -36,6 +37,91 @@ def _prepare_recommendation_page(page, *, wait_timeout: int = 8000) -> tuple[Opt
     else:
         page.wait_for_selector(CANDIDATE_CARD_SELECTOR, timeout=wait_timeout)
     return frame
+
+
+def select_recommend_job_action(frame, job_title: str) -> Dict[str, Any]:
+    """选择当前职位从下拉菜单中。
+    
+    select_current_job_action(page, job_title)
+    ├── 1. LOCATE JOB DROPDOWN PHASE
+    │   ├── frame.locator('div.ui-dropmenu >> ul.job-list > li')
+    │   └── 遍历所有li元素查找包含job_title的文本
+    │
+    ├── 2. SELECTION PHASE
+    │   ├── 找到匹配的li元素
+    │   └── li.click() 点击选择
+    │
+    └── 3. VERIFICATION PHASE
+        ├── 等待页面变化
+        └── 检查 div.ui-dropmenu -> div.ui-dropmenu-label 的文本
+    """
+    # 获取所有职位选项
+    t0 = time.time()
+    JOB_POPOVER_SELECTOR = 'div.ui-dropmenu'
+    JOB_SELECTOR = 'div.ui-dropmenu >> ul.job-list > li'
+    job_options = frame.locator(JOB_SELECTOR).all()
+    
+    if not job_options:
+        return {'success': False, 'details': '未找到职位下拉菜单'}
+    
+    # 查找包含指定职位标题的选项
+    selected_option, idx = None, -1
+    dropdown_label = frame.locator(JOB_POPOVER_SELECTOR)
+    current_selected_job = dropdown_label.inner_text(timeout=300)
+    available_jobs = [option.inner_text(timeout=100).strip() for option in job_options]
+    current_job_matched = job_title in current_selected_job
+    if current_job_matched:
+        # 已经选中，无需点击
+        return {
+            'success': True,
+            'details': f'已选中职位: {job_title}',
+            'selected_job': job_title,
+            'available_jobs': available_jobs
+        }
+    for i, job in enumerate(available_jobs):
+        if job_title in job:
+            selected_option = job_options[i]
+            idx = i
+            break
+    if idx == -1:
+        return {
+            'success': False, 
+            'details': f'未找到包含"{job_title}"的职位',
+            'selected_job': job_title,
+            'available_jobs': available_jobs,
+            'expected_job': job_title,
+        }
+    else:
+        frame.locator(JOB_POPOVER_SELECTOR).click(timeout=1000)
+        selected_option.click(timeout=1000)
+        logger.info(f"已点击职位: {job_title}")
+        
+        # 等待页面变化并验证选择
+        # 等待下拉菜单标签更新
+        frame.wait_for_timeout(2000)  # 给页面一点时间更新
+    
+    # 检查下拉菜单标签是否已更新
+    while job_title not in current_selected_job and (time.time() - t0 < 3):
+        current_selected_job = dropdown_label.inner_text(timeout=300)
+        time.sleep(0.2)
+
+    if job_title in current_selected_job:
+        return {
+            'success': True,
+            'details': f'成功选择职位: {available_jobs[idx]}',
+            'selected_job': current_selected_job,
+            'available_jobs': available_jobs,
+        }
+    else:
+        return {
+            'success': False,
+            'details': f'职位选择可能失败，当前显示: {available_jobs[idx]}',
+            'selected_job': current_selected_job,
+            'available_jobs': available_jobs,
+            'expected_job': job_title,
+        }
+
+                
 
 
 def list_recommended_candidates_action(page, *, limit: int = 20) -> Dict[str, Any]:
@@ -107,101 +193,14 @@ def view_recommend_candidate_resume_action(page, index: int) -> Dict[str, Any]:
     return result
 
 
+
 def select_current_job_action(page, job_title: str) -> Dict[str, Any]:
     """选择当前职位从下拉菜单中。
     
-    select_current_job_action(page, job_title)
-    ├── 1. LOCATE JOB DROPDOWN PHASE
-    │   ├── frame.locator('div.ui-dropmenu >> ul.job-list > li')
-    │   └── 遍历所有li元素查找包含job_title的文本
-    │
-    ├── 2. SELECTION PHASE
-    │   ├── 找到匹配的li元素
-    │   └── li.click() 点击选择
-    │
-    └── 3. VERIFICATION PHASE
-        ├── 等待页面变化
-        └── 检查 div.ui-dropmenu -> div.ui-dropmenu-label 的文本
+    使用 qa_workflow 中的 select_current_job 方法。
     """
-    try:
-        # 获取所有职位选项
-        job_options = page.locator('div.ui-dropmenu >> ul.job-list > li').all()
-        
-        if not job_options:
-            return {'success': False, 'details': '未找到职位下拉菜单'}
-        
-        # 查找包含指定职位标题的选项
-        selected_option = None
-        for option in job_options:
-            try:
-                option_text = option.inner_text().strip()
-                if job_title in option_text:
-                    selected_option = option
-                    logger.info(f"找到匹配的职位: {option_text}")
-                    break
-            except Exception as e:
-                logger.warning(f"获取职位选项文本失败: {e}")
-                continue
-        
-        if not selected_option:
-            available_jobs = []
-            for option in job_options:
-                try:
-                    available_jobs.append(option.inner_text().strip())
-                except Exception:
-                    continue
-            return {
-                'success': False, 
-                'details': f'未找到包含"{job_title}"的职位',
-                'available_jobs': available_jobs
-            }
-        
-        # 点击选中的职位
-        selected_option.click(timeout=3000)
-        logger.info(f"已点击职位: {job_title}")
-        
-        # 等待页面变化并验证选择
-        try:
-            # 等待下拉菜单标签更新
-            page.wait_for_timeout(1000)  # 给页面一点时间更新
-            
-            # 检查下拉菜单标签是否已更新
-            dropdown_label = page.locator('div.ui-dropmenu > div.ui-dropmenu-label').first
-            if dropdown_label.count():
-                label_text = dropdown_label.inner_text().strip()
-                if job_title in label_text:
-                    return {
-                        'success': True,
-                        'details': f'成功选择职位: {label_text}',
-                        'selected_job': label_text
-                    }
-                else:
-                    return {
-                        'success': False,
-                        'details': f'职位选择可能失败，当前显示: {label_text}',
-                        'expected_job': job_title,
-                        'actual_job': label_text
-                    }
-            else:
-                return {
-                    'success': False,
-                    'details': '无法验证职位选择，未找到下拉菜单标签'
-                }
-                
-        except Exception as e:
-            logger.warning(f"验证职位选择时出错: {e}")
-            return {
-                'success': True,
-                'details': f'已点击职位但无法验证: {job_title}',
-                'warning': str(e)
-            }
-            
-    except Exception as e:
-        logger.error(f"选择职位时发生错误: {e}")
-        return {
-            'success': False,
-            'details': f'选择职位失败: {str(e)}'
-        }
+    from .qa_workflow import qa_workflow
+    return qa_workflow.select_current_job(page, job_title)
 
 
 def greet_recommend_candidate_action(page, index: int, message: str) -> Dict[str, Any]:

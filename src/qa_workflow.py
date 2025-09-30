@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import logging
 import os
+import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
@@ -80,6 +82,97 @@ class QAWorkflow:
         except Exception:
             return None
 
+    # Candidate store helpers -----------------------------------------------
+
+    def get_candidate_record(self, candidate_id: str) -> Optional[Dict[str, Any]]:
+        if not self.store or not hasattr(self.store, "get_candidate"):
+            return None
+        try:
+            return self.store.get_candidate(candidate_id)  # type: ignore[attr-defined]
+        except Exception as exc:
+            logger.debug("Failed to fetch candidate record: %s", exc)
+            return None
+
+    def upsert_candidate(
+        self,
+        candidate_id: str,
+        *,
+        name: Optional[str] = None,
+        job_applied: Optional[str] = None,
+        last_message: Optional[str] = None,
+        resume_text: Optional[str] = None,
+        scores: Optional[Dict[str, Any]] = None,
+        metadata_extra: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        if not self.store or not hasattr(self.store, "upsert_candidates"):
+            return
+
+        existing = self.get_candidate_record(candidate_id) or {}
+        metadata = dict(existing.get("metadata") or {})
+        if metadata_extra:
+            metadata.update(metadata_extra)
+
+        stored_resume = existing.get("resume_text", "")
+        resume_value = resume_text if resume_text is not None else stored_resume
+
+        vector: List[float]
+        if resume_text is not None and resume_text.strip() and resume_text.strip() != stored_resume:
+            vector = self.get_embedding(resume_text.strip()) or [0.0] * (self.store.config.embedding_dim if self.store and self.store.config else 1536)
+        else:
+            vector = existing.get("resume_vector") or []
+            if not vector:
+                vector = [0.0] * (self.store.config.embedding_dim if self.store and self.store.config else 1536)
+
+        entry = {
+            "candidate_id": candidate_id,
+            "name": name if name is not None else existing.get("name", ""),
+            "job_applied": job_applied if job_applied is not None else existing.get("job_applied", ""),
+            "last_message": last_message if last_message is not None else existing.get("last_message", ""),
+            "resume_vector": vector,
+            "resume_text": resume_value,
+            "scores": scores if scores is not None else existing.get("scores", {}),
+            "metadata": metadata,
+            "updated_at": datetime.utcnow().isoformat(),
+        }
+
+        try:
+            self.store.upsert_candidates([entry])  # type: ignore[attr-defined]
+        except Exception as exc:
+            logger.error("Failed to upsert candidate %s: %s", candidate_id, exc)
+
+    def _build_background_text(self, context: Dict[str, Any]) -> str:
+        return (
+            f"公司介绍:\n{context.get('company_description', '')}\n\n"
+            f"岗位描述:\n{context.get('job_description', '')}\n\n"
+            f"理想人选画像:\n{context.get('target_profile', '')}\n\n"
+            f"候选人简历:\n{context.get('candidate_resume', '')}\n\n"
+            f"近期对话:\n{context.get('chat_history', '')}"
+        )
+
+    def _ensure_thread(self, candidate_id: str, context: Dict[str, Any]) -> Optional[str]:
+        if not self.client:
+            return None
+        record = self.get_candidate_record(candidate_id) or {}
+        metadata = dict(record.get("metadata") or {})
+        thread_id = metadata.get("thread_id")
+        if thread_id:
+            return thread_id
+        background = self._build_background_text(context)
+        try:
+            thread = self.client.beta.threads.create()
+            if background.strip():
+                self.client.beta.threads.messages.create(
+                    thread_id=thread.id,
+                    role="user",
+                    content=f"以下是候选人背景资料，请在后续对话中记住：\n\n{background}",
+                )
+            metadata["thread_id"] = thread.id
+            self.upsert_candidate(candidate_id, metadata_extra=metadata)
+            return thread.id
+        except Exception as exc:
+            logger.error("Failed to create thread: %s", exc)
+            return None
+
     # Retrieval -----------------------------------------------------
     def retrieve_relevant_answers(self, query: str, top_k: Optional[int] = None) -> List[Dict[str, Any]]:
         if not self.enabled:
@@ -150,6 +243,47 @@ class QAWorkflow:
         self.store.insert([entry])
         return qa_id
 
+    def generate_followup_message(self, candidate_id: str, prompt: str, context: Dict[str, Any]) -> Optional[str]:
+        if not self.client:
+            return None
+        thread_id = self._ensure_thread(candidate_id, context)
+        if not thread_id:
+            return None
+        message_text = prompt.strip() or "请根据当前进展生成下一条沟通消息。"
+        try:
+            self.client.beta.threads.messages.create(
+                thread_id=thread_id,
+                role="user",
+                content=message_text,
+            )
+            run = self.client.beta.threads.runs.create(
+                thread_id=thread_id,
+                model=OPENAI_DEFAULT_MODEL,
+                instructions="请作为专业的中文招聘顾问，结合已记录的候选人背景信息生成回复。",
+            )
+            while True:
+                run_status = self.client.beta.threads.runs.retrieve(thread_id=thread_id, run_id=run.id)
+                if run_status.status == "completed":
+                    break
+                if run_status.status in {"failed", "cancelled", "expired"}:
+                    logger.error("Thread run ended with status: %s", run_status.status)
+                    return None
+                time.sleep(1)
+            messages = self.client.beta.threads.messages.list(thread_id=thread_id, order="desc", limit=10)
+            for msg in messages.data:
+                if getattr(msg, "role", "") == "assistant":
+                    parts: List[str] = []
+                    for part in getattr(msg, "content", []):
+                        text_part = getattr(getattr(part, "text", None), "value", None)
+                        if text_part:
+                            parts.append(text_part)
+                    if parts:
+                        return "\n".join(parts).strip()
+            return None
+        except Exception as exc:
+            logger.error("Failed to generate follow-up message: %s", exc)
+            return None
+
     def list_entries(self, limit: int = 200, offset: int = 0) -> List[Dict[str, Any]]:
         if not self.enabled:
             return []
@@ -159,6 +293,102 @@ class QAWorkflow:
         if not self.enabled:
             return False
         return self.store.delete_entry(resume_id)
+
+    def select_current_job(self, page, job_title: str) -> Dict[str, Any]:
+        """选择当前职位从下拉菜单中。
+        
+        select_current_job(page, job_title)
+        ├── 1. LOCATE JOB DROPDOWN PHASE
+        │   ├── page.locator('div.ui-dropmenu >> ul.job-list > li')
+        │   └── 遍历所有li元素查找包含job_title的文本
+        │
+        ├── 2. SELECTION PHASE
+        │   ├── 找到匹配的li元素
+        │   └── li.click() 点击选择
+        │
+        └── 3. VERIFICATION PHASE
+            ├── 等待页面变化
+            └── 检查 div.ui-dropmenu -> div.ui-dropmenu-label 的文本
+        """
+        try:
+            # 获取所有职位选项
+            job_options = page.locator('div.ui-dropmenu >> ul.job-list > li').all()
+            
+            if not job_options:
+                return {'success': False, 'details': '未找到职位下拉菜单'}
+            
+            # 查找包含指定职位标题的选项
+            selected_option = None
+            for option in job_options:
+                try:
+                    option_text = option.inner_text().strip()
+                    if job_title in option_text:
+                        selected_option = option
+                        logger.info(f"找到匹配的职位: {option_text}")
+                        break
+                except Exception as e:
+                    logger.warning(f"获取职位选项文本失败: {e}")
+                    continue
+            
+            if not selected_option:
+                available_jobs = []
+                for option in job_options:
+                    try:
+                        available_jobs.append(option.inner_text().strip())
+                    except Exception:
+                        continue
+                return {
+                    'success': False, 
+                    'details': f'未找到包含"{job_title}"的职位',
+                    'available_jobs': available_jobs
+                }
+            
+            # 点击选中的职位
+            selected_option.click(timeout=3000)
+            logger.info(f"已点击职位: {job_title}")
+            
+            # 等待页面变化并验证选择
+            try:
+                # 等待下拉菜单标签更新
+                page.wait_for_timeout(1000)  # 给页面一点时间更新
+                
+                # 检查下拉菜单标签是否已更新
+                dropdown_label = page.locator('div.ui-dropmenu > div.ui-dropmenu-label').first
+                if dropdown_label.count():
+                    label_text = dropdown_label.inner_text().strip()
+                    if job_title in label_text:
+                        return {
+                            'success': True,
+                            'details': f'成功选择职位: {label_text}',
+                            'selected_job': label_text
+                        }
+                    else:
+                        return {
+                            'success': False,
+                            'details': f'职位选择可能失败，当前显示: {label_text}',
+                            'expected_job': job_title,
+                            'actual_job': label_text
+                        }
+                else:
+                    return {
+                        'success': False,
+                        'details': '无法验证职位选择，未找到下拉菜单标签'
+                    }
+                    
+            except Exception as e:
+                logger.warning(f"验证职位选择时出错: {e}")
+                return {
+                    'success': True,
+                    'details': f'已点击职位但无法验证: {job_title}',
+                    'warning': str(e)
+                }
+                
+        except Exception as e:
+            logger.error(f"选择职位时发生错误: {e}")
+            return {
+                'success': False,
+                'details': f'选择职位失败: {str(e)}'
+            }
 
     @staticmethod
     def generate_id() -> str:
