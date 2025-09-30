@@ -92,6 +92,19 @@ def select_chat_job_action(page, job_title: str) -> Dict[str, Any]:
         return { 'success': False, 'details': '未找到职位', 'selected_job': current_selected_job, 'available_jobs': all_job_titles }
 
 
+def get_chat_stats_action(page) -> Dict[str, Any]:
+    """Get chat stats for the given chat_id"""
+    import re
+    NEW_MESSAGE_SELECTOR = "span.menu-chat-badge"
+    NEW_GREET_SELECTOR = "div.chat-label-item[title*='新招呼']"
+    new_message_count = page.locator(NEW_MESSAGE_SELECTOR).inner_text(timeout=300)
+    new_message_count = int(new_message_count) if new_message_count else 0
+    new_greet_count = page.locator(NEW_GREET_SELECTOR).inner_text(timeout=300)
+    # Convert new_greet_count like "新招呼(41)" to integer 41
+    new_greet_count = int(re.findall(r"\d+", new_greet_count)[0])
+    return { 'success': True, 'new_message_count': new_message_count, 'new_greet_count': new_greet_count }
+
+
 def request_resume_action(page, chat_id: str) -> Dict[str, Any]:
     """Send a resume request in the open chat panel for the given chat_id"""
     _prepare_chat_page(page)

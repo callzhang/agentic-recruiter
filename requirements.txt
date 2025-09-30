@@ -9,3 +9,4 @@ streamlit==1.37.1
 pymilvus==2.6.2
 openai==1.52.0
 tenacity==8.4.2
+streamlit-tags==1.2.8

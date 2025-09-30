@@ -1,0 +1,31 @@
+[global]
+# Development settings
+developmentMode = true
+showErrorDetails = true
+
+[server]
+# Server configuration
+port = 8501
+address = "localhost"
+headless = false
+runOnSave = true
+enableCORS = false
+enableXsrfProtection = false
+
+[browser]
+# Browser settings
+gatherUsageStats = false
+serverAddress = "localhost"
+serverPort = 8501
+
+[logger]
+# Logging configuration
+level = "debug"
+messageFormat = "%(asctime)s.%(msecs)03d %(color)s%(levelname)-8s%(end_color)s %(name)s: %(message)s"
+
+[theme]
+# Theme settings (optional)
+primaryColor = "#FF6B6B"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F0F2F6"
+textColor = "#262730"

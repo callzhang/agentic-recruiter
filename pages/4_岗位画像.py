@@ -16,6 +16,7 @@ from streamlit_shared import (
     get_config_data,
     sidebar_controls,
 )
+from streamlit_tags import st_tags
 
 
 def _generate_role_id(position: str, existing_ids: Set[str]) -> str:
@@ -114,24 +115,20 @@ def _edit_role(role: Dict[str, Any], idx: int) -> None:
 
     keywords = ensure_dict(role, "keywords")
     st.markdown("**关键词**")
-    keywords["positive"] = [
-        line.strip()
-        for line in st.text_area(
-            "正向关键词 (每行一个)",
-            value="\n".join(keywords.get("positive", [])),
-            key=f"role_{idx}_keywords_positive",
-        ).splitlines()
-        if line.strip()
-    ]
-    keywords["negative"] = [
-        line.strip()
-        for line in st.text_area(
-            "负向关键词 (每行一个)",
-            value="\n".join(keywords.get("negative", [])),
-            key=f"role_{idx}_keywords_negative",
-        ).splitlines()
-        if line.strip()
-    ]
+    keywords["positive"] = st_tags(
+        label="正向关键词",
+        text="输入关键词后回车",
+        value=keywords["positive"],
+        maxtags=None,
+        key=f"role_{idx}_keywords_positive",
+    )
+    keywords["negative"] = st_tags(
+        label="负向关键词",
+        text="输入关键词后回车",
+        value=keywords["negative"],
+        maxtags=None,
+        key=f"role_{idx}_keywords_negative",
+    )
 
     st.markdown("**其它字段 (YAML)**")
     handled = {

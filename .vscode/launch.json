@@ -20,13 +20,58 @@
       "request": "launch",
       "program": "${workspaceFolder}/start_service.py",
       "console": "integratedTerminal",
-      "justMyCode": false,
+      "justMyCode": true,
       "subProcess": true,
       "env": {
         "HEADLESS": "0",
         "PYTHONUNBUFFERED": "1",
         "FORCE_CLEANUP_PORT": "true"
       }
+    },
+    {
+      "name": "Streamlit: boss_app.py (Debug)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "streamlit",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "subProcess": true,
+      "env": {
+        "STREAMLIT_ENV": "development",
+        "STREAMLIT_LOGGER_LEVEL": "debug",
+        "STREAMLIT_SERVER_HEADLESS": "false",
+        "STREAMLIT_SERVER_RUN_ON_SAVE": "true",
+        "STREAMLIT_SERVER_ENABLE_CORS": "false",
+        "PYTHONUNBUFFERED": "1"
+      },
+      "args": [
+        "run",
+        "boss_app.py",
+        "--server.port=8501",
+        "--server.address=localhost",
+        "--server.headless=false",
+        "--server.runOnSave=true",
+        "--server.enableCORS=false",
+        "--logger.level=debug"
+      ],
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "Streamlit: boss_app.py (Production)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "streamlit",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "env": {
+        "STREAMLIT_ENV": "production"
+      },
+      "args": [
+        "run",
+        "boss_app.py",
+        "--server.port=8501"
+      ],
+      "cwd": "${workspaceFolder}"
     }
   ]
 }

@@ -34,6 +34,7 @@ from src.chat_actions import (
     view_online_resume_action,
     accept_resume_action,
     check_full_resume_available,
+    get_chat_stats_action,
 )
 from src.recommendation_actions import (
     list_recommended_candidates_action,
@@ -317,10 +318,13 @@ class BossService:
             Returns:
                 JSONResponse: Service status including login state and notification count
             """
+            chat_stats = get_chat_stats_action(self.page)
             return JSONResponse({
                 'status': 'running',
                 'logged_in': self.is_logged_in,
                 'timestamp': datetime.now().isoformat(),
+                'new_message_count': chat_stats.get('new_message_count', 0), 
+                'new_greet_count': chat_stats.get('new_greet_count', 0)
             })
         
         
@@ -459,6 +463,12 @@ class BossService:
         '''
         Chat Endpoints
         '''
+        @self.app.get('/chat/stats')
+        def get_chat_stats():
+            result = get_chat_stats_action(self.page)
+            return result
+
+
         @self.app.post('/chat/{chat_id}/greet')
         def greet_candidate(chat_id: str, message: str | None = Body(default=None)):
             """Send a greeting message to a candidate.
@@ -521,6 +531,7 @@ class BossService:
                 'count': len(history),
                 'timestamp': datetime.now().isoformat()
             })
+
 
         @self.app.post('/chat/select-job')
         def select_chat_job(chat_id: str = Body(..., embed=True)):
