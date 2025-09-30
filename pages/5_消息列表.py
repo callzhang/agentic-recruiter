@@ -2,17 +2,14 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
 import streamlit as st
-import yaml
 
 from streamlit_shared import call_api, ensure_state, sidebar_controls
 from src.qa_workflow import qa_workflow, OPENAI_DEFAULT_MODEL
 
-CONFIG_JOBS_PATH = Path("config/jobs.yaml")
 COMPANY_MD_PATH = Path("config/company.md")
 DEFAULT_HISTORY_LIMIT = 10
 
@@ -22,13 +19,10 @@ DEFAULT_HISTORY_LIMIT = 10
 # ---------------------------------------------------------------------------
 
 def _load_jobs() -> List[Dict[str, Any]]:
-    if "_jobs_cache" not in st.session_state:
-        try:
-            data = yaml.safe_load(CONFIG_JOBS_PATH.read_text(encoding="utf-8"))
-            st.session_state["_jobs_cache"] = data.get("roles", []) if isinstance(data, dict) else []
-        except Exception:
-            st.session_state["_jobs_cache"] = []
-    return st.session_state["_jobs_cache"]
+    cache = st.session_state.get("_jobs_cache")
+    if isinstance(cache, list):
+        return cache
+    return []
 
 
 def _load_company_description() -> str:
@@ -185,41 +179,6 @@ def analyze_candidate(context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return None
 
 
-def generate_followup_message(context: Dict[str, Any]) -> Optional[str]:
-    client = _require_openai_client()
-    if not client:
-        return None
-    prompt = f"""
-你是一名中文招聘顾问，需要根据下列信息生成下一条跟候选人的沟通消息，保持专业、真诚且简洁。
-
-【公司介绍】
-{context['company_description']}
-
-【岗位描述】
-{context['job_description']}
-
-【候选人材料】
-{context['candidate_resume']}
-
-【近期对话】
-{context['chat_history']}
-
-【补充说明】
-{context['notes']}
-
-请生成一段适合发送的中文消息，不要包含额外的说明。
-"""
-    try:
-        response = client.responses.create(
-            model=OPENAI_DEFAULT_MODEL,
-            input=[{"role": "user", "content": prompt}],
-        )
-        return response.output[0].content[0].text.strip()  # type: ignore[attr-defined]
-    except Exception as exc:
-        st.error(f"生成消息失败: {exc}")
-        return None
-
-
 # ---------------------------------------------------------------------------
 # UI components
 # ---------------------------------------------------------------------------
@@ -299,8 +258,8 @@ def render_history_section(base_url: str, chat_id: str) -> List[str]:
     return history
 
 
-def render_scoring_section(chat_id: str, resume_text: str, job_role: Dict[str, Any], company_desc: str,
-                           history_text: str) -> None:
+def render_scoring_section(chat_id: str, candidate_info: Dict[str, Any], resume_text: str,
+                           job_role: Dict[str, Any], company_desc: str, history_text: str) -> None:
     st.subheader("自动评分")
     notes = st.text_area("补充说明 (可选)", value="", key=f"score_notes_{chat_id}")
     if st.button("Analyze", key=f"analyze_{chat_id}"):
@@ -316,6 +275,14 @@ def render_scoring_section(chat_id: str, resume_text: str, job_role: Dict[str, A
             result = analyze_candidate(context)
         if result:
             st.session_state.setdefault("analysis_results", {})[chat_id] = result
+            qa_workflow.upsert_candidate(
+                chat_id,
+                name=candidate_info.get("candidate"),
+                job_applied=job_role.get("position"),
+                last_message=candidate_info.get("message"),
+                resume_text=resume_text,
+                scores=result,
+            )
     result = st.session_state.get("analysis_results", {}).get(chat_id)
     if result:
         cols = st.columns(4)
@@ -327,7 +294,7 @@ def render_scoring_section(chat_id: str, resume_text: str, job_role: Dict[str, A
 
 
 def render_message_section(base_url: str, chat_id: str, resume_text: str, job_role: Dict[str, Any],
-                           company_desc: str, history_text: str) -> None:
+                           company_desc: str, history_text: str, candidate_info: Dict[str, Any]) -> None:
     st.subheader("生成消息")
     message_state = st.session_state.setdefault("generated_messages", {})
     draft = message_state.get(chat_id, "")
@@ -338,12 +305,20 @@ def render_message_section(base_url: str, chat_id: str, resume_text: str, job_ro
         context = {
             "company_description": company_desc,
             "job_description": job_role.get("description", ""),
+            "target_profile": job_role.get("target_profile", ""),
             "candidate_resume": resume_text or "无",
             "chat_history": history_text or "无",
             "notes": draft,
         }
+        qa_workflow.upsert_candidate(
+            chat_id,
+            name=candidate_info.get("candidate"),
+            job_applied=job_role.get("position"),
+            last_message=candidate_info.get("message"),
+            resume_text=resume_text,
+        )
         with st.spinner("生成中..."):
-            message = generate_followup_message(context)
+            message = qa_workflow.generate_followup_message(chat_id, prompt=draft or "", context=context)
         if message:
             message_state[chat_id] = message
             st.session_state[f"message_draft_{chat_id}"] = message
@@ -364,6 +339,7 @@ def render_message_section(base_url: str, chat_id: str, resume_text: str, job_ro
             if ok:
                 st.success("消息已发送")
                 message_state[chat_id] = content
+                qa_workflow.upsert_candidate(chat_id, last_message=content)
             else:
                 st.error(f"发送失败: {payload}")
 
@@ -381,6 +357,22 @@ def main() -> None:
     jobs = _load_jobs()
     company_desc = _load_company_description()
     limit = st.sidebar.slider("每次获取数量", min_value=5, max_value=100, value=30, step=5)
+
+    if jobs:
+        job_options = [
+            f"{role.get('id', '')} - {role.get('position', '')}" for role in jobs
+        ]
+        default_index = st.session_state.get("selected_job_index", 0)
+        selected_job_index = st.sidebar.selectbox(
+            "默认岗位画像",
+            options=list(range(len(job_options))),
+            format_func=lambda i: job_options[i],
+            index=min(default_index, len(job_options) - 1),
+            key="selected_job_sidebar",
+        )
+        st.session_state["selected_job_index"] = selected_job_index
+    else:
+        st.session_state["selected_job_index"] = 0
 
     messages = _get_messages(limit)
 
@@ -449,14 +441,28 @@ def main() -> None:
 
     if jobs:
         job_options = [f"{role.get('id', '')} - {role.get('position', '')}" for role in jobs]
-        job_index = st.selectbox("选择岗位画像", options=list(range(len(job_options))), format_func=lambda i: job_options[i])
+        job_index = st.selectbox(
+            "选择岗位画像",
+            options=list(range(len(job_options))),
+            format_func=lambda i: job_options[i],
+            index=st.session_state.get("selected_job_index", 0),
+        )
+        st.session_state["selected_job_index"] = job_index
         selected_job = jobs[job_index]
     else:
         st.warning("未找到岗位配置，将使用空的岗位描述。")
         selected_job = {"description": "", "target_profile": ""}
 
-    render_scoring_section(chat_id, resume_text, selected_job, company_desc, history_text)
-    render_message_section(base_url, chat_id, resume_text, selected_job, company_desc, history_text)
+    qa_workflow.upsert_candidate(
+        chat_id,
+        name=selected_row.get("candidate"),
+        job_applied=selected_job.get("position"),
+        last_message=selected_row.get("message"),
+        resume_text=resume_text,
+    )
+
+    render_scoring_section(chat_id, selected_row, resume_text, selected_job, company_desc, history_text)
+    render_message_section(base_url, chat_id, resume_text, selected_job, company_desc, history_text, selected_row)
 
 
 if __name__ == "__main__":

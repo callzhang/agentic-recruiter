@@ -271,6 +271,30 @@ class QAStore:
             logger.error("Failed to delete QA entry %s: %s", resume_id, exc)
             return False
 
+    def get_candidate(self, candidate_id: str) -> Optional[Dict[str, Any]]:
+        if not self.enabled or not self.candidate_collection:
+            return None
+        try:
+            results = self.candidate_collection.query(
+                expr=f'candidate_id == "{candidate_id}"',
+                output_fields=[
+                    "candidate_id",
+                    "name",
+                    "job_applied",
+                    "last_message",
+                    "resume_vector",
+                    "resume_text",
+                    "scores",
+                    "metadata",
+                    "updated_at",
+                ],
+                limit=1,
+            )
+            return results[0] if results else None
+        except Exception as exc:
+            logger.debug("Candidate lookup failed: %s", exc)
+            return None
+
     # Candidate operations -------------------------------------------------
 
     def upsert_candidates(self, entries: Iterable[Dict[str, Any]]) -> None:

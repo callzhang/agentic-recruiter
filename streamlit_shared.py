@@ -25,6 +25,10 @@ def ensure_state() -> None:
         st.session_state["criteria_path"] = str(candidate)
     if "_last_saved_yaml" not in st.session_state:
         st.session_state["_last_saved_yaml"] = None
+    if "selected_job_index" not in st.session_state:
+        st.session_state["selected_job_index"] = 0
+    if "_jobs_cache" not in st.session_state:
+        st.session_state["_jobs_cache"] = []
 
 
 def _options_with_current(options: list[str], current: str) -> list[str]:
@@ -62,6 +66,18 @@ def discover_config_paths() -> List[Path]:
     return results
 
 
+def load_jobs_from_path(path: Path) -> List[Dict[str, Any]]:
+    try:
+        if not path.exists():
+            return []
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        if isinstance(data, dict) and isinstance(data.get("roles"), list):
+            return data["roles"]
+    except Exception as exc:
+        st.warning(f"加载岗位配置失败: {exc}")
+    return []
+
+
 def sidebar_controls(*, include_config_path: bool = False) -> None:
     """Render common sidebar inputs with dropdown controls."""
     ensure_state()
@@ -87,20 +103,42 @@ def sidebar_controls(*, include_config_path: bool = False) -> None:
             st.sidebar.success("已添加新的 API 地址")
         st.session_state["__base_url_new__"] = ""
 
+    config_path = Path(st.session_state["criteria_path"]).resolve()
+
     if include_config_path:
         config_options = discover_config_paths()
-        current_path = Path(st.session_state["criteria_path"]).resolve()
-        if current_path not in config_options:
-            config_options.append(current_path)
+        if config_path not in config_options:
+            config_options.append(config_path)
 
         selected_config = st.sidebar.selectbox(
             "画像配置文件",
             config_options,
-            index=config_options.index(current_path) if current_path in config_options else 0,
+            index=config_options.index(config_path) if config_path in config_options else 0,
             format_func=lambda p: p.name,
             key="__config_path_select__",
         )
-        st.session_state["criteria_path"] = str(selected_config)
+        config_path = selected_config.resolve()
+        st.session_state["criteria_path"] = str(config_path)
+        st.session_state.pop("_jobs_cache", None)
+
+    jobs = st.session_state.get("_jobs_cache")
+    if not jobs or not isinstance(jobs, list):
+        jobs = load_jobs_from_path(config_path)
+        st.session_state["_jobs_cache"] = jobs
+
+    if jobs:
+        job_options = [f"{role.get('id', '')} - {role.get('position', '')}" for role in jobs]
+        current_index = st.session_state.get("selected_job_index", 0)
+        selected_index = st.sidebar.selectbox(
+            "默认岗位画像",
+            options=list(range(len(job_options))),
+            format_func=lambda i: job_options[i],
+            index=min(current_index, len(job_options) - 1),
+            key="__job_profile_select__",
+        )
+        st.session_state["selected_job_index"] = selected_index
+    else:
+        st.sidebar.caption("未找到岗位画像配置")
 
 
 def get_config_path() -> Path:

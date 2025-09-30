@@ -22,7 +22,6 @@ import logging # Import logging
 import shutil # Import shutil
 
 from src.config import settings
-from src.utils import export_records
 from src.ui_utils import ensure_on_chat_page, find_chat_item
 from src.chat_actions import (
     request_resume_action,
@@ -31,6 +30,7 @@ from src.chat_actions import (
     discard_candidate_action,
     get_messages_list_action,
     get_chat_history_action,
+    select_chat_job_action,
     view_online_resume_action,
     accept_resume_action,
     check_full_resume_available,
@@ -39,7 +39,8 @@ from src.recommendation_actions import (
     list_recommended_candidates_action,
     view_recommend_candidate_resume_action,
     greet_recommend_candidate_action,
-    select_current_job_action,
+    select_recommend_job_action,
+    _prepare_recommendation_page,
 )
 from src.blacklist import load_blacklist, NEGATIVE_HINTS
 from src.events import EventManager
@@ -106,24 +107,6 @@ class BossService:
             service_logger.addHandler(file_handler)
             service_logger.addHandler(console_handler)
 
-    def add_notification(self, message: str, level: str = "info"):
-        """Add a notification and log it.
-        
-        Args:
-            message (str): The notification message to add
-            level (str): The log level ('info', 'warning', 'error')
-        """
-        timestamp = datetime.now().isoformat()
-        self.notifications.append({"timestamp": timestamp, "level": level, "message": message})
-        
-        # Log to file using global logger
-        if level == "error":
-            logger.error(message)
-        elif level == "warning":
-            logger.warning(message)
-        else:
-            logger.info(message)
-
 
     def __init__(self):
         if not hasattr(self, 'initialized'):
@@ -133,7 +116,6 @@ class BossService:
             self.context = None # The primary browser object
             self.page = None
             self.is_logged_in = False
-            self.notifications = []
             self.shutdown_requested = False
             self.startup_complete = threading.Event() # Event to signal startup completion
             self.scheduler: BRDWorkScheduler | None = None
@@ -288,7 +270,7 @@ class BossService:
         except Exception as e:
             logger.error(f"同步启动任务失败: {e}")
             import traceback
-            self.add_notification(traceback.format_exc(), "error")
+            logger.error(traceback.format_exc())
         finally:
             self.startup_complete.set() # Signal that startup is finished
 
@@ -341,23 +323,8 @@ class BossService:
                 'status': 'running',
                 'logged_in': self.is_logged_in,
                 'timestamp': datetime.now().isoformat(),
-                'notifications_count': len(self.notifications)
             })
         
-        @self.app.get('/notifications')
-        def get_notifications(limit: int = Query(20, ge=1, le=200)):
-            """Get service notifications.
-            
-            Args:
-                limit (int): Maximum number of notifications to return (1-200)
-                
-            Returns:
-                JSONResponse: List of notifications with total count
-            """
-            return JSONResponse({
-                'notifications': self.notifications[-limit:],
-                'total': len(self.notifications)
-            })
         
         @self.app.post('/login')
         def login():
@@ -449,7 +416,7 @@ class BossService:
             })
 
         @self.app.post('/recommend/select-job')
-        def select_current_job(payload: dict = Body(...)):
+        def select_current_job(job_title: str = Body(..., embed=True)):
             """Select current job from dropdown menu.
             
             Args:
@@ -459,14 +426,8 @@ class BossService:
                 JSONResponse: Selection result with success status and details
             """
             self._ensure_browser_session()
-            job_title = payload.get('job_title')
-            if not job_title:
-                return JSONResponse({
-                    'success': False,
-                    'details': 'Missing required parameter: job_title'
-                })
-            
-            result = select_current_job_action(self.page, job_title)
+            frame = _prepare_recommendation_page(self.page)
+            result = select_recommend_job_action(frame, job_title)
             return JSONResponse({
                 'success': result.get('success', False),
                 'details': result.get('details', ''),
@@ -514,6 +475,10 @@ class BossService:
             }
             return JSONResponse({'success': True, 'preview': preview, 'timestamp': datetime.now().isoformat()})
 
+
+        '''
+        Automation Scheduler Endpoints
+        '''
         @self.app.get('/automation/scheduler/status')
         def scheduler_status():
             return JSONResponse(self._scheduler_status())
@@ -532,6 +497,9 @@ class BossService:
             status.update({'success': success, 'details': details})
             return JSONResponse(status)
 
+        '''
+        Chat Endpoints
+        '''
         @self.app.post('/chat/{chat_id}/greet')
         def greet_candidate(chat_id: str, message: str | None = Body(default=None)):
             """Send a greeting message to a candidate.
@@ -551,27 +519,6 @@ class BossService:
                 'timestamp': datetime.now().isoformat()
             })
         
-
-        @self.app.post('/resume/request')
-        def request_resume_api(chat_id: str = Body(..., embed=True)):
-            """Request resume from a candidate.
-            
-            Args:
-                chat_id (str): ID of the chat/conversation
-                
-            Returns:
-                JSONResponse: Success status and details
-            """
-            self._ensure_browser_session()
-
-            result = request_resume_action(self.page, chat_id)
-            return JSONResponse({
-                'success': result.get('success', False),
-                'chat_id': chat_id,
-                'already_sent': result.get('already_sent', False),
-                'details': result.get('details', ''),
-                'timestamp': datetime.now().isoformat()
-            })
 
         @self.app.post('/chat/{chat_id}/send')
         def send_message_api(chat_id: str, message: str = Body(..., embed=True)):
@@ -616,6 +563,42 @@ class BossService:
                 'timestamp': datetime.now().isoformat()
             })
 
+        @self.app.post('/chat/select-job')
+        def select_job(chat_id: str = Body(..., embed=True)):
+            """Select job for a specific conversation.
+            
+            Args:
+                chat_id (str): ID of the chat/conversation
+            """
+            self._ensure_browser_session()
+            result = select_chat_job_action(self.page, chat_id)
+            return result
+
+        '''
+        Resume Endpoints
+        '''
+        @self.app.post('/resume/request')
+        def request_resume_api(chat_id: str = Body(..., embed=True)):
+            """Request resume from a candidate.
+            
+            Args:
+                chat_id (str): ID of the chat/conversation
+                
+            Returns:
+                JSONResponse: Success status and details
+            """
+            self._ensure_browser_session()
+
+            result = request_resume_action(self.page, chat_id)
+            return JSONResponse({
+                'success': result.get('success', False),
+                'chat_id': chat_id,
+                'already_sent': result.get('already_sent', False),
+                'details': result.get('details', ''),
+                'timestamp': datetime.now().isoformat()
+            })
+
+
         @self.app.post('/resume/view_full')
         def view_full_resume(chat_id: str = Body(..., embed=True)):
             """View candidate's attached resume.
@@ -640,27 +623,6 @@ class BossService:
                 'success': True,
                 'available': bool(result.get('success')),
                 'details': result.get('details', ''),
-            })
-                
-
-        @self.app.post('/candidate/discard')
-        def discard_candidate_api(chat_id: str = Body(..., embed=True)):
-            """Discard a candidate by clicking "不合适" button.
-            
-            Args:
-                chat_id (str): ID of the chat/conversation
-                
-            Returns:
-                JSONResponse: Success status and details
-            """
-            self._ensure_browser_session()
-
-            result = discard_candidate_action(self.page, chat_id)
-            return JSONResponse({
-                'success': result.get('success', False),
-                'chat_id': chat_id,
-                'details': result.get('details', ''),
-                'timestamp': datetime.now().isoformat()
             })
 
         @self.app.post('/resume/online')
@@ -716,7 +678,34 @@ class BossService:
                 'timestamp': datetime.now().isoformat()
             })
 
+        '''
+        Candidate Endpoints
+        '''
+
+        @self.app.post('/candidate/discard')
+        def discard_candidate_api(chat_id: str = Body(..., embed=True)):
+            """Discard a candidate by clicking "不合适" button.
+            
+            Args:
+                chat_id (str): ID of the chat/conversation
+                
+            Returns:
+                JSONResponse: Success status and details
+            """
+            self._ensure_browser_session()
+
+            result = discard_candidate_action(self.page, chat_id)
+            return JSONResponse({
+                'success': result.get('success', False),
+                'chat_id': chat_id,
+                'details': result.get('details', ''),
+                'timestamp': datetime.now().isoformat()
+            })
+
         
+        '''
+        System Endpoints
+        '''
         @self.app.post('/restart')
         def soft_restart():
             """Soft restart the API service while keeping browser session.

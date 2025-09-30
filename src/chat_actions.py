@@ -61,6 +61,36 @@ def _go_to_chat_dialog(page, chat_id: str, *, wait_timeout: int = 5000) -> tuple
     return target
 
 
+def select_chat_job_action(page, job_title: str) -> Dict[str, Any]:
+    """Select job for a specific conversation."""
+    _prepare_chat_page(page)
+    t0 = time.time()
+    CURRENT_JOB_SELECTOR = "div.ui-dropmenu-label"
+    JOB_LIST_SELECTOR = "div.ui-dropmenu-list >> li"
+    current_selected = page.locator(CURRENT_JOB_SELECTOR)
+    current_selected_job = current_selected.inner_text(timeout=300)
+    if job_title in current_selected_job:
+        return { 'success': True, 'details': '已选中职位', 'selected_job': current_selected_job }
+    # 点击下拉菜单
+    current_selected.click(timeout=200)
+    all_jobs = page.locator(JOB_LIST_SELECTOR).all(timeout=200)
+    all_job_titles = [job.inner_text(timeout=300) for job in all_jobs]
+    idx = -1
+    for i, job in enumerate(all_job_titles):
+        if job_title in job:
+            idx = i
+            break
+    if idx == -1:
+        return { 'success': False, 'details': '未找到职位', 'selected_job': current_selected_job, 'available_jobs': all_job_titles }
+    all_jobs[idx].click(timeout=200)
+    while job_title not in current_selected_job and (time.time() - t0 < 3):
+        current_selected_job = current_selected.inner_text(timeout=300)
+        time.sleep(0.2)
+    if job_title in current_selected_job:
+        return { 'success': True, 'details': '已选中职位', 'selected_job': current_selected_job }
+    else:
+        return { 'success': False, 'details': '未找到职位', 'selected_job': current_selected_job, 'available_jobs': all_job_titles }
+
 
 def request_resume_action(page, chat_id: str) -> Dict[str, Any]:
     """Send a resume request in the open chat panel for the given chat_id"""

@@ -201,7 +201,6 @@ bosszhipin_bot/
 │       ├── browser.py       # 浏览器管理
 │       ├── login.py         # 登录服务
 │       ├── messages.py      # 消息服务
-│       └── resume.py        # 简历服务
 ├── jobs/
 │   └── criteria.yaml        # 岗位要求
 ├── data/
