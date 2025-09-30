@@ -13,11 +13,9 @@ import streamlit as st
 import yaml
 
 
-logging.basicConfig(
-    level=logging.DEBUG,
-    format="%(levelname)-8s %(name)s: %(message)s"
-)
-app_logger = logging.getLogger("bosszhipin_bot")
+# Use the global logger instead of basicConfig to avoid conflicts with colorlog
+from src.global_logger import get_logger
+app_logger = get_logger()
 
 DEFAULT_BASE_URL = os.environ.get("BOSS_SERVICE_BASE_URL", "http://127.0.0.1:5001")
 DEFAULT_CRITERIA_PATH = Path(os.environ.get("BOSS_CRITERIA_PATH", "config/jobs.yaml"))
