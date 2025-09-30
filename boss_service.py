@@ -33,6 +33,7 @@ from src.chat_actions import (
     get_chat_history_action,
     view_online_resume_action,
     accept_resume_action,
+    check_full_resume_available,
 )
 from src.recommendation_actions import (
     list_recommended_candidates_action,
@@ -587,8 +588,8 @@ class BossService:
                 'timestamp': datetime.now().isoformat()
             })
 
-        @self.app.post('/resume/view')
-        def view_resume_api(chat_id: str = Body(..., embed=True)):
+        @self.app.post('/resume/view_full')
+        def view_full_resume(chat_id: str = Body(..., embed=True)):
             """View candidate's attached resume.
             
             Args:
@@ -601,6 +602,18 @@ class BossService:
 
             result = view_full_resume_action(self.page, chat_id)
             return result
+
+        @self.app.post('/resume/check_full')
+        def check_full_resume(chat_id: str = Body(..., embed=True)):
+            """Check if full resume is available without retrieving content."""
+            self._ensure_browser_session()
+            result = view_full_resume_action(self.page, chat_id)
+            return JSONResponse({
+                'success': True,
+                'available': bool(result.get('success')),
+                'details': result.get('details', ''),
+            })
+                
 
         @self.app.post('/candidate/discard')
         def discard_candidate_api(chat_id: str = Body(..., embed=True)):

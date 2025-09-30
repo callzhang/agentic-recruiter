@@ -214,8 +214,27 @@ Request a resume from a candidate.
 }
 ```
 
-### POST `/resume/view`
-View an attached resume from a candidate.
+### POST `/resume/check_full`
+Check whether an attached resume is available.
+
+**Request Body:**
+```json
+{
+  "chat_id": "12345"
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "available": true,
+  "details": "附件简历已可用"
+}
+```
+
+### POST `/resume/view_full`
+Retrieve the attached resume content.
 
 **Request Body:**
 ```json
@@ -507,7 +526,6 @@ curl -X POST http://127.0.0.1:5001/resume/online \
 4. **Resume Capture**: The `/resume/online` endpoint uses advanced capture methods including WASM hooks, canvas extraction, and screenshot fallbacks.
 
 5. **Error Handling**: All endpoints return structured JSON responses with success indicators and detailed error information.
-
 
 
 
