@@ -534,15 +534,31 @@ class BossService:
 
 
         @self.app.post('/chat/select-job')
-        def select_chat_job(chat_id: str = Body(..., embed=True)):
+        def select_chat_job(payload: dict = Body(...)):
             """Select job for a specific conversation.
             
             Args:
-                chat_id (str): ID of the chat/conversation
+                payload: Dictionary containing 'job_title' key
+                
+            Returns:
+                JSONResponse: Selection result with success status and details
             """
             self._ensure_browser_session()
-            result = select_chat_job_action(self.page, chat_id)
-            return result
+            job_title = payload.get('job_title')
+            if not job_title:
+                return JSONResponse({
+                    'success': False,
+                    'details': 'Missing required parameter: job_title'
+                })
+            
+            result = select_chat_job_action(self.page, job_title)
+            return JSONResponse({
+                'success': result.get('success', False),
+                'details': result.get('details', ''),
+                'selected_job': result.get('selected_job'),
+                'available_jobs': result.get('available_jobs'),
+                'timestamp': datetime.now().isoformat()
+            })
 
         '''
         Resume Endpoints
@@ -588,10 +604,16 @@ class BossService:
         def check_full_resume(chat_id: str = Body(..., embed=True)):
             """Check if full resume is available without retrieving content."""
             self._ensure_browser_session()
-            result = view_full_resume_action(self.page, chat_id)
+            result = check_full_resume_available(self.page, chat_id)
+            if result is None:
+                return JSONResponse({
+                    'success': False,
+                    'available': False,
+                    'details': '未找到指定对话项',
+                })
             return JSONResponse({
-                'success': True,
-                'available': bool(result.get('success')),
+                'success': result.get('success', False),
+                'available': result.get('success', False),
                 'details': result.get('details', ''),
             })
 

@@ -316,7 +316,7 @@ def get_chat_history_action(page, chat_id: str) -> List[Dict[str, Any]]:
     _prepare_chat_page(page)
     dialog = _go_to_chat_dialog(page, chat_id)
     if not dialog:
-        return { 'success': False, 'details': '未找到指定对话项' }
+        return []
     
     # Simple text extraction for chat history
     message_box = page.locator("div.conversation-message")
