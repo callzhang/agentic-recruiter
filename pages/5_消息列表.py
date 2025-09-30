@@ -344,7 +344,7 @@ def main() -> None:
         "选择候选人",
         options=[row["chat_id"] for row in display_rows],
         format_func=lambda cid: next(
-            (f"{row['candidate']} ({cid})" for row in display_rows if row['chat_id'] == cid),
+            (row['candidate'] for row in display_rows if row['chat_id'] == cid),
             cid,
         ),
         key="chat_selector",
