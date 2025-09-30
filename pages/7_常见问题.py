@@ -7,7 +7,7 @@ from typing import List
 import streamlit as st
 
 from streamlit_shared import ensure_state, sidebar_controls
-from src.qa_workflow import qa_workflow
+from src.assistant_actions import assistant_actions
 
 
 def render_search_section() -> None:
@@ -15,7 +15,7 @@ def render_search_section() -> None:
     query = st.text_input("输入候选人提问或上下文", key="faq_query")
     if st.button("检索", key="faq_query_btn"):
         with st.spinner("检索中..."):
-            results = qa_workflow.retrieve_relevant_answers(query)
+            results = assistant_actions.retrieve_relevant_answers(query)
         if not results:
             st.info("未检索到匹配记录")
         else:
@@ -38,7 +38,7 @@ def _text_to_keywords(text: str) -> List[str]:
 
 
 def render_entries() -> None:
-    entries = qa_workflow.list_entries(limit=500)
+    entries = assistant_actions.list_entries(limit=500)
     if not entries:
         st.info("当前没有 QA 记录")
         return
@@ -88,7 +88,7 @@ def render_entries() -> None:
                 st.warning("问题与回答均不能为空")
             else:
                 with st.spinner("更新中..."):
-                    qa_workflow.record_qa(
+                    assistant_actions.record_qa(
                         qa_id=selected_id,
                         question=question.strip(),
                         answer=answer.strip(),
@@ -98,7 +98,7 @@ def render_entries() -> None:
                 st.rerun()
     if st.button("删除该记录", key=f"faq_delete_{selected_id}"):
         with st.spinner("删除中..."):
-            ok = qa_workflow.delete_entry(selected_id)
+            ok = assistant_actions.delete_entry(selected_id)
         if ok:
             st.success("已删除")
         else:
@@ -117,9 +117,9 @@ def render_create_form() -> None:
             if not question.strip() or not answer.strip():
                 st.warning("问题与回答均不能为空")
             else:
-                qa_id = qa_workflow.generate_id()
+                qa_id = assistant_actions.generate_id()
                 with st.spinner("写入中..."):
-                    qa_workflow.record_qa(
+                    assistant_actions.record_qa(
                         qa_id=qa_id,
                         question=question.strip(),
                         answer=answer.strip(),
@@ -160,8 +160,8 @@ def generate_company_faq() -> None:
 
     with st.spinner("生成示例 QA..."):
         for question, answer, keywords in samples:
-            qa_workflow.record_qa(
-                qa_id=qa_workflow.generate_id(),
+            assistant_actions.record_qa(
+                qa_id=assistant_actions.generate_id(),
                 question=question,
                 answer=answer,
                 keywords=keywords,
@@ -175,7 +175,7 @@ def main() -> None:
     ensure_state()
     sidebar_controls(include_config_path=False)
 
-    if not getattr(qa_workflow, 'enabled', False):
+    if not getattr(assistant_actions, 'enabled', False):
         st.warning("QA Store 未启用，请检查 Zilliz 配置和 OPENAI_API_KEY")
         return
 

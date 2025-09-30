@@ -45,7 +45,7 @@ from src.recommendation_actions import (
 from src.events import EventManager
 from src.global_logger import get_logger
 from src.qa_store import qa_store
-from src.qa_workflow import qa_workflow, DEFAULT_GREETING
+from src.assistant_actions import assistant_actions, DEFAULT_GREETING
 from src.scheduler import BRDWorkScheduler
 from typing import Any, Dict, List, Optional, Callable, Tuple, Union
 
@@ -124,7 +124,7 @@ class BossService:
                 logger.info("QA store initialised and connected to Zilliz")
             else:
                 logger.info("QA store disabled or not configured")
-            self.qa_workflow = qa_workflow
+            self.assistant_actions = assistant_actions
             self.initialized = True
             self.setup_routes()
             # 事件驱动的消息缓存和响应监听器
@@ -225,10 +225,10 @@ class BossService:
     def send_greeting(self, chat_id: str, message: str | None = None) -> Dict[str, Any]:
         self._ensure_browser_session()
         context = self._compose_greeting_context(chat_id)
-        final_message = message if message else self.qa_workflow.generate_greeting(context, DEFAULT_GREETING)
+        final_message = message if message else self.assistant_actions.generate_greeting(context, DEFAULT_GREETING)
         result = send_message_action(self.page, chat_id, final_message)
         success = result.get('success', False)
-        if success and getattr(self.qa_workflow, 'enabled', False):
+        if success and getattr(self.assistant_actions, 'enabled', False):
             try:
                 cache_entry = self.event_manager.chat_cache.get(chat_id)
             except Exception:
@@ -238,7 +238,7 @@ class BossService:
             if job_title:
                 keywords.append(job_title)
             try:
-                self.qa_workflow.record_qa(
+                self.assistant_actions.record_qa(
                     qa_id=f"greet_{chat_id}",
                     question=context,
                     answer=final_message,

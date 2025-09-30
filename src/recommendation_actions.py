@@ -194,15 +194,6 @@ def view_recommend_candidate_resume_action(page, index: int) -> Dict[str, Any]:
 
 
 
-def select_current_job_action(page, job_title: str) -> Dict[str, Any]:
-    """选择当前职位从下拉菜单中。
-    
-    使用 qa_workflow 中的 select_current_job 方法。
-    """
-    from .qa_workflow import qa_workflow
-    return qa_workflow.select_current_job(page, job_title)
-
-
 def greet_recommend_candidate_action(page, index: int, message: str) -> Dict[str, Any]:
     """发送标准化打招呼消息给推荐候选人。"""
     frame = _prepare_recommendation_page(page)

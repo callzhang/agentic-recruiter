@@ -1,4 +1,4 @@
-"""Workflow helpers that pair OpenAI-generated greetings with Zilliz storage."""
+"""Assistant actions that pair OpenAI-generated greetings with Zilliz storage."""
 from __future__ import annotations
 
 import logging
@@ -26,7 +26,7 @@ DEFAULT_GREETING = "您好，我们是一家AI科技公司，对您的背景十�
 OPENAI_DEFAULT_MODEL = os.getenv("BOSSZP_GPT_MODEL", "gpt-4o-mini")
 
 
-class QAWorkflow:
+class AssistantActions:
     def __init__(self, store: QAStore | None = None) -> None:
         self.store = store or qa_store
         self.enabled = bool(self.store and self.store.enabled)
@@ -395,6 +395,6 @@ class QAWorkflow:
         return uuid4().hex
 
 
-qa_workflow = QAWorkflow()
+assistant_actions = AssistantActions()
 
-__all__ = ["qa_workflow", "QAWorkflow", "DEFAULT_GREETING"]
+__all__ = ["assistant_actions", "AssistantActions", "DEFAULT_GREETING"]

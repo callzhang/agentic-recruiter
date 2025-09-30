@@ -8,7 +8,7 @@ import pandas as pd
 import streamlit as st
 
 from streamlit_shared import call_api, ensure_state, sidebar_controls
-from src.qa_workflow import qa_workflow, OPENAI_DEFAULT_MODEL
+from src.assistant_actions import assistant_actions, OPENAI_DEFAULT_MODEL
 
 COMPANY_MD_PATH = Path("config/company.md")
 DEFAULT_HISTORY_LIMIT = 10
@@ -116,10 +116,10 @@ def _prepare_history_text(history: List[str]) -> str:
 # ---------------------------------------------------------------------------
 
 def _require_openai_client() -> Optional[Any]:
-    if not getattr(qa_workflow, "client", None):
+    if not getattr(assistant_actions, "client", None):
         st.warning("OpenAI 客户端未配置，无法使用自动评分或消息生成功能。")
         return None
-    return qa_workflow.client
+    return assistant_actions.client
 
 
 def _parse_json_from_text(text: str) -> Optional[Dict[str, Any]]:
@@ -275,7 +275,7 @@ def render_scoring_section(chat_id: str, candidate_info: Dict[str, Any], resume_
             result = analyze_candidate(context)
         if result:
             st.session_state.setdefault("analysis_results", {})[chat_id] = result
-            qa_workflow.upsert_candidate(
+            assistant_actions.upsert_candidate(
                 chat_id,
                 name=candidate_info.get("candidate"),
                 job_applied=job_role.get("position"),
@@ -310,7 +310,7 @@ def render_message_section(base_url: str, chat_id: str, resume_text: str, job_ro
             "chat_history": history_text or "无",
             "notes": draft,
         }
-        qa_workflow.upsert_candidate(
+        assistant_actions.upsert_candidate(
             chat_id,
             name=candidate_info.get("candidate"),
             job_applied=job_role.get("position"),
@@ -318,7 +318,7 @@ def render_message_section(base_url: str, chat_id: str, resume_text: str, job_ro
             resume_text=resume_text,
         )
         with st.spinner("生成中..."):
-            message = qa_workflow.generate_followup_message(chat_id, prompt=draft or "", context=context)
+            message = assistant_actions.generate_followup_message(chat_id, prompt=draft or "", context=context)
         if message:
             message_state[chat_id] = message
             st.session_state[f"message_draft_{chat_id}"] = message
@@ -339,7 +339,7 @@ def render_message_section(base_url: str, chat_id: str, resume_text: str, job_ro
             if ok:
                 st.success("消息已发送")
                 message_state[chat_id] = content
-                qa_workflow.upsert_candidate(chat_id, last_message=content)
+                assistant_actions.upsert_candidate(chat_id, last_message=content)
             else:
                 st.error(f"发送失败: {payload}")
 
@@ -453,7 +453,7 @@ def main() -> None:
         st.warning("未找到岗位配置，将使用空的岗位描述。")
         selected_job = {"description": "", "target_profile": ""}
 
-    qa_workflow.upsert_candidate(
+    assistant_actions.upsert_candidate(
         chat_id,
         name=selected_row.get("candidate"),
         job_applied=selected_job.get("position"),
