@@ -294,6 +294,65 @@ class AssistantActions:
             return False
         return self.store.delete_entry(resume_id)
 
+    def analyze_candidate(self, context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Analyze candidate based on context and return scoring results."""
+        if not self.client:
+            logger.warning("OpenAI client not available for candidate analysis")
+            return None
+        
+        prompt = f"""
+你是一名资深招聘顾问，请基于以下信息对候选人做出量化评估。
+
+【公司介绍】
+{context.get('company_description', '')}
+
+【岗位描述】
+{context.get('job_description', '')}
+
+【理想人选画像】
+{context.get('target_profile', '')}
+
+【候选人材料】
+{context.get('candidate_resume', '')}
+
+【近期对话】
+{context.get('chat_history', '')}
+
+请给出 1-10 的四个评分：技能匹配度、创业契合度、加入意愿、综合评分，并提供简要分析。输出严格使用 JSON 格式：
+{{
+  "skill": <int>,
+  "startup_fit": <int>,
+  "willingness": <int>,
+  "overall": <int>,
+  "summary": "..."
+}}
+"""
+        try:
+            response = self.client.responses.create(
+                model=OPENAI_DEFAULT_MODEL,
+                input=[{"role": "user", "content": prompt}],
+            )
+            text = response.output[0].content[0].text  # type: ignore[attr-defined]
+            data = self._parse_json_from_text(text)
+            if not data:
+                logger.error("无法解析评分结果")
+            return data
+        except Exception as exc:
+            logger.error(f"调用 OpenAI 失败: {exc}")
+            return None
+
+    def _parse_json_from_text(self, text: str) -> Optional[Dict[str, Any]]:
+        """Parse JSON from text content."""
+        try:
+            start = text.find('{')
+            end = text.rfind('}')
+            if start != -1 and end != -1:
+                import json
+                return json.loads(text[start:end + 1])
+        except Exception:
+            pass
+        return None
+
     @staticmethod
     def generate_id() -> str:
         return uuid4().hex

@@ -414,7 +414,7 @@ class BossService:
             })
 
         @self.app.post('/recommend/select-job')
-        def select_current_job(job_title: str = Body(..., embed=True)):
+        def select_recommend_job(job_title: str = Body(..., embed=True)):
             """Select current job from dropdown menu.
             
             Args:
@@ -523,7 +523,7 @@ class BossService:
             })
 
         @self.app.post('/chat/select-job')
-        def select_job(chat_id: str = Body(..., embed=True)):
+        def select_chat_job(chat_id: str = Body(..., embed=True)):
             """Select job for a specific conversation.
             
             Args:

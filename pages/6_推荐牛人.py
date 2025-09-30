@@ -8,6 +8,13 @@ import streamlit as st
 from streamlit_shared import call_api, ensure_state, sidebar_controls
 
 
+def _load_jobs() -> List[Dict[str, Any]]:
+    cache = st.session_state.get("_jobs_cache")
+    if isinstance(cache, list):
+        return cache
+    return []
+
+
 def _fetch_recommendations(base_url: str, limit: int) -> List[Dict[str, Any]]:
     ok, payload = call_api(base_url, "GET", "/recommend/candidates", params={"limit": limit})
     if not ok:
@@ -38,7 +45,16 @@ def main() -> None:
     sidebar_controls(include_config_path=False)
 
     base_url = st.session_state["base_url"]
+    jobs = _load_jobs()
     limit = st.sidebar.slider("每次获取数量", min_value=5, max_value=100, value=20, step=5)
+
+    selected_job_idx = st.session_state.get("selected_job_index", 0)
+    selected_job = jobs[selected_job_idx] if jobs and 0 <= selected_job_idx < len(jobs) else {}
+    if selected_job:
+        sync_key = (selected_job_idx, base_url)
+        if st.session_state.get("_recommend_job_synced") != sync_key:
+            call_api(base_url, "POST", "/recommend/select-job", json={"job": selected_job})
+            st.session_state["_recommend_job_synced"] = sync_key
 
     if "recommend_candidates" not in st.session_state:
         _fetch_recommendations(base_url, limit)

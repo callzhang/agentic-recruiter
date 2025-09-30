@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
@@ -122,61 +123,12 @@ def _require_openai_client() -> Optional[Any]:
     return assistant_actions.client
 
 
-def _parse_json_from_text(text: str) -> Optional[Dict[str, Any]]:
-    try:
-        start = text.find('{')
-        end = text.rfind('}')
-        if start != -1 and end != -1:
-            return json.loads(text[start:end + 1])
-    except Exception:
-        pass
-    return None
-
-
 def analyze_candidate(context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    client = _require_openai_client()
-    if not client:
-        return None
-    prompt = f"""
-你是一名资深招聘顾问，请基于以下信息对候选人做出量化评估。
-
-【公司介绍】
-{context['company_description']}
-
-【岗位描述】
-{context['job_description']}
-
-【理想人选画像】
-{context['target_profile']}
-
-【候选人材料】
-{context['candidate_resume']}
-
-【近期对话】
-{context['chat_history']}
-
-请给出 1-10 的四个评分：技能匹配度、创业契合度、加入意愿、综合评分，并提供简要分析。输出严格使用 JSON 格式：
-{{
-  "skill": <int>,
-  "startup_fit": <int>,
-  "willingness": <int>,
-  "overall": <int>,
-  "summary": "..."
-}}
-"""
-    try:
-        response = client.responses.create(
-            model=OPENAI_DEFAULT_MODEL,
-            input=[{"role": "user", "content": prompt}],
-        )
-        text = response.output[0].content[0].text  # type: ignore[attr-defined]
-        data = _parse_json_from_text(text)
-        if not data:
-            st.error("无法解析评分结果")
-        return data
-    except Exception as exc:
-        st.error(f"调用 OpenAI 失败: {exc}")
-        return None
+    """Analyze candidate using assistant_actions."""
+    result = assistant_actions.analyze_candidate(context)
+    if not result:
+        st.error("无法解析评分结果")
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -358,21 +310,13 @@ def main() -> None:
     company_desc = _load_company_description()
     limit = st.sidebar.slider("每次获取数量", min_value=5, max_value=100, value=30, step=5)
 
-    if jobs:
-        job_options = [
-            f"{role.get('id', '')} - {role.get('position', '')}" for role in jobs
-        ]
-        default_index = st.session_state.get("selected_job_index", 0)
-        selected_job_index = st.sidebar.selectbox(
-            "默认岗位画像",
-            options=list(range(len(job_options))),
-            format_func=lambda i: job_options[i],
-            index=min(default_index, len(job_options) - 1),
-            key="selected_job_sidebar",
-        )
-        st.session_state["selected_job_index"] = selected_job_index
-    else:
-        st.session_state["selected_job_index"] = 0
+    selected_job_idx = st.session_state.get("selected_job_index", 0)
+    selected_job = jobs[selected_job_idx] if jobs and 0 <= selected_job_idx < len(jobs) else {}
+    if selected_job:
+        sync_key = (selected_job_idx, base_url)
+        if st.session_state.get("_chat_job_synced") != sync_key:
+            call_api(base_url, "POST", "/chat/select-job", json={"job": selected_job})
+            st.session_state["_chat_job_synced"] = sync_key
 
     messages = _get_messages(limit)
 
@@ -447,7 +391,11 @@ def main() -> None:
             format_func=lambda i: job_options[i],
             index=st.session_state.get("selected_job_index", 0),
         )
-        st.session_state["selected_job_index"] = job_index
+        if job_index != st.session_state.get("selected_job_index"):
+            st.session_state["selected_job_index"] = job_index
+            selected_job = jobs[job_index]
+            call_api(base_url, "POST", "/chat/select-job", json={"job": selected_job})
+            st.session_state["_chat_job_synced"] = (job_index, base_url)
         selected_job = jobs[job_index]
     else:
         st.warning("未找到岗位配置，将使用空的岗位描述。")
