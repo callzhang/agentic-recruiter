@@ -293,20 +293,20 @@ def get_messages_list_action(page, limit: int = 10, *, chat_cache=None):
     """获取消息列表"""
     _prepare_chat_page(page)
     # Simple text extraction for messages
+    items_selector = "div.geek-item"
     messages = []
-    items = page.locator("div.geek-item").all()
+    items = page.locator(items_selector).all()
     for item in items[:limit]:
         # item.scroll_into_view_if_needed(timeout=1000)
         messages.append({
             'id': item.get_attribute('data-id'),
-            'text': item.inner_text(),
-            'timestamp': '',
-            'sender': ''
+            'name': item.locator('span.geek-name').inner_text(),
+            'job_title': item.locator('span.source-job').inner_text(),
+            'text': item.locator('span.push-text').inner_text(),
+            'timestamp': item.locator('span.time').inner_text(),
         })
     
     # Use cache if no messages found
-    if not messages and chat_cache:
-        messages = chat_cache.get_all()
     logger.info(f"成功获取 {len(messages)} 条消息")
     return messages
 

@@ -31,11 +31,11 @@ class ColoredFormatter(logging.Formatter):
         reset = self.COLORS['RESET']
         
         # Format the message with colors
-        record.levelname = f"{color}{record.levelname}{reset}"
-        record.msg = f"{color}{record.msg}{reset}"
+        colored_levelname = f"{color}{record.levelname}{reset}"
+        colored_msg = f"{color}{record.msg}{reset}"
         
         # Use a simpler format without the logger name
-        return f"{record.asctime} - {record.levelname} - {record.msg}"
+        return f"{record.asctime} - {colored_levelname} - {colored_msg}"
 
 
 def get_logger() -> logging.Logger:

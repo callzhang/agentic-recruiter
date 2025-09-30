@@ -328,16 +328,7 @@ def main() -> None:
         return
 
     display_rows = []
-    for idx, item in enumerate(messages):
-        display_rows.append(
-            {
-                "chat_id": _normalize_chat_id(item, idx),
-                "candidate": item.get("candidate") or item.get("name") or "",
-                "job_title": item.get("job_title") or "",
-                "message": item.get("message") or item.get("text", ""),
-                "status": item.get("status", ""),
-            }
-        )
+    st.write(messages)
 
     col_select, col_refresh = st.columns([4, 1])
     chat_id = col_select.selectbox(

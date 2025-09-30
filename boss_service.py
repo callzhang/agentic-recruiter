@@ -534,23 +534,16 @@ class BossService:
 
 
         @self.app.post('/chat/select-job')
-        def select_chat_job(payload: dict = Body(...)):
+        def select_chat_job(job_title: str = Body(..., embed=True)):
             """Select job for a specific conversation.
             
             Args:
-                payload: Dictionary containing 'job_title' key
+                job_title (str): Title of the job to select
                 
             Returns:
                 JSONResponse: Selection result with success status and details
             """
             self._ensure_browser_session()
-            job_title = payload.get('job_title')
-            if not job_title:
-                return JSONResponse({
-                    'success': False,
-                    'details': 'Missing required parameter: job_title'
-                })
-            
             result = select_chat_job_action(self.page, job_title)
             return JSONResponse({
                 'success': result.get('success', False),

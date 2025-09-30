@@ -6,9 +6,23 @@ import os
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
 
+import logging
+from colorlog import ColoredFormatter
+
 import requests
 import streamlit as st
 import yaml
+
+
+# Configure logging with color support for the application logger only
+handler = logging.StreamHandler()
+handler.setFormatter(ColoredFormatter(
+    "%(log_color)s%(levelname)-8s%(reset)s %(name)s: %(message)s"
+))
+app_logger = logging.getLogger("bosszhipin_bot")
+app_logger.setLevel(logging.DEBUG)
+app_logger.propagate = False
+app_logger.addHandler(handler)
 
 DEFAULT_BASE_URL = os.environ.get("BOSS_SERVICE_BASE_URL", "http://127.0.0.1:5001")
 DEFAULT_CRITERIA_PATH = Path(os.environ.get("BOSS_CRITERIA_PATH", "config/jobs.yaml"))

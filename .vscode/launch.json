@@ -35,6 +35,7 @@
       "module": "streamlit",
       "console": "integratedTerminal",
       "justMyCode": true,
+      "subProcess": true,
       "args": ["run", "boss_app.py", "--server.runOnSave=true"],
       "cwd": "${workspaceFolder}",
       "env": { "PYTHONUNBUFFERED": "1" }
