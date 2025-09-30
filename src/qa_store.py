@@ -12,7 +12,8 @@ from pymilvus import (Collection, CollectionSchema, DataType, FieldSchema,
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_COLLECTION = "CN_recruitment"
+DEFAULT_QA_COLLECTION = "CN_recruitment"
+DEFAULT_CANDIDATE_COLLECTION = "CN_candidates"
 DEFAULT_DIMENSION = 1536
 DEFAULT_TOP_K = 5
 
@@ -23,7 +24,7 @@ class ZillizConfig:
     token: Optional[str] = None
     user: Optional[str] = None
     password: Optional[str] = None
-    collection_name: str = DEFAULT_COLLECTION
+    collection_name: str = DEFAULT_QA_COLLECTION
     embedding_model: str = "text-embedding-3-small"
     similarity_top_k: int = DEFAULT_TOP_K
     embedding_dim: int = DEFAULT_DIMENSION
@@ -67,7 +68,7 @@ def load_config(path: Path = Path("config/secrets.yaml")) -> Optional[ZillizConf
     if not endpoint or not (token or (user and password)):
         logger.warning("Incomplete Zilliz configuration, skipping QA store initialisation")
         return None
-    collection_name = raw.get("collection_name") or DEFAULT_COLLECTION
+    collection_name = raw.get("collection_name") or DEFAULT_QA_COLLECTION
     embedding_model = raw.get("embedding_model") or "text-embedding-3-small"
     similarity_top_k = int(raw.get("similarity_top_k") or DEFAULT_TOP_K)
     embedding_dim = int(raw.get("embedding_dim") or DEFAULT_DIMENSION)
@@ -93,6 +94,7 @@ class QAStore:
     def __init__(self, config: Optional[ZillizConfig] = None) -> None:
         self.config = config or load_config()
         self.collection: Optional[Collection] = None
+        self.candidate_collection: Optional[Collection] = None
         if not self.config:
             self.enabled = False
             return
@@ -114,6 +116,7 @@ class QAStore:
                 })
             connections.connect(**connect_args)
             self.collection = self._ensure_collection(cfg.collection_name)
+            self.candidate_collection = self._ensure_candidate_collection(DEFAULT_CANDIDATE_COLLECTION)
             return True
         except Exception as exc:  # pragma: no cover - network operations
             logger.error("Failed to connect to Zilliz: %s", exc)
@@ -159,6 +162,55 @@ class QAStore:
             collection.load()
         except Exception:
             logger.info("Loading collection %s", name)
+            collection.load()
+        return collection
+
+    def _ensure_candidate_collection(self, name: str) -> Optional[Collection]:
+        cfg = self.config
+        expected_fields = {
+            "candidate_id",
+            "name",
+            "job_applied",
+            "last_message",
+            "resume_vector",
+            "resume_text",
+            "scores",
+            "metadata",
+            "updated_at",
+        }
+        if utility.has_collection(name):
+            existing = Collection(name)
+            existing_fields = {field.name for field in existing.schema.fields}
+            if existing_fields != expected_fields:
+                logger.warning("Candidate collection %s schema mismatch (%s); recreating", name, existing_fields)
+                existing.release()
+                utility.drop_collection(name)
+        if not utility.has_collection(name):
+            logger.info("Creating candidate collection %s", name)
+            dim = cfg.embedding_dim if cfg else DEFAULT_DIMENSION
+            fields = [
+                FieldSchema(name="candidate_id", dtype=DataType.VARCHAR, max_length=64, is_primary=True),
+                FieldSchema(name="name", dtype=DataType.VARCHAR, max_length=128),
+                FieldSchema(name="job_applied", dtype=DataType.VARCHAR, max_length=128),
+                FieldSchema(name="last_message", dtype=DataType.VARCHAR, max_length=2048),
+                FieldSchema(name="resume_vector", dtype=DataType.FLOAT_VECTOR, dim=dim),
+                FieldSchema(name="resume_text", dtype=DataType.VARCHAR, max_length=8192),
+                FieldSchema(name="scores", dtype=DataType.JSON),
+                FieldSchema(name="metadata", dtype=DataType.JSON),
+                FieldSchema(name="updated_at", dtype=DataType.VARCHAR, max_length=64),
+            ]
+            schema = CollectionSchema(fields, description="Candidate profile embeddings")
+            collection = Collection(name=name, schema=schema)
+            index_params = {
+                "index_type": "AUTOINDEX",
+                "metric_type": "IP",
+                "params": {}
+            }
+            collection.create_index(field_name="resume_vector", index_params=index_params)
+        collection = Collection(name)
+        try:
+            collection.load()
+        except Exception:
             collection.load()
         return collection
 
@@ -218,6 +270,66 @@ class QAStore:
         except Exception as exc:  # pragma: no cover - defensive
             logger.error("Failed to delete QA entry %s: %s", resume_id, exc)
             return False
+
+    # Candidate operations -------------------------------------------------
+
+    def upsert_candidates(self, entries: Iterable[Dict[str, Any]]) -> None:
+        if not self.enabled or not self.candidate_collection:
+            return
+        candidate_ids: List[str] = []
+        names: List[str] = []
+        jobs: List[str] = []
+        messages: List[str] = []
+        vectors: List[List[float]] = []
+        resumes: List[str] = []
+        scores_col: List[Any] = []
+        metadata_col: List[Any] = []
+        updated_col: List[str] = []
+
+        dim = self.config.embedding_dim if self.config else DEFAULT_DIMENSION
+
+        for entry in entries:
+            try:
+                cid = str(entry["candidate_id"])
+                vec = entry.get("resume_vector") or []
+                vec_list = list(vec)
+                if not vec_list:
+                    vec_list = [0.0] * dim
+                candidate_ids.append(cid)
+                names.append(entry.get("name", ""))
+                jobs.append(entry.get("job_applied", ""))
+                messages.append(entry.get("last_message", ""))
+                vectors.append(vec_list)
+                resumes.append(entry.get("resume_text", ""))
+                scores_col.append(entry.get("scores", {}))
+                metadata_col.append(entry.get("metadata", {}))
+                updated_col.append(entry.get("updated_at", ""))
+            except KeyError as err:
+                logger.warning("Skipping candidate entry missing field: %s", err)
+
+        if not candidate_ids:
+            return
+
+        try:
+            self.candidate_collection.delete(
+                " or ".join(f'candidate_id == "{cid}"' for cid in candidate_ids)
+            )
+        except Exception:
+            pass
+
+        data = [
+            candidate_ids,
+            names,
+            jobs,
+            messages,
+            vectors,
+            resumes,
+            scores_col,
+            metadata_col,
+            updated_col,
+        ]
+        self.candidate_collection.insert(data)
+        self.candidate_collection.flush()
 
     def search(self, vector: List[float], top_k: Optional[int] = None) -> List[Dict[str, Any]]:
         if not self.enabled or not self.collection:

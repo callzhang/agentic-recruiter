@@ -532,7 +532,8 @@ def _get_resume_handle(page, timeout_ms=10000, logger=None) -> Dict[str, Any]:
         time.sleep(timeout_ms/1000)
         return {
             'mode': 'inline',
-            'frame': overlay,
+            'iframe_handle': iframe,
+            'entry': overlay,
         }
     elif iframe.count() > 0:
         iframe.wait_for(state="attached", timeout=timeout_ms)
@@ -1305,7 +1306,6 @@ def _process_resume_entry(page, context_info: Dict[str, Any], logger=None) -> Di
             return {
                 'success': True,
                 'text': text,
-                # 'html': html,
                 'textLenth': len(text),
                 'htmlLenth': len(html),
                 'details': "来自inner_text简历",

@@ -14,6 +14,8 @@ except ImportError:  # pragma: no cover - optional dependency
 
 import yaml
 
+from tenacity import retry, stop_after_attempt, wait_exponential
+
 from .qa_store import QAStore, qa_store
 
 logger = logging.getLogger(__name__)
@@ -59,6 +61,7 @@ class QAWorkflow:
         return None
 
     # Embeddings ----------------------------------------------------
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
     def _embed(self, text: str) -> Optional[List[float]]:
         if not self.enabled or not self.client:
             return None
@@ -68,7 +71,13 @@ class QAWorkflow:
             response = self.client.embeddings.create(model=model, input=text)
             return response.data[0].embedding  # type: ignore[attr-defined]
         except Exception as exc:  # pragma: no cover - network failure
-            logger.error("Embedding generation failed: %s", exc)
+            logger.warning("Embedding generation failed: %s", exc)
+            raise
+
+    def get_embedding(self, text: str) -> Optional[List[float]]:
+        try:
+            return self._embed(text)
+        except Exception:
             return None
 
     # Retrieval -----------------------------------------------------

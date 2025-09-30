@@ -151,16 +151,8 @@ def send_message_action(page, chat_id: str, message: str) -> Dict[str, Any]:
     return { 'success': False, 'details': '消息可能未发送成功，输入框仍有内容' }
 
 
-def view_full_resume_action(page, chat_id: str) -> Dict[str, Any]:
-    """点击查看候选人的附件简历
-    view_full_resume_action(page, chat_id)
-    ├── _go_to_chat_dialog(page, chat_id)
-    │   ├── close_overlay_dialogs(page) [ui_utils.py:66]
-    │   └── page.locator(CHAT_MENU_SELECTOR)
-    ├── page.locator(RESUME_BUTTON_SELECTOR)
-    ├── page.wait_for_selector(RESUME_IFRAME_SELECTOR)
-    └── close_overlay_dialogs(page) [ui_utils.py:66]
-    """
+def check_full_resume_available(page, chat_id: str, internal: bool = False) -> Optional[Dict[str, Any]]:
+    """检查简历按钮是否启用"""
     _prepare_chat_page(page)
     dialog = _go_to_chat_dialog(page, chat_id)
     if not dialog:
@@ -174,10 +166,31 @@ def view_full_resume_action(page, chat_id: str) -> Dict[str, Any]:
     t0 = time.time()
     while is_disabled := "disabled" in resume_button.get_attribute("class"):
         time.sleep(0.1)
-        print(f'简历按钮已禁用，等待0.1秒后重试: {time.time() - t0}')
-        if time.time() - t0 > 2:
-            return { 'success': False, 'details': '简历按钮未启用，请先请求简历' }
+        if time.time() - t0 > 1:
+            break
     if is_disabled:
+        if internal:
+            return None
+        else:
+            return { 'success': False, 'details': '暂无离线简历，请先请求简历' }
+    else:
+        if internal:
+            return resume_button
+        else:
+            return { 'success': True, 'details': '离线简历已启用' }
+
+def view_full_resume_action(page, chat_id: str) -> Dict[str, Any]:
+    """点击查看候选人的附件简历
+    view_full_resume_action(page, chat_id)
+    ├── _go_to_chat_dialog(page, chat_id)
+    │   ├── close_overlay_dialogs(page) [ui_utils.py:66]
+    │   └── page.locator(CHAT_MENU_SELECTOR)
+    ├── page.locator(RESUME_BUTTON_SELECTOR)
+    ├── page.wait_for_selector(RESUME_IFRAME_SELECTOR)
+    └── close_overlay_dialogs(page) [ui_utils.py:66]
+    """
+    resume_button = check_full_resume_available(page, chat_id, internal=True)
+    if not resume_button:
         return { 'success': False, 'details': '暂无离线简历，请先请求简历' }
     resume_button.click()
 
@@ -332,6 +345,7 @@ def accept_resume_action(page, chat_id: str) -> Dict[str, Any]:
     Returns:
         Dict with success status and details
     """
+    _prepare_chat_page(page)
     dialog = _go_to_chat_dialog(page, chat_id)
     if not dialog:
         return { 'success': False, 'details': '未找到指定对话项' }
@@ -378,26 +392,36 @@ def view_online_resume_action(page, chat_id: str) -> Dict[str, Any]:
     │       └── _try_clipboard_hooks()
     └── close_overlay_dialogs(page) [ui_utils.py:66]
 """
+    _prepare_chat_page(page)
     dialog = _go_to_chat_dialog(page, chat_id)
     if not dialog:
         return { 'success': False, 'details': '未找到指定对话项' }
 
-    """Prepare resume context by opening resume and detecting mode."""
+    # get the candidate name
+    candidate_name = dialog.locator("span.name-box").inner_text(timeout=100)
+
+    # Prepare resume context by opening resume and detecting mode.
     from .resume_capture import _setup_wasm_route, _install_parent_message_listener, _open_online_resume, _get_resume_handle, _create_error_result
     _setup_wasm_route(page.context)
     _install_parent_message_listener(page, logger)
+
+    # open the online resume
     open_result = _open_online_resume(page, chat_id, logger)
     if not open_result.get('success'):
         return _create_error_result(open_result, '无法打开在线简历')
-    context = _get_resume_handle(page, 10000, logger)
+
+    # get the resume handle
+    context = _get_resume_handle(page, 8000, logger)
     context.update(open_result)
 
-    ''' process resume entry '''
+    # process resume entry
     result = _process_resume_entry(page, context, logger)
     logger.info(f"处理简历结果: {result}")
     close_overlay_dialogs(page)
     if not isinstance(result, dict):
         return { 'success': False, 'details': '未知错误: 结果类型异常' }
+
+    result.update({ 'name': candidate_name, 'chat_id': chat_id })
     return result
 
 
