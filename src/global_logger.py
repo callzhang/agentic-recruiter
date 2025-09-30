@@ -30,12 +30,12 @@ class ColoredFormatter(logging.Formatter):
         color = self.COLORS.get(record.levelname, self.COLORS['RESET'])
         reset = self.COLORS['RESET']
         
-        # Format the message with colors
-        colored_levelname = f"{color}{record.levelname}{reset}"
-        colored_msg = f"{color}{record.msg}{reset}"
+        # Add color attributes to the record
+        record.color = color
+        record.reset = reset
         
-        # Use a simpler format without the logger name
-        return f"{record.asctime} - {colored_levelname} - {colored_msg}"
+        # Use the parent formatter to handle the format string
+        return super().format(record)
 
 
 def get_logger() -> logging.Logger:
@@ -47,7 +47,7 @@ def get_logger() -> logging.Logger:
         _global_logger.setLevel(logging.INFO)
         if not _global_logger.handlers:
             handler = logging.StreamHandler()
-            formatter = ColoredFormatter('%(asctime)s - %(levelname)s - %(message)s')
+            formatter = ColoredFormatter('%(asctime)s - %(color)s%(levelname)s%(reset)s - %(color)s%(message)s%(reset)s')
             handler.setFormatter(formatter)
             _global_logger.addHandler(handler)
     return _global_logger

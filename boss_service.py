@@ -99,7 +99,7 @@ class BossService:
             
             # Console formatter (with colors, no logger name)
             from src.global_logger import ColoredFormatter
-            console_formatter = ColoredFormatter('%(asctime)s - %(levelname)s - %(message)s')
+            console_formatter = ColoredFormatter('%(asctime)s - %(color)s%(levelname)s%(reset)s - %(color)s%(message)s%(reset)s')
             console_handler.setFormatter(console_formatter)
             
             # Add handlers
