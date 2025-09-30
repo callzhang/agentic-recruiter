@@ -98,8 +98,18 @@ class BossService:
             file_handler.setFormatter(file_formatter)
             
             # Console formatter (with colors, no logger name)
-            from src.global_logger import ColoredFormatter
-            console_formatter = ColoredFormatter('%(asctime)s - %(color)s%(levelname)s%(reset)s - %(color)s%(message)s%(reset)s')
+            import colorlog
+            console_formatter = colorlog.ColoredFormatter(
+                '%(log_color)s%(asctime)s - %(levelname)s - %(message)s%(reset)s',
+                datefmt='%Y-%m-%d %H:%M:%S',
+                log_colors={
+                    'DEBUG': 'cyan',
+                    'INFO': 'green',
+                    'WARNING': 'yellow',
+                    'ERROR': 'red',
+                    'CRITICAL': 'magenta',
+                }
+            )
             console_handler.setFormatter(console_formatter)
             
             # Add handlers
