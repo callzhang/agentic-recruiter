@@ -224,15 +224,67 @@ def generate_followup_message(context: Dict[str, Any]) -> Optional[str]:
 # UI components
 # ---------------------------------------------------------------------------
 
-def render_resume_section(title: str, base_url: str, chat_id: str, endpoint: str, cache_key: str) -> str:
+def render_resume_section(
+    title: str,
+    base_url: str,
+    chat_id: str,
+    endpoint: str,
+    cache_key: str,
+    request_when_missing: bool = False,
+    check_endpoint: Optional[str] = None,
+) -> str:
+    text = ""
+    load_state_key = f"loaded_{cache_key}_{chat_id}"
     with st.expander(title, expanded=False):
-        if st.button("刷新", key=f"refresh_{cache_key}_{chat_id}"):
+        cols = st.columns([1, 1, 3])
+        if cols[0].button("加载", key=f"load_{cache_key}_{chat_id}"):
+            st.session_state[load_state_key] = True
+        if cols[1].button("刷新", key=f"refresh_{cache_key}_{chat_id}"):
             st.session_state.setdefault(cache_key, {}).pop(chat_id, None)
-        data = _fetch_resume(base_url, chat_id, endpoint, cache_key)
-        text = ""
-        if data:
-            text = data.get("text") or data.get("content") or ""
-            st.text_area("内容", value=text, height=300)
+            st.session_state[load_state_key] = False
+
+        load_state = st.session_state.get(load_state_key, False)
+        available = True
+        check_payload: Dict[str, Any] | None = None
+        if load_state:
+            if check_endpoint:
+                check_ok, check_payload = call_api(
+                    base_url,
+                    "POST",
+                    check_endpoint,
+                    json={"chat_id": chat_id},
+                )
+                available = bool(check_ok and isinstance(check_payload, dict) and check_payload.get("available"))
+            if available:
+                data = _fetch_resume(base_url, chat_id, endpoint, cache_key)
+                success = bool(data and data.get("success", True))
+                if success:
+                    text = data.get("text") or data.get("content") or ""
+                    if text:
+                        st.text_area("内容", value=text, height=300)
+                    else:
+                        st.info("暂无可显示的简历文本。")
+                else:
+                    st.warning(data.get("details") or "无法获取简历。")
+                    available = False
+            if not available:
+                detail = (check_payload or {}).get("details") if check_payload else None
+                st.warning(detail or "暂无附件简历，请稍后重试。")
+                if request_when_missing:
+                    if st.button("请求简历", key=f"request_resume_{chat_id}"):
+                        with st.spinner("请求简历中..."):
+                            ok, payload = call_api(
+                                base_url,
+                                "POST",
+                                "/resume/request",
+                                json={"chat_id": chat_id},
+                            )
+                        if ok:
+                            st.success("已发送简历请求")
+                        else:
+                            st.error(f"请求失败: {payload}")
+        else:
+            st.caption("点击“加载”以获取内容。")
         return text
 
 
@@ -381,7 +433,15 @@ def main() -> None:
 
     # Resume sections
     online_resume = render_resume_section("在线简历", base_url, chat_id, "/resume/online", "online_resume_cache")
-    full_resume = render_resume_section("附件简历", base_url, chat_id, "/resume/view", "full_resume_cache")
+    full_resume = render_resume_section(
+        "附件简历",
+        base_url,
+        chat_id,
+        "/resume/view_full",
+        "full_resume_cache",
+        request_when_missing=True,
+        check_endpoint="/resume/check_full",
+    )
     resume_text = "\n\n".join(filter(None, [online_resume, full_resume]))
 
     history_lines = render_history_section(base_url, chat_id)
