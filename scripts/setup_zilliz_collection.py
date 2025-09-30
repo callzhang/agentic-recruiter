@@ -22,7 +22,9 @@ def main() -> None:
         return
     store = QAStore(cfg)
     if store.enabled:
-        logging.info("Collection '%s' is ready", cfg.collection_name)
+        logging.info("QA collection '%s' is ready", cfg.collection_name)
+        if store.candidate_collection:
+            logging.info("Candidate collection '%s' is ready", store.candidate_collection.name)
     else:
         logging.error("Failed to initialise QAStore")
 
