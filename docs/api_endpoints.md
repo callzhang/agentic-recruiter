@@ -376,6 +376,40 @@ View a specific recommended candidate's resume.
 }
 ```
 
+### POST `/recommend/select-job`
+Select a specific job from the dropdown menu in the recommendation system.
+
+**Request Body:**
+```json
+{
+  "job_title": "Python Developer"
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "details": "成功选择职位: Python Developer",
+  "selected_job": "Python Developer",
+  "timestamp": "2025-09-27T13:30:00.000Z"
+}
+```
+
+**Error Response:**
+```json
+{
+  "success": false,
+  "details": "未找到包含\"Python Developer\"的职位",
+  "available_jobs": [
+    "Java开发工程师",
+    "前端开发工程师",
+    "数据分析师"
+  ],
+  "timestamp": "2025-09-27T13:30:00.000Z"
+}
+```
+
 ---
 
 ## Search Configuration
