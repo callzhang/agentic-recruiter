@@ -378,6 +378,39 @@ class BossService:
                 'details': result.get('details', ''),
                 'timestamp': datetime.now().isoformat()
             })
+        
+        @self.app.post('/recommend/candidate/{index}/generate-greeting')
+        def generate_greeting_for_candidate(index: int, payload: dict = Body(...)):
+            """Generate AI-powered greeting message for a candidate."""
+            try:
+                # Get candidate info from the recommendation system
+                candidate_info = payload.get('candidate_info', {})
+                job_info = payload.get('job_info', {})
+                
+                # Generate greeting using AI
+                greeting = self.assistant_actions.generate_greeting_for_candidate(
+                    candidate_name=candidate_info.get('name', '候选人'),
+                    candidate_title=candidate_info.get('title', ''),
+                    candidate_summary=candidate_info.get('summary', ''),
+                    job_title=job_info.get('title', ''),
+                    company_description=job_info.get('company_description', ''),
+                    target_profile=job_info.get('target_profile', '')
+                )
+                
+                return JSONResponse({
+                    'success': True,
+                    'greeting': greeting,
+                    'timestamp': datetime.now().isoformat()
+                })
+                
+            except Exception as exc:
+                logger.error(f"Failed to generate greeting: {exc}")
+                return JSONResponse({
+                    'success': False,
+                    'error': str(exc),
+                    'greeting': DEFAULT_GREET_MESSAGE,
+                    'timestamp': datetime.now().isoformat()
+                })
 
         @self.app.post('/recommend/select-job')
         def select_recommend_job(job_title: str = Body(..., embed=True)):

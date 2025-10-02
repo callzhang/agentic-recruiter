@@ -283,6 +283,68 @@ class AssistantActions:
             )
         
         return message
+    
+    def generate_greeting_for_candidate(
+        self,
+        candidate_name: str,
+        candidate_title: str,
+        candidate_summary: str,
+        job_title: str,
+        company_description: str,
+        target_profile: str
+    ) -> str:
+        """
+        Generate AI-powered greeting message for a specific candidate.
+        
+        Args:
+            candidate_name: Name of the candidate
+            candidate_title: Current job title of the candidate
+            candidate_summary: Brief summary of candidate's background
+            job_title: The job title we're recruiting for
+            company_description: Description of our company
+            target_profile: Ideal candidate profile for the role
+            
+        Returns:
+            str: Generated greeting message
+        """
+        if not self.client:
+            return DEFAULT_GREETING
+        
+        prompt = f"""请为以下候选人生成一条专业的打招呼消息：
+
+【候选人信息】
+姓名：{candidate_name}
+当前职位：{candidate_title}
+背景简介：{candidate_summary}
+
+【招聘信息】
+岗位：{job_title}
+公司介绍：{company_description}
+理想人选：{target_profile}
+
+请生成一条：
+1. 专业且真诚的打招呼消息
+2. 突出公司与岗位的亮点
+3. 体现对候选人背景的认可
+4. 长度控制在100-200字
+5. 使用中文，语气友好专业
+
+直接输出消息内容，不要包含其他说明文字。"""
+
+        try:
+            response = self.client.chat.completions.create(
+                model=OPENAI_DEFAULT_MODEL,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.7,
+                max_tokens=300
+            )
+            
+            message = response.choices[0].message.content if response.choices else ""
+            return message.strip() if message else DEFAULT_GREETING
+            
+        except Exception as exc:
+            logger.error(f"Greeting generation failed: {exc}")
+            return DEFAULT_GREETING
 
     def analyze_candidate(
         self, 

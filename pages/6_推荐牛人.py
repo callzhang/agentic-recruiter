@@ -38,6 +38,12 @@ def _render_response(ok: bool, payload: Any) -> None:
     else:
         st.error(f"操作失败: {payload}")
 
+@st.cache_data(show_spinner="获取在线简历中...")
+def _fetch_candidate_resume(index: int) -> str:
+    ok, payload = call_api("GET", f"/recommend/candidate/{index}")
+    if ok and payload.get("success"):
+        return payload['text']
+    return ""
 
 def main() -> None:
     st.title("推荐牛人")
@@ -77,26 +83,61 @@ def main() -> None:
                 "text": item.get("text", "").strip()[:200],
             }
         )
-    st.dataframe(table_rows, width="stretch")
+    st.dataframe(table_rows, width="stretch", hide_index=True)
 
     selected_index = st.selectbox(
         "选择推荐牛人",
         options=[row["index"] for row in table_rows],
-        format_func=lambda idx: f"#{idx} {table_rows[idx]['text'][:40]}",
+        format_func=lambda idx: f"#{idx+1} {table_rows[idx]['text'][:40]}",
     )
 
-    action_col1, action_col2 = st.columns(2)
+    if st.button("查看在线简历", key="view_recommend_resume"):
+        with st.spinner("获取在线简历中..."):
+            payload = _fetch_candidate_resume(selected_index)
+        st.text_area("在线简历", value=payload, height=300)
 
-    if action_col1.button("查看在线简历", key="view_recommend_resume"):
-        ok, payload = call_api("GET", f"/recommend/candidate/{selected_index}")
-        _render_response(ok, payload)
-
-    with action_col2.form("greet_recommend_form_page"):
-        greeting = st.text_area("打招呼内容 (留空使用默认话术)", key="recommend_greet_message")
+    with st.form("greet_recommend_form_page"):
+        col1, col2 = st.columns([3, 1])
+        
+        with col1:
+            greeting = st.text_area("打招呼内容 (留空使用默认话术)", key="recommend_greet_message")
+        
+        with col2:
+            if st.form_submit_button("🤖 AI生成", key="generate_greeting"):
+                # Get candidate and job info for AI generation
+                candidate_info = {
+                    "name": table_rows[selected_index].get("name", "候选人"),
+                    "title": table_rows[selected_index].get("title", ""),
+                    "summary": table_rows[selected_index].get("text", "")[:200] + "..."
+                }
+                
+                job_info = {
+                    "title": st.session_state.get("selected_job", {}).get("title", ""),
+                    "company_description": st.session_state.get("selected_job", {}).get("company_description", ""),
+                    "target_profile": st.session_state.get("selected_job", {}).get("target_profile", "")
+                }
+                
+                with st.spinner("AI正在生成个性化打招呼消息..."):
+                    ok, payload = call_api(
+                        "POST",
+                        f"/recommend/candidate/{selected_index}/generate-greeting",
+                        json={
+                            "candidate_info": candidate_info,
+                            "job_info": job_info
+                        }
+                    )
+                
+                if ok and payload.get("success"):
+                    # Update the text area with generated greeting
+                    st.session_state["recommend_greet_message"] = payload.get("greeting", "")
+                    st.success("AI生成完成！")
+                    st.rerun()
+                else:
+                    st.error(f"AI生成失败: {payload.get('error', '未知错误')}")
+        
         if st.form_submit_button("发送打招呼"):
             data = {"message": greeting} if greeting.strip() else None
             ok, payload = call_api(
-                base_url,
                 "POST",
                 f"/recommend/candidate/{selected_index}/greet",
                 json=data,
