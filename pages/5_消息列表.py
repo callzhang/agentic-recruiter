@@ -136,28 +136,28 @@ def render_resume_section(
             st.caption("点击“加载”以获取内容。")
             return text
 
-        if check_endpoint:
-            check_ok, check_payload = call_api(
-                base_url,
-                "POST",
-                check_endpoint,
-                json={"chat_id": chat_id},
-            )
+            if check_endpoint:
+                check_ok, check_payload = call_api(
+                    base_url,
+                    "POST",
+                    check_endpoint,
+                    json={"chat_id": chat_id},
+                )
             if not (check_ok and isinstance(check_payload, dict) and check_payload.get("available")):
                 detail = (check_payload or {}).get("details") if check_payload else None
                 st.warning(detail or "暂无附件简历，请稍后重试。")
                 if request_when_missing and st.button("请求简历", key=f"request_resume_{chat_id}"):
-                    with st.spinner("请求简历中..."):
-                        ok, payload = call_api(
-                            base_url,
-                            "POST",
-                            "/resume/request",
-                            json={"chat_id": chat_id},
-                        )
-                    if ok:
-                        st.success("已发送简历请求")
-                    else:
-                        st.error(f"请求失败: {payload}")
+                        with st.spinner("请求简历中..."):
+                            ok, payload = call_api(
+                                base_url,
+                                "POST",
+                                "/resume/request",
+                                json={"chat_id": chat_id},
+                            )
+                        if ok:
+                            st.success("已发送简历请求")
+                        else:
+                            st.error(f"请求失败: {payload}")
                 return text
 
         try:
@@ -180,13 +180,17 @@ def render_resume_section(
         return text
 
 
-def render_history_section(base_url: str, chat_id: str) -> List[str]:
+def _get_history_data(base_url: str, chat_id: str) -> List[Dict[str, Any]]:
+    """Fetch history data (separated from UI rendering)"""
     try:
-        history = _fetch_history(base_url, chat_id)
+        return _fetch_history(base_url, chat_id)
     except ValueError as e:
         st.error(str(e))
-        history = []
-    
+        return []
+
+
+def render_history_section(history: List[Dict[str, Any]]) -> None:
+    """Render history section UI (separated from data fetching)"""
     with st.expander("最近 10 条对话", expanded=False):
         if history:
             # Format history data for better table display
@@ -216,7 +220,6 @@ def render_history_section(base_url: str, chat_id: str) -> List[str]:
             )
         else:
             st.info("暂无聊天记录")
-    return history
 
 
 
@@ -264,33 +267,56 @@ def main() -> None:
         st.warning("未能找到选中的候选人，请刷新列表重试")
         return
 
-    # Sync job selection (non-blocking, wrapped in try-except)
+    # Sync job selection
     selected_job = st.session_state["selected_job"]
 
-    # === Lazy Data Loading (only when expanders are opened) ===
-    online_resume = render_resume_section(
-        title="在线简历", 
-        base_url=base_url, 
-        chat_id=chat_id, 
-        endpoint="/resume/online", 
-        cache_key="online_resume_cache")
-    full_resume = render_resume_section(
-        title="附件简历",
-        base_url=base_url,
-        chat_id=chat_id,
-        endpoint="/resume/view_full",
-        cache_key="full_resume_cache",
-        request_when_missing=True,
-        check_endpoint="/resume/check_full",
-    )
-    resume_text = full_resume or online_resume
-
-    # History - loaded on demand
-    history_lines = render_history_section(base_url, chat_id)
+    # === Data Fetching Phase (upfront, cached) ===
+    # Initialize resume cache in session state
+    if "resume_cache" not in st.session_state:
+        st.session_state["resume_cache"] = {}
+    
+    resume_cache_key = f"{chat_id}_resume"
+    
+    # Fetch resume data if not cached or if user explicitly requests refresh
+    if resume_cache_key not in st.session_state["resume_cache"]:
+        with st.spinner("获取简历数据..."):
+            final_resume, resume_source = _fetch_best_resume(base_url, chat_id)
+            st.session_state["resume_cache"][resume_cache_key] = {
+                "text": final_resume,
+                "source": resume_source
+            }
+    
+    # Get cached resume data
+    resume_data = st.session_state["resume_cache"][resume_cache_key]
+    resume_text = resume_data["text"]
+    resume_source = resume_data["source"]
+    
+    # Fetch history data
+    history_lines = _get_history_data(base_url, chat_id)
     history_text = "\n".join([
         f"{item.get('type', 'unknown')}: {item.get('message', '')}"
         for item in history_lines
     ])
+    
+    # === UI Rendering Phase (display data in expanders) ===
+    # Resume expanders - now filled with cached data
+    with st.expander("简历信息", expanded=False):
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("简历来源", resume_source)
+        with col2:
+            if st.button("🔄 刷新简历", key=f"refresh_resume_{chat_id}"):
+                # Clear cache and reload
+                st.session_state["resume_cache"].pop(resume_cache_key, None)
+                st.rerun()
+        
+        if resume_text and resume_text != "无简历数据":
+            st.text_area("简历内容", value=resume_text, height=300, key=f"resume_display_{chat_id}")
+        else:
+            st.warning("暂无简历数据")
+    
+    # History expander - now filled with fetched data
+    render_history_section(history_lines)
 
     # === Scoring Section (user-triggered) ===
     st.subheader("自动评分")
@@ -302,20 +328,11 @@ def main() -> None:
         label_visibility="collapsed"
     )
     if st.button("Analyze", key=f"analyze_{chat_id}"):
-        # Fetch resume before analysis (full resume preferred, online as fallback)
-        with st.spinner("获取简历中..."):
-            final_resume, resume_source = _fetch_best_resume(base_url, chat_id)
-        
-        if resume_source != "无":
-            st.info(f"✓ 已获取{resume_source}")
-        else:
-            st.warning("⚠️ 未能获取简历，将使用空简历进行分析")
-        
-        # Proceed with analysis
+        # Use cached resume data
         context = {
             "job_description": selected_job.get("description", ""),
             "target_profile": selected_job.get("target_profile", ""),
-            "candidate_resume": final_resume,
+            "candidate_resume": resume_text,
             "chat_history": history_text or "无",
             "notes": notes,
         }
@@ -350,17 +367,11 @@ def main() -> None:
     col_generate, col_send = st.columns(2)
     # Generate button
     if col_generate.button("生成建议", key=f"generate_msg_{chat_id}"):
-        # Fetch resume before generating message
-        with st.spinner("获取简历中..."):
-            final_resume, resume_source = _fetch_best_resume(base_url, chat_id)
-        
-        if resume_source != "无":
-            st.info(f"✓ 已获取{resume_source}")
-        
+        # Use cached resume data
         context = {
             "job_description": selected_job.get("description", ""),
             "target_profile": selected_job.get("target_profile", ""),
-            "candidate_resume": final_resume,
+            "candidate_resume": resume_text,
             "chat_history": history_text or "无",
             "notes": draft,
         }
