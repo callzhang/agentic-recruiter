@@ -130,44 +130,14 @@ def render_resume_section(
         cols = st.columns([1, 1, 3])
         if cols[0].button("加载", key=f"load_{cache_key}_{chat_id}"):
             st.session_state[load_state_key] = True
-        if cols[1].button("刷新", key=f"refresh_{cache_key}_{chat_id}"):
-            st.session_state.setdefault(cache_key, {}).pop(chat_id, None)
-            st.session_state[load_state_key] = False
 
         load_state = st.session_state.get(load_state_key, False)
         if not load_state:
             st.caption("点击“加载”以获取内容。")
             return text
 
-            if check_endpoint:
-                check_ok, check_payload = call_api(
-                    base_url,
-                    "POST",
-                    check_endpoint,
-                    json={"chat_id": chat_id},
-                )
-            if not (check_ok and isinstance(check_payload, dict) and check_payload.get("available")):
-                detail = (check_payload or {}).get("details") if check_payload else None
-                st.warning(detail or "暂无附件简历，请稍后重试。")
-                if request_when_missing and st.button("请求简历", key=f"request_resume_{chat_id}"):
-                        with st.spinner("请求简历中..."):
-                            ok, payload = call_api(
-                                base_url,
-                                "POST",
-                                "/resume/request",
-                                json={"chat_id": chat_id},
-                            )
-                        if ok:
-                            st.success("已发送简历请求")
-                        else:
-                            st.error(f"请求失败: {payload}")
-                return text
-
-        try:
+        if st.session_state[load_state_key]:
             data = _fetch_resume(base_url, chat_id, endpoint)
-        except ValueError as e:
-            st.error(str(e))
-            return text
 
         success = bool(data and data.get("success", True))
         if not success:
@@ -306,7 +276,7 @@ def main() -> None:
 
     # === Scoring Section (user-triggered) ===
     st.subheader("自动评分")
-    notes = st.text_area(
+    notes = st.text_input(
         "自动评分", 
         placeholder="补充说明 (可选)", 
         value="", 
@@ -349,7 +319,8 @@ def main() -> None:
     st.subheader("生成消息")
     message_state = st.session_state.setdefault("generated_messages", {})
     draft = message_state.get(chat_id, "")
-    draft = st.text_area("消息内容", value=draft, height=180, key=f"message_draft_{chat_id}")
+    draft_message = st.empty()
+    draft = draft_message.text_area("消息内容", value=draft, height=180, key=f"message_draft_{chat_id}")
     col_generate, col_send = st.columns(2)
     # Generate button
     if col_generate.button("生成建议", key=f"generate_msg_{chat_id}"):
@@ -374,9 +345,10 @@ def main() -> None:
         if message:
             message_state[chat_id] = message
             st.success("生成完成！")
+            draft_message.text_area("消息内容", value=message, height=180)
             st.rerun()
         else:
-            st.error("生成失败")
+            st.error(f"生成失败: {payload}")
     # Send button
     if col_send.button("发送消息", key=f"send_msg_{chat_id}"):
         content = draft.strip()

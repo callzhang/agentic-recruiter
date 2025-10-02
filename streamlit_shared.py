@@ -226,9 +226,7 @@ def call_api(base_url: str, method: str, path: str, **kwargs) -> Tuple[bool, Any
         response = requests.request(method.upper(), url, timeout=30, **kwargs)
         response.raise_for_status()
         content_type = response.headers.get("content-type", "")
-        if "application/json" in content_type:
-            return True, response.json()
-        return True, response.text
+        return True, response.json()
     except requests.RequestException as exc:
         return False, str(exc)
     except json.JSONDecodeError:
