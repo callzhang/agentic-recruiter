@@ -83,7 +83,6 @@ class BossService:
             self.shutdown_requested = False
             self.startup_complete = threading.Event() # Event to signal startup completion
             self.browser_lock = threading.Lock()  # Critical: protect Playwright resources from concurrent access
-            self.browser_needs_restart = False  # Flag to indicate browser is broken and needs restart
             self.scheduler: BRDWorkScheduler | None = None
             self.scheduler_lock = threading.Lock()
             self.scheduler_config: dict[str, Any] = {}
@@ -1107,13 +1106,6 @@ class BossService:
         
         DO NOT call this method directly - always use _ensure_browser_session() instead.
         """
-        # Check if browser needs restart due to previous greenlet error
-        if self.browser_needs_restart:
-            logger.info("Browser restart required (previously marked), restarting now...")
-            self.browser_needs_restart = False
-            self.start_browser()
-            return
-        
         if not self.context:
             logger.warning("浏览器Context不存在，将重新启动。")
             self.start_browser()
@@ -1160,10 +1152,8 @@ class BossService:
             # Check for greenlet errors which indicate thread corruption
             error_str = str(e).lower()
             if 'greenlet' in error_str or 'thread' in error_str:
-                logger.error(f"Greenlet/thread error detected, marking browser for restart: {e}")
-                # For greenlet errors, mark for restart but don't block current request
-                # The restart will happen on the next request
-                self.browser_needs_restart = True
+                logger.error(f"Greenlet/thread error detected, clearing context: {e}")
+                # For greenlet errors, simply clear the context and let next request restart
                 try:
                     if hasattr(self, 'playwright') and self.playwright:
                         try:
@@ -1175,7 +1165,7 @@ class BossService:
                     self.context = None
                 except:
                     pass
-                # Raise error immediately instead of blocking on restart
+                # Raise error immediately - next request will see context=None and restart
                 raise RuntimeError("Browser session corrupted, please retry in a moment")
             
             # For other errors, try to recreate just the page
