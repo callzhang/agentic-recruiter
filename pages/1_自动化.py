@@ -11,10 +11,8 @@ def main() -> None:
     ensure_state()
     sidebar_controls(include_config_path=True)
 
-    base_url = st.session_state["base_url"]
-
     with st.spinner("获取调度器状态..."):
-        status_ok, status_payload = call_api(base_url, "GET", "/automation/scheduler/status")
+        status_ok, status_payload = call_api("GET", "/automation/scheduler/status")
 
     running = bool(status_ok and isinstance(status_payload, dict) and status_payload.get("running"))
 
@@ -25,7 +23,7 @@ def main() -> None:
             st.json(config)
         if st.button("停止调度器", key="scheduler_toggle"):
             with st.spinner("停止调度器..."):
-                ok, payload = call_api(base_url, "POST", "/automation/scheduler/stop")
+                ok, payload = call_api("POST", "/automation/scheduler/stop")
             if ok:
                 st.success("调度器已停止")
                 st.rerun()

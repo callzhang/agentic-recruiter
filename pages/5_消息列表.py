@@ -18,9 +18,9 @@ DEFAULT_HISTORY_LIMIT = 10
 
 
 @st.cache_data(ttl=600, show_spinner="获取消息列表中...")
-def _get_dialogs_cached(base_url: str, limit: int) -> List[Dict[str, Any]]:
+def _get_dialogs_cached(limit: int) -> List[Dict[str, Any]]:
     """Cached message fetching - depends only on inputs, not session state."""
-    ok, payload = call_api(base_url, "GET", "/chat/dialogs", params={"limit": limit})
+    ok, payload = call_api("GET", "/chat/dialogs", params={"limit": limit})
     if not ok:
         raise ValueError(f"获取消息列表失败: {payload}")
     messages = payload.get("messages") or []
@@ -29,9 +29,9 @@ def _get_dialogs_cached(base_url: str, limit: int) -> List[Dict[str, Any]]:
     return messages
 
 @st.cache_data(ttl=300, show_spinner="获取简历中...")
-def _fetch_resume(base_url: str, chat_id: str, endpoint: str) -> Optional[Dict[str, Any]]:
+def _fetch_resume(chat_id: str, endpoint: str) -> Optional[Dict[str, Any]]:
     """Fetch resume data with Streamlit caching."""
-    ok, payload = call_api(base_url, "POST", endpoint, json={"chat_id": chat_id})
+    ok, payload = call_api("POST", endpoint, json={"chat_id": chat_id})
     if not ok or not isinstance(payload, dict):
         # Don't cache errors - raise exception to skip caching
         raise ValueError(f"获取简历失败: {payload}")
@@ -39,9 +39,9 @@ def _fetch_resume(base_url: str, chat_id: str, endpoint: str) -> Optional[Dict[s
 
 
 @st.cache_data(ttl=300, show_spinner="获取聊天记录中...")
-def _fetch_history(base_url: str, chat_id: str) -> List[str]:
+def _fetch_history(chat_id: str) -> List[str]:
     """Fetch chat history with Streamlit caching."""
-    ok, payload = call_api(base_url, "GET", f"/chat/{chat_id}/messages")
+    ok, payload = call_api("GET", f"/chat/{chat_id}/messages")
     messages: List[str] = []
     if ok and isinstance(payload, dict):
         raw = payload.get("messages") 
@@ -53,7 +53,7 @@ def _fetch_history(base_url: str, chat_id: str) -> List[str]:
 
 
 @st.cache_data(ttl=600, show_spinner="获取简历中...")
-def _fetch_best_resume(base_url: str, chat_id: str) -> tuple[str, str]:
+def _fetch_best_resume(chat_id: str) -> tuple[str, str]:
     """
     Fetch best available resume (full resume preferred, online as fallback).
     
@@ -64,27 +64,21 @@ def _fetch_best_resume(base_url: str, chat_id: str) -> tuple[str, str]:
     """
     # Step 1: Check if full resume is available
     ok_check, check_payload = call_api(
-        base_url, "POST", "/resume/check_full",
+        "POST", "/resume/check_full",
         json={"chat_id": chat_id}
     )
     
     if ok_check and check_payload.get("available"):
         # Step 2: Get full resume if available
-        ok_full, full_payload = call_api(
-            base_url, "POST", "/resume/view_full",
-            json={"chat_id": chat_id}
-        )
-        if ok_full and full_payload.get("success"):
+        full_payload = _fetch_full_resume(chat_id)
+        if full_payload.get("success"):
             resume_text = full_payload.get("text", "")
             if resume_text:
                 return resume_text, "附件简历"
     
     # Step 3: Fallback to online resume
-    ok_online, online_payload = call_api(
-        base_url, "POST", "/resume/online",
-        json={"chat_id": chat_id}
-    )
-    if ok_online and online_payload.get("success"):
+    online_payload = _fetch_online_resume(chat_id)
+    if online_payload.get("success"):
         resume_text = online_payload.get("text", "")
         if resume_text:
             return resume_text, "在线简历"
@@ -92,7 +86,22 @@ def _fetch_best_resume(base_url: str, chat_id: str) -> tuple[str, str]:
     return "无简历数据", "无"
 
 
+@st.cache_data(show_spinner="获取简历中...")
+def _fetch_full_resume(chat_id: str) -> Dict[str, Any]:
+    """Fetch full resume with Streamlit caching."""
+    ok, payload = call_api("POST", "/resume/view_full", json={"chat_id": chat_id})
+    if not ok or not isinstance(payload, dict):
+        raise ValueError(f"获取简历失败: {payload}")
+    return payload
 
+
+@st.cache_data(show_spinner="获取简历中...")
+def _fetch_online_resume(chat_id: str) -> Dict[str, Any]:
+    """Fetch online resume with Streamlit caching."""
+    ok, payload = call_api("POST", "/resume/online", json={"chat_id": chat_id})
+    if not ok or not isinstance(payload, dict):
+        raise ValueError(f"获取简历失败: {payload}")
+    return payload
 
 
 
@@ -102,7 +111,6 @@ def _fetch_best_resume(base_url: str, chat_id: str) -> tuple[str, str]:
 
 def render_resume_section(
     title: str,
-    base_url: str,
     chat_id: str,
     endpoint: str,
     cache_key: str,
@@ -114,7 +122,6 @@ def render_resume_section(
 
     参数:
         title (str): 展开区块标题。
-        base_url (str): 后端服务基础URL。
         chat_id (str): 聊天会话ID。
         endpoint (str): 获取简历的API端点。
         cache_key (str): 用于缓存的唯一键。
@@ -137,7 +144,7 @@ def render_resume_section(
             return text
 
         if st.session_state[load_state_key]:
-            data = _fetch_resume(base_url, chat_id, endpoint)
+            data = _fetch_resume(chat_id, endpoint)
 
         success = bool(data and data.get("success", True))
         if not success:
@@ -153,10 +160,10 @@ def render_resume_section(
         return text
 
 
-def _get_history_data(base_url: str, chat_id: str) -> List[Dict[str, Any]]:
+def _get_history_data(chat_id: str) -> List[Dict[str, Any]]:
     """Fetch history data (separated from UI rendering)"""
     try:
-        return _fetch_history(base_url, chat_id)
+        return _fetch_history(chat_id)
     except ValueError as e:
         st.error(str(e))
         return []
@@ -206,13 +213,10 @@ def main() -> None:
     ensure_state()
     sidebar_controls(include_config_path=False, include_job_selector=True)
     
-    # Get base_url from session state
-    base_url = st.session_state["base_url"]
-
     # === Data Loading Phase (cached, fast) ===
     limit = st.sidebar.slider("每次获取对话数量", min_value=5, max_value=100, value=30, step=5)
     with st.spinner("获取聊天对话数据中..."):
-        dialogs = _get_dialogs_cached(base_url, limit)
+        dialogs = _get_dialogs_cached(limit)
 
     if not dialogs:
         st.info("暂无聊天对话数据。。。")
@@ -245,10 +249,10 @@ def main() -> None:
 
     # === Data Fetching Phase (upfront, cached by Streamlit) ===
     # Fetch resume data (cached by @st.cache_data for 10 minutes)
-    resume_text, resume_source = _fetch_best_resume(base_url, chat_id)
+    resume_text, resume_source = _fetch_best_resume(chat_id)
     
     # Fetch history data (cached by @st.cache_data for 5 minutes)
-    history_lines = _get_history_data(base_url, chat_id)
+    history_lines = _get_history_data(chat_id)
     history_text = "\n".join([
         f"{item.get('type', 'unknown')}: {item.get('message', '')}"
         for item in history_lines
@@ -294,7 +298,7 @@ def main() -> None:
         }
         with st.spinner("分析中..."):
             ok, payload = call_api(
-                base_url, "POST", "/assistant/analyze-candidate",
+                "POST", "/assistant/analyze-candidate",
                 json={"chat_id": chat_id, "context": context}
             )
             if ok and payload.get("success"):
@@ -334,7 +338,7 @@ def main() -> None:
         }
         with st.spinner("生成中..."):
             ok, payload = call_api(
-                base_url, "POST", "/assistant/generate-followup",
+                "POST", "/assistant/generate-followup",
                 json={
                     "chat_id": chat_id,
                     "prompt": draft or "",
@@ -357,7 +361,6 @@ def main() -> None:
         else:
             with st.spinner("发送中..."):
                 ok, payload = call_api(
-                    base_url,
                     "POST",
                     f"/chat/{chat_id}/send",
                     json={"message": content},

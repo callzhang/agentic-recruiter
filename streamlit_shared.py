@@ -216,11 +216,14 @@ def refresh_config() -> None:
     st.session_state["_last_saved_yaml"] = _dump_yaml(config)
 
 
-def call_api(base_url: str, method: str, path: str, **kwargs) -> Tuple[bool, Any]:
+def call_api(method: str, path: str, **kwargs) -> Tuple[bool, Any]:
     """Make HTTP request to boss_service API.
+    
+    Automatically uses base_url from st.session_state["base_url"].
     
     Note: Spinner should be used by callers with: with st.spinner("..."):
     """
+    base_url = st.session_state.get("base_url", DEFAULT_BASE_URL)
     url = base_url.rstrip("/") + path
     try:
         response = requests.request(method.upper(), url, timeout=30, **kwargs)
