@@ -52,9 +52,12 @@ def _fetch_history(base_url: str, chat_id: str) -> List[str]:
     return messages
 
 
+@st.cache_data(ttl=600, show_spinner="获取简历中...")
 def _fetch_best_resume(base_url: str, chat_id: str) -> tuple[str, str]:
     """
     Fetch best available resume (full resume preferred, online as fallback).
+    
+    Cached for 10 minutes to improve performance.
     
     Returns:
         tuple[str, str]: (resume_text, source) where source is "附件简历" or "在线简历"
@@ -270,28 +273,11 @@ def main() -> None:
     # Sync job selection
     selected_job = st.session_state["selected_job"]
 
-    # === Data Fetching Phase (upfront, cached) ===
-    # Initialize resume cache in session state
-    if "resume_cache" not in st.session_state:
-        st.session_state["resume_cache"] = {}
+    # === Data Fetching Phase (upfront, cached by Streamlit) ===
+    # Fetch resume data (cached by @st.cache_data for 10 minutes)
+    resume_text, resume_source = _fetch_best_resume(base_url, chat_id)
     
-    resume_cache_key = f"{chat_id}_resume"
-    
-    # Fetch resume data if not cached or if user explicitly requests refresh
-    if resume_cache_key not in st.session_state["resume_cache"]:
-        with st.spinner("获取简历数据..."):
-            final_resume, resume_source = _fetch_best_resume(base_url, chat_id)
-            st.session_state["resume_cache"][resume_cache_key] = {
-                "text": final_resume,
-                "source": resume_source
-            }
-    
-    # Get cached resume data
-    resume_data = st.session_state["resume_cache"][resume_cache_key]
-    resume_text = resume_data["text"]
-    resume_source = resume_data["source"]
-    
-    # Fetch history data
+    # Fetch history data (cached by @st.cache_data for 5 minutes)
     history_lines = _get_history_data(base_url, chat_id)
     history_text = "\n".join([
         f"{item.get('type', 'unknown')}: {item.get('message', '')}"
@@ -306,8 +292,8 @@ def main() -> None:
             st.metric("简历来源", resume_source)
         with col2:
             if st.button("🔄 刷新简历", key=f"refresh_resume_{chat_id}"):
-                # Clear cache and reload
-                st.session_state["resume_cache"].pop(resume_cache_key, None)
+                # Clear Streamlit cache and reload
+                _fetch_best_resume.clear()
                 st.rerun()
         
         if resume_text and resume_text != "无简历数据":
