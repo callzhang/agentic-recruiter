@@ -134,10 +134,14 @@ class ResponseListener:
                                             if self.logger:
                                                 self.logger.debug(f"Cached chat data: {found['chat_id']}")
                                             
-                except Exception as e:
-                    # Silently handle response processing errors
-                    if self.logger:
-                        self.logger.debug(f"Response processing error: {e}")
+                except BaseException as e:
+                    # Silently handle ALL errors including greenlet errors
+                    # Greenlet errors can occur when response callbacks fire during concurrent requests
+                    error_str = str(e).lower()
+                    if 'greenlet' not in error_str and 'thread' not in error_str:
+                        # Log non-greenlet errors for debugging
+                        if self.logger:
+                            self.logger.debug(f"Response processing error: {e}")
                     return
             
             context.on("response", _on_response)

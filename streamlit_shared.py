@@ -215,7 +215,7 @@ def refresh_config() -> None:
     st.session_state["_config_loaded_path"] = str(path)
     st.session_state["_last_saved_yaml"] = _dump_yaml(config)
 
-@st.spinner("正在请求 API...")
+
 def call_api(base_url: str, method: str, path: str, **kwargs) -> Tuple[bool, Any]:
     """Make HTTP request to boss_service API.
     
