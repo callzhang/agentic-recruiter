@@ -28,11 +28,35 @@ class AssistantActions:
     def __init__(self, store: CandidateStore | None = None) -> None:
         self.store = store or candidate_store
         self.enabled = bool(self.store and self.store.enabled)
-        api_key = os.getenv("OPENAI_API_KEY")
+        api_key = self._load_openai_key()
         if OpenAI and api_key:
             self.client = OpenAI(api_key=api_key)
         else:
             self.client = None
+    
+    def _load_openai_key(self) -> Optional[str]:
+        """Load OpenAI API key from environment or config file."""
+        # Try environment variable first
+        api_key = os.getenv("OPENAI_API_KEY")
+        if api_key:
+            return api_key
+        
+        # Try loading from config/secrets.yaml
+        try:
+            import yaml
+            from pathlib import Path
+            config_path = Path("config/secrets.yaml")
+            if config_path.exists():
+                with open(config_path, "r") as f:
+                    config = yaml.safe_load(f) or {}
+                    openai_config = config.get("openai", {})
+                    api_key = openai_config.get("api_key", "")
+                    if api_key:
+                        return api_key
+        except Exception as e:
+            logger.warning(f"Failed to load OpenAI key from config: {e}")
+        
+        return None
 
     # Embeddings ----------------------------------------------------
     @lru_cache(maxsize=1000)
@@ -267,8 +291,7 @@ class AssistantActions:
     ) -> Optional[Dict[str, Any]]:
         """Analyze candidate and return scoring results."""
         if not self.client:
-            logger.warning("OpenAI client not available for candidate analysis")
-            return None
+            raise SystemError("OpenAI client not available for candidate analysis")
         
         prompt = f"""请基于以下信息对候选人做出量化评估。
 
