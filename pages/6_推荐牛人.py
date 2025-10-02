@@ -76,7 +76,7 @@ def main() -> None:
                 "text": item.get("text", "").strip()[:200],
             }
         )
-    st.dataframe(table_rows, use_container_width=True)
+    st.dataframe(table_rows, width="stretch")
 
     selected_index = st.selectbox(
         "选择推荐牛人",

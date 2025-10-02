@@ -9,6 +9,7 @@ headless = false
 runOnSave = true
 enableCORS = false
 enableXsrfProtection = false
+fileWatcherType = "poll"
 
 [browser]
 # Browser settings
@@ -18,8 +19,7 @@ serverPort = 8501
 
 [logger]
 # Logging configuration
-level = "debug"
-messageFormat = "%(asctime)s.%(msecs)03d %(color)s%(levelname)-8s%(end_color)s %(name)s: %(message)s"
+# level = "debug"
 
 [theme]
 # Theme settings (optional)

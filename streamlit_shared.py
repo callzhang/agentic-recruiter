@@ -5,17 +5,11 @@ import json
 import os
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
-
-import logging
-
 import requests
 import streamlit as st
 import yaml
 
 
-# Use the global logger instead of basicConfig to avoid conflicts with colorlog
-from src.global_logger import get_logger
-app_logger = get_logger()
 
 DEFAULT_BASE_URL = os.environ.get("BOSS_SERVICE_BASE_URL", "http://127.0.0.1:5001")
 DEFAULT_CRITERIA_PATH = Path(os.environ.get("BOSS_CRITERIA_PATH", "config/jobs.yaml"))
@@ -32,8 +26,8 @@ def ensure_state() -> None:
         st.session_state["criteria_path"] = str(candidate)
     if "_last_saved_yaml" not in st.session_state:
         st.session_state["_last_saved_yaml"] = None
-    if "selected_job_index" not in st.session_state:
-        st.session_state["selected_job_index"] = 0
+    if "selected_job" not in st.session_state:
+        st.session_state["selected_job"] = None
     if "_jobs_cache" not in st.session_state:
         st.session_state["_jobs_cache"] = []
 
@@ -127,25 +121,6 @@ def sidebar_controls(*, include_config_path: bool = False) -> None:
         config_path = selected_config.resolve()
         st.session_state["criteria_path"] = str(config_path)
         st.session_state.pop("_jobs_cache", None)
-
-    jobs = st.session_state.get("_jobs_cache")
-    if not jobs or not isinstance(jobs, list):
-        jobs = load_jobs_from_path(config_path)
-        st.session_state["_jobs_cache"] = jobs
-
-    if jobs:
-        job_options = [f"{role.get('id', '')} - {role.get('position', '')}" for role in jobs]
-        current_index = st.session_state.get("selected_job_index", 0)
-        selected_index = st.sidebar.selectbox(
-            "默认岗位画像",
-            options=list(range(len(job_options))),
-            format_func=lambda i: job_options[i],
-            index=min(current_index, len(job_options) - 1),
-            key="__job_profile_select__",
-        )
-        st.session_state["selected_job_index"] = selected_index
-    else:
-        st.sidebar.caption("未找到岗位画像配置")
 
 
 def get_config_path() -> Path:

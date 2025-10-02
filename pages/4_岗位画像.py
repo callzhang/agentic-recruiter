@@ -16,7 +16,23 @@ from streamlit_shared import (
     get_config_data,
     sidebar_controls,
 )
-from streamlit_tags import st_tags
+
+
+@st.dialog("确认删除岗位")
+def confirm_delete_role_dialog(role_name: str, role_idx: int, roles: list):
+    """显示删除岗位确认对话框"""
+    st.warning(f"⚠️ 您确定要删除岗位 **{role_name}** 吗？")
+    st.write("此操作无法撤销！")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("✅ 确认删除", type="primary", width="stretch"):
+            roles.pop(role_idx)
+            st.success(f"岗位 '{role_name}' 已删除")
+            st.rerun()
+    with col2:
+        if st.button("❌ 取消", width="stretch"):
+            st.rerun()
 
 
 def _generate_role_id(position: str, existing_ids: Set[str]) -> str:
@@ -47,10 +63,6 @@ def _create_role(position: str, desired_id: str | None, existing_ids: Set[str]) 
         "requirements": "",
         "description": "",
         "target_profile": "",
-        "communication": {
-            "greeting_templates": [],
-            "followup_templates": [],
-        },
         "keywords": {"positive": [], "negative": []},
     }
 
@@ -92,42 +104,28 @@ def _edit_role(role: Dict[str, Any], idx: int) -> None:
         key=f"role_{idx}_target",
     )
 
-    comms = ensure_dict(role, "communication")
-    st.markdown("**沟通设置**")
-    comms["greeting_templates"] = [
-        line.strip()
-        for line in st.text_area(
-            "打招呼模板 (每行一条)",
-            value="\n".join(comms.get("greeting_templates", [])),
-            key=f"role_{idx}_greetings",
-        ).splitlines()
-        if line.strip()
-    ]
-    comms["followup_templates"] = [
-        line.strip()
-        for line in st.text_area(
-            "跟进模板 (每行一条)",
-            value="\n".join(comms.get("followup_templates", [])),
-            key=f"role_{idx}_followups",
-        ).splitlines()
-        if line.strip()
-    ]
-
     keywords = ensure_dict(role, "keywords")
     st.markdown("**关键词**")
-    keywords["positive"] = st_tags(
+    
+    # Ensure keywords are lists of strings
+    positive_keywords = keywords.get("positive", [])
+    negative_keywords = keywords.get("negative", [])
+    
+    keywords["positive"] = st.multiselect(
         label="正向关键词",
-        text="输入关键词后回车",
-        value=keywords["positive"],
-        maxtags=None,
+        # text="输入关键词后回车",
+        options=positive_keywords,
+        default=positive_keywords,
         key=f"role_{idx}_keywords_positive",
+        accept_new_options=True,
     )
-    keywords["negative"] = st_tags(
+    keywords["negative"] = st.multiselect(
         label="负向关键词",
-        text="输入关键词后回车",
-        value=keywords["negative"],
-        maxtags=None,
+        # text="输入关键词后回车", 
+        options=negative_keywords,
+        default=negative_keywords,
         key=f"role_{idx}_keywords_negative",
+        accept_new_options=True,
     )
 
     st.markdown("**其它字段 (YAML)**")
@@ -140,7 +138,6 @@ def _edit_role(role: Dict[str, Any], idx: int) -> None:
         "description",
         "target_profile",
         "keywords",
-        "communication",
     }
     extra = {k: deepcopy(v) for k, v in role.items() if k not in handled}
     extra_yaml = yaml.safe_dump(extra, allow_unicode=True, sort_keys=False) if extra else ""
@@ -194,24 +191,46 @@ def main() -> None:
     for idx, tab in enumerate(tabs[:-1]):
         with tab:
             _edit_role(roles[idx], idx)
-            if st.button("删除该岗位", key=f"role_delete_{idx}"):
-                roles.pop(idx)
-                st.rerun()
+            role_name = roles[idx].get("position") or roles[idx].get("id") or f"岗位#{idx + 1}"
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("💾 保存", key=f"role_save_{idx}", type="primary", width="stretch"):
+                    auto_save_config(config)
+                    st.success(f"岗位『{role_name}』已保存")
+            with col2:
+                if st.button("🗑️ 删除该岗位", key=f"role_delete_{idx}", type="secondary", width="stretch"):
+                    confirm_delete_role_dialog(role_name, idx, roles)
 
     with tabs[-1]:
         st.markdown("### 新增岗位画像")
         new_position = st.text_input("岗位名称", key="new_role_position")
         new_role_id = st.text_input("岗位 ID (可选)", key="new_role_id")
-        if st.button("新增岗位", key="roles_add_tab"):
-            if not new_position.strip():
-                st.warning("岗位名称不能为空")
-            else:
-                roles.append(_create_role(new_position, new_role_id, existing_ids))
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("💾 保存新岗位", key="save_new_role", type="primary", width="stretch"):
+                if not new_position.strip():
+                    st.warning("岗位名称不能为空")
+                else:
+                    roles.append(_create_role(new_position, new_role_id, existing_ids))
+                    auto_save_config(config)
+                    st.success("新岗位已保存")
+                    st.session_state["new_role_position"] = ""
+                    st.session_state["new_role_id"] = ""
+                    st.rerun()
+        with col2:
+            if st.button("🗑️ 清空输入", key="clear_new_role", type="secondary", width="stretch"):
                 st.session_state["new_role_position"] = ""
                 st.session_state["new_role_id"] = ""
-                st.rerun()
 
-    auto_save_config(config)
+        # Optionally, keep the old "新增岗位" button for compatibility
+        # if st.button("新增岗位", key="roles_add_tab"):
+        #     if not new_position.strip():
+        #         st.warning("岗位名称不能为空")
+        #     else:
+        #         roles.append(_create_role(new_position, new_role_id, existing_ids))
+        #         st.session_state["new_role_position"] = ""
+        #         st.session_state["new_role_id"] = ""
+        #         st.rerun()
 
 
 if __name__ == "__main__":
