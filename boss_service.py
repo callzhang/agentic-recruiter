@@ -43,7 +43,6 @@ from src.recommendation_actions import (
     select_recommend_job_action,
     _prepare_recommendation_page,
 )
-from src.events import EventManager
 from src.global_logger import get_logger
 from src.candidate_store import candidate_store
 from src.assistant_actions import assistant_actions, DEFAULT_GREETING
@@ -96,8 +95,6 @@ class BossService:
             
             self.initialized = True
             self.setup_routes()
-            # 事件驱动的消息缓存和响应监听器
-            self.event_manager = EventManager(logger=logging.getLogger(__name__))
     
     # Service Methods ----------------------------------------------------------
     
@@ -195,23 +192,7 @@ class BossService:
         return options
 
     def _compose_greeting_context(self, chat_id: str) -> str:
-        cache_entry = None
-        try:
-            cache_entry = self.event_manager.chat_cache.get(chat_id)
-        except Exception:
-            cache_entry = None
-        if cache_entry:
-            candidate = cache_entry.get('candidate') or cache_entry.get('name') or ''
-            job_title = cache_entry.get('job_title') or ''
-            latest_message = cache_entry.get('message') or ''
-            parts = [
-                f"候选人: {candidate}" if candidate else None,
-                f"意向岗位: {job_title}" if job_title else None,
-                f"最近留言: {latest_message}" if latest_message else None,
-            ]
-            context = "；".join(part for part in parts if part)
-            if context:
-                return context
+        """Compose greeting context from chat ID (cache removed for simplicity)"""
         return f"Chat ID: {chat_id}"
 
     def send_greeting(self, chat_id: str, message: str | None = None) -> Dict[str, Any]:
@@ -221,14 +202,7 @@ class BossService:
         result = send_message_action(self.page, chat_id, final_message)
         success = result.get('success', False)
         if success and getattr(self.assistant_actions, 'enabled', False):
-            try:
-                cache_entry = self.event_manager.chat_cache.get(chat_id)
-            except Exception:
-                cache_entry = None
-            job_title = (cache_entry or {}).get('job_title', '')
             keywords = ['greeting']
-            if job_title:
-                keywords.append(job_title)
             try:
                 self.assistant_actions.record_qa(
                     qa_id=f"greet_{chat_id}",
@@ -348,11 +322,7 @@ class BossService:
             """
             self._ensure_browser_session()
 
-            messages = get_messages_list_action(
-                self.page, 
-                limit, 
-                chat_cache=self.event_manager.chat_cache
-            )
+            messages = get_messages_list_action(self.page, limit)
             return JSONResponse({
                 'success': True,
                 'messages': messages,
@@ -1009,9 +979,7 @@ class BossService:
         else:
             self.page = self.context.new_page()
 
-        if self.context:
-            self.event_manager.setup(self.context)
-            logger.info("事件管理器设置成功")
+        # Event manager removed for simplicity
 
         if settings.BASE_URL not in getattr(self.page, 'url', ''):
             logger.info("导航到聊天页面...")
