@@ -6,3 +6,5 @@ vendor/get_jobs/
 .cursor/
 __pycache__/
 config/secrets.yaml
+data/state.json
+screenshots/
