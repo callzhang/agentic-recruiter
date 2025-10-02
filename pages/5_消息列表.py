@@ -49,7 +49,44 @@ def _fetch_history(base_url: str, chat_id: str) -> List[str]:
             messages.append(item)
     else:
         raise ValueError(f"获取聊天记录失败: {payload}")
-    return messages[-DEFAULT_HISTORY_LIMIT:]
+    return messages
+
+
+def _fetch_best_resume(base_url: str, chat_id: str) -> tuple[str, str]:
+    """
+    Fetch best available resume (full resume preferred, online as fallback).
+    
+    Returns:
+        tuple[str, str]: (resume_text, source) where source is "附件简历" or "在线简历"
+    """
+    # Step 1: Check if full resume is available
+    ok_check, check_payload = call_api(
+        base_url, "POST", "/resume/check_full",
+        json={"chat_id": chat_id}
+    )
+    
+    if ok_check and check_payload.get("available"):
+        # Step 2: Get full resume if available
+        ok_full, full_payload = call_api(
+            base_url, "POST", "/resume/view_full",
+            json={"chat_id": chat_id}
+        )
+        if ok_full and full_payload.get("success"):
+            resume_text = full_payload.get("text", "")
+            if resume_text:
+                return resume_text, "附件简历"
+    
+    # Step 3: Fallback to online resume
+    ok_online, online_payload = call_api(
+        base_url, "POST", "/resume/online",
+        json={"chat_id": chat_id}
+    )
+    if ok_online and online_payload.get("success"):
+        resume_text = online_payload.get("text", "")
+        if resume_text:
+            return resume_text, "在线简历"
+    
+    return "无简历数据", "无"
 
 
 
@@ -258,17 +295,27 @@ def main() -> None:
     # === Scoring Section (user-triggered) ===
     st.subheader("自动评分")
     notes = st.text_area(
-        "补充说明", 
+        "自动评分", 
         placeholder="补充说明 (可选)", 
         value="", 
         key=f"score_notes_{chat_id}", 
         label_visibility="collapsed"
     )
     if st.button("Analyze", key=f"analyze_{chat_id}"):
+        # Fetch resume before analysis (full resume preferred, online as fallback)
+        with st.spinner("获取简历中..."):
+            final_resume, resume_source = _fetch_best_resume(base_url, chat_id)
+        
+        if resume_source != "无":
+            st.info(f"✓ 已获取{resume_source}")
+        else:
+            st.warning("⚠️ 未能获取简历，将使用空简历进行分析")
+        
+        # Proceed with analysis
         context = {
             "job_description": selected_job.get("description", ""),
             "target_profile": selected_job.get("target_profile", ""),
-            "candidate_resume": resume_text or "无",
+            "candidate_resume": final_resume,
             "chat_history": history_text or "无",
             "notes": notes,
         }
@@ -303,10 +350,17 @@ def main() -> None:
     col_generate, col_send = st.columns(2)
     # Generate button
     if col_generate.button("生成建议", key=f"generate_msg_{chat_id}"):
+        # Fetch resume before generating message
+        with st.spinner("获取简历中..."):
+            final_resume, resume_source = _fetch_best_resume(base_url, chat_id)
+        
+        if resume_source != "无":
+            st.info(f"✓ 已获取{resume_source}")
+        
         context = {
             "job_description": selected_job.get("description", ""),
             "target_profile": selected_job.get("target_profile", ""),
-            "candidate_resume": resume_text or "无",
+            "candidate_resume": final_resume,
             "chat_history": history_text or "无",
             "notes": draft,
         }
