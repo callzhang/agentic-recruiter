@@ -45,10 +45,11 @@ from src.recommendation_actions import (
 )
 from src.events import EventManager
 from src.global_logger import get_logger
-from src.qa_store import qa_store
+from src.candidate_store import candidate_store
 from src.assistant_actions import assistant_actions, DEFAULT_GREETING
 from src.scheduler import BRDWorkScheduler
 from typing import Any, Dict, List, Optional, Callable, Tuple, Union
+from functools import wraps
 
 
 # Get global logger once at module level
@@ -68,58 +69,13 @@ class BossService:
             cls._instance = super(BossService, cls).__new__(cls)
         return cls._instance
 
-    def _setup_logging(self):
-        """Set up file and console logging.
-        
-        Configures logging with both file and console handlers.
-        Creates a log file in the project root directory and sets up
-        the global logger for use throughout the application.
-        """
-
-        # Correctly set the log file path to the project's root directory
-        log_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'service.log')
-        
-        # Create a logger specifically for this service
-        service_logger = logging.getLogger("boss_service")
-        service_logger.setLevel(logging.INFO)
-        
-        # Only add handlers if they don't exist
-        if not service_logger.handlers:
-            # File handler
-            file_handler = logging.FileHandler(log_file, mode='a')
-            file_handler.setLevel(logging.INFO)
-            
-            # Console handler
-            console_handler = logging.StreamHandler()
-            console_handler.setLevel(logging.INFO)
-            
-            # File formatter (no colors for file)
-            file_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-            file_handler.setFormatter(file_formatter)
-            
-            # Console formatter (with colors, no logger name)
-            import colorlog
-            console_formatter = colorlog.ColoredFormatter(
-                '%(log_color)s%(asctime)s - %(levelname)s - %(message)s%(reset)s',
-                datefmt='%Y-%m-%d %H:%M:%S',
-                log_colors={
-                    'DEBUG': 'cyan',
-                    'INFO': 'green',
-                    'WARNING': 'yellow',
-                    'ERROR': 'red',
-                    'CRITICAL': 'magenta',
-                }
-            )
-            console_handler.setFormatter(console_formatter)
-            
-            # Add handlers
-            service_logger.addHandler(file_handler)
-            service_logger.addHandler(console_handler)
+    # Logging is now handled by src/global_logger.py and get_logger().
+    # No need for a custom _setup_logging; use get_logger() at module level.
 
 
     def __init__(self):
         if not hasattr(self, 'initialized'):
-            self._setup_logging()
+            # Logging is handled by global_logger, no setup needed
             self.app = FastAPI(lifespan=self.lifespan)
             self.playwright = None
             self.context = None # The primary browser object
@@ -127,20 +83,45 @@ class BossService:
             self.is_logged_in = False
             self.shutdown_requested = False
             self.startup_complete = threading.Event() # Event to signal startup completion
+            self.browser_lock = threading.Lock()  # Critical: protect Playwright resources from concurrent access
             self.scheduler: BRDWorkScheduler | None = None
             self.scheduler_lock = threading.Lock()
             self.scheduler_config: dict[str, Any] = {}
-            self.qa_store = qa_store
-            if getattr(self.qa_store, "enabled", False):
+            self.candidate_store = candidate_store
+            if getattr(self.candidate_store, "enabled", False):
                 logger.info("QA store initialised and connected to Zilliz")
             else:
                 logger.info("QA store disabled or not configured")
             self.assistant_actions = assistant_actions
+            
             self.initialized = True
             self.setup_routes()
             # 事件驱动的消息缓存和响应监听器
             self.event_manager = EventManager(logger=logging.getLogger(__name__))
+    
+    # Service Methods ----------------------------------------------------------
+    
+    def _with_browser_lock(self, func: Callable, *args, **kwargs):
+        """Execute a function with browser lock protection.
+        
+        Ensures thread-safe access to Playwright resources (page, context, playwright).
+        Critical for preventing race conditions when multiple concurrent requests
+        access the same browser session.
+        
+        Args:
+            func: The function to execute
+            *args: Positional arguments for the function
+            **kwargs: Keyword arguments for the function
             
+        Returns:
+            The return value of the function
+            
+        Raises:
+            Any exception raised by the function
+        """
+        with self.browser_lock:
+            return func(*args, **kwargs)
+    
     def _service_base_url(self) -> str:
         return os.environ.get('BOSS_SERVICE_BASE_URL', 'http://127.0.0.1:5001')
 
@@ -328,6 +309,7 @@ class BossService:
             Returns:
                 JSONResponse: Service status including login state and notification count
             """
+            self._ensure_browser_session()
             chat_stats = get_chat_stats_action(self.page)
             return JSONResponse({
                 'status': 'running',
@@ -699,6 +681,198 @@ class BossService:
 
         
         '''
+        Assistant Actions Endpoints
+        '''
+        @self.app.post('/assistant/analyze-candidate')
+        def analyze_candidate_api(payload: dict = Body(...)):
+            """Analyze candidate using assistant actions.
+            
+            Args:
+                payload: Dictionary containing candidate_id and context information
+                
+            Returns:
+                JSONResponse: Analysis results with scoring
+            """
+            candidate_id = payload.get('candidate_id') or payload.get('chat_id')
+            if not candidate_id:
+                return JSONResponse({
+                    'success': False,
+                    'error': 'Missing candidate_id or chat_id',
+                    'timestamp': datetime.now().isoformat()
+                })
+            
+            context = payload.get('context', {})
+            result = self.assistant_actions.analyze_candidate(candidate_id, context)
+            return JSONResponse({
+                'success': result is not None,
+                'analysis': result,
+                'timestamp': datetime.now().isoformat()
+            })
+
+        @self.app.post('/assistant/generate-followup')
+        def generate_followup_api(payload: dict = Body(...)):
+            """Generate followup message using assistant actions.
+            
+            Args:
+                payload: Dictionary containing chat_id, prompt, and context
+                
+            Returns:
+                JSONResponse: Generated followup message
+            """
+            chat_id = payload.get('chat_id')
+            prompt = payload.get('prompt', '')
+            context = payload.get('context', {})
+            result = self.assistant_actions.generate_followup_message(chat_id, prompt=prompt, context=context)
+            return JSONResponse({
+                'success': True,
+                'message': result,
+                'timestamp': datetime.now().isoformat()
+            })
+
+        @self.app.post('/assistant/upsert-candidate')
+        def upsert_candidate_api(
+            candidate_id: Optional[str] = Body(None),
+            chat_id: Optional[str] = Body(None),
+            name: Optional[str] = Body(None),
+            job_applied: Optional[str] = Body(None),
+            last_message: Optional[str] = Body(None),
+            resume_text: Optional[str] = Body(None),
+            scores: Optional[Dict[str, Any]] = Body(None),
+            metadata_extra: Optional[Dict[str, Any]] = Body(None),
+        ):
+            """Upsert candidate information using assistant actions.
+            
+            Args:
+                candidate_id: Candidate ID (alternative to chat_id)
+                chat_id: Chat ID (alternative to candidate_id)
+                name: Candidate name
+                job_applied: Job position applied for
+                last_message: Last message from candidate
+                resume_text: Resume text content
+                scores: Scoring results
+                metadata_extra: Additional metadata
+                
+            Returns:
+                JSONResponse: Success status
+            """
+            # Use candidate_id or chat_id
+            final_candidate_id = candidate_id or chat_id
+            if not final_candidate_id:
+                return JSONResponse({
+                    'success': False,
+                    'details': 'Missing candidate_id or chat_id',
+                    'timestamp': datetime.now().isoformat()
+                })
+            
+            success = self.assistant_actions.upsert_candidate(
+                candidate_id=final_candidate_id,
+                name=name,
+                job_applied=job_applied,
+                last_message=last_message,
+                resume_text=resume_text,
+                scores=scores,
+                metadata_extra=metadata_extra,
+            )
+            
+            if success:
+                return JSONResponse({
+                    'success': True,
+                    'details': 'Candidate information updated',
+                    'timestamp': datetime.now().isoformat()
+                })
+            else:
+                return JSONResponse({
+                    'success': False,
+                    'details': 'Failed to update candidate information',
+                    'timestamp': datetime.now().isoformat()
+                })
+
+        @self.app.post('/assistant/retrieve-answers')
+        def retrieve_answers_api(payload: dict = Body(...)):
+            """Retrieve relevant answers using assistant actions.
+            
+            Args:
+                payload: Dictionary containing query
+                
+            Returns:
+                JSONResponse: Retrieved answers
+            """
+            query = payload.get('query', '')
+            results = self.assistant_actions.retrieve_relevant_answers(query)
+            return JSONResponse({
+                'success': True,
+                'results': results,
+                'timestamp': datetime.now().isoformat()
+            })
+
+        @self.app.get('/assistant/list-entries')
+        def list_entries_api(limit: int = Query(100, ge=1, le=1000)):
+            """List QA entries using assistant actions.
+            
+            Args:
+                limit: Maximum number of entries to return
+                
+            Returns:
+                JSONResponse: List of entries
+            """
+            entries = self.assistant_actions.list_entries(limit=limit)
+            return JSONResponse({
+                'success': True,
+                'entries': entries,
+                'count': len(entries),
+                'timestamp': datetime.now().isoformat()
+            })
+
+        @self.app.post('/assistant/record-qa')
+        def record_qa_api(payload: dict = Body(...)):
+            """Record QA entry using assistant actions.
+            
+            Args:
+                payload: Dictionary containing QA information
+                
+            Returns:
+                JSONResponse: Success status
+            """
+            result = self.assistant_actions.record_qa(**payload)
+            return JSONResponse({
+                'success': True,
+                'details': 'QA entry recorded',
+                'timestamp': datetime.now().isoformat()
+            })
+
+        @self.app.post('/assistant/delete-entry')
+        def delete_entry_api(payload: dict = Body(...)):
+            """Delete QA entry using assistant actions.
+            
+            Args:
+                payload: Dictionary containing entry ID
+                
+            Returns:
+                JSONResponse: Success status
+            """
+            entry_id = payload.get('entry_id')
+            result = self.assistant_actions.delete_entry(entry_id)
+            return JSONResponse({
+                'success': result,
+                'details': 'Entry deleted' if result else 'Failed to delete entry',
+                'timestamp': datetime.now().isoformat()
+            })
+
+        @self.app.get('/assistant/generate-id')
+        def generate_id_api():
+            """Generate unique ID using assistant actions.
+            
+            Returns:
+                JSONResponse: Generated ID
+            """
+            qa_id = self.assistant_actions.generate_id()
+            return JSONResponse({
+                'success': True,
+                'qa_id': qa_id,
+                'timestamp': datetime.now().isoformat()
+            })
+
+        '''
         System Endpoints
         '''
         @self.app.post('/restart')
@@ -891,8 +1065,8 @@ class BossService:
         Returns:
             bool: True if user is logged in, False otherwise
         """
-        self.page.goto(settings.BASE_URL.rstrip('/') + "/web/chat/index",
-                         wait_until="domcontentloaded", timeout=10000)
+        self._ensure_browser_session()
+        self.page.goto(settings.BASE_URL.rstrip('/') + "/web/chat/index", wait_until="domcontentloaded", timeout=5000)
         self.page.wait_for_load_state("networkidle", timeout=5000)
             
         page_text = self.page.locator("body").inner_text()
@@ -947,42 +1121,96 @@ class BossService:
         the user is logged in. Handles session recovery and login verification
         with configurable timeout.
         
+        Thread-safe: Uses browser_lock to prevent concurrent access to Playwright
+        resources from multiple FastAPI request handlers.
+        
         Args:
             max_wait_time (int): Maximum time to wait for login (seconds)
             
         Raises:
             Exception: If login timeout is exceeded
         """
+        with self.browser_lock:
+            return self._ensure_browser_session_locked(max_wait_time)
+    
+    def _ensure_browser_session_locked(self, max_wait_time=600):
+        """Internal implementation of _ensure_browser_session, called with lock held.
+        
+        DO NOT call this method directly - always use _ensure_browser_session() instead.
+        """
         if not self.context:
             logger.warning("浏览器Context不存在，将重新启动。")
             self.start_browser()
             return
 
+        # Check if we need to sync with browser's active page
         if not self.page or self.page.is_closed():
+            # Page doesn't exist, find or create one
             pages = list(self.context.pages)
             for page in pages:
                 if settings.CHAT_URL in getattr(page, 'url', ''):
                     self.page = page
+                    logger.info(f"Found existing chat page: {page.url}")
                     break
             else:
                 self.page = pages[0] if pages else self.context.new_page()
                 if settings.CHAT_URL not in getattr(self.page, 'url', ''):
+                    logger.info(f"Navigating to chat page from: {self.page.url}")
+                    self.page.goto(settings.CHAT_URL, wait_until="domcontentloaded", timeout=10000)
+                    self.page.wait_for_load_state("networkidle", timeout=5000)
+        else:
+            # Page exists, but check if user navigated to a different page in browser
+            # If so, sync with the actual chat page
+            current_url = getattr(self.page, 'url', '')
+            if settings.CHAT_URL not in current_url:
+                logger.warning(f"Page out of sync (current: {current_url}), searching for chat page...")
+                pages = list(self.context.pages)
+                for page in pages:
+                    page_url = getattr(page, 'url', '')
+                    if settings.CHAT_URL in page_url:
+                        logger.info(f"Synced to active chat page: {page_url}")
+                        self.page = page
+                        break
+                else:
+                    # No chat page found, navigate current page to chat
+                    logger.info(f"No chat page found, navigating from: {current_url}")
                     self.page.goto(settings.CHAT_URL, wait_until="domcontentloaded", timeout=10000)
                     self.page.wait_for_load_state("networkidle", timeout=5000)
 
         # Check if page is still valid without causing errors
         try:
             _ = self.page.title()
-        except Exception:
-            # Page context was destroyed, recreate it
-            logger.warning("Page context lost, recreating browser session...")
+        except Exception as e:
+            # Check for greenlet errors which indicate thread corruption
+            error_str = str(e).lower()
+            if 'greenlet' in error_str or 'thread' in error_str:
+                logger.error(f"Greenlet/thread error detected, restarting browser: {e}")
+                # For greenlet errors, must restart the entire browser connection
+                # Cannot safely use Playwright sync API from this context
+                try:
+                    if hasattr(self, 'playwright') and self.playwright:
+                        try:
+                            self.playwright.stop()
+                        except:
+                            pass  # Already stopped or corrupted
+                        self.playwright = None
+                    self.page = None
+                    self.context = None
+                except:
+                    pass
+                # Restart from scratch
+                self.start_browser()
+                return
+            
+            # For other errors, try to recreate just the page
+            logger.warning(f"Page context lost ({type(e).__name__}), recreating page...")
             try:
                 self.page = self.context.new_page()
                 self.page.goto(settings.CHAT_URL, wait_until="domcontentloaded", timeout=10000)
                 self.page.wait_for_load_state("networkidle", timeout=5000)
-            except Exception as e:
-                logger.error(f"Failed to recreate page: {e}")
-                # If context is also broken, restart browser
+            except Exception as e2:
+                logger.error(f"Failed to recreate page: {e2}")
+                # If page recreation also fails, restart entire browser
                 self.start_browser()
                 return
 

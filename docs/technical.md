@@ -236,9 +236,10 @@ for attempt in range(3):
 - **垃圾回收**: 定期清理无用对象
 
 ### 并发处理
-- **线程安全**: 使用锁保护Playwright操作
-- **异步处理**: FastAPI异步支持
-- **资源隔离**: 每个请求独立的页面实例
+- **线程安全**: `browser_lock` 保护 Playwright 同步 API，防止并发访问导致 greenlet 错误
+- **单点控制**: `_ensure_browser_session()` 方法自动序列化所有浏览器操作
+- **FastAPI 支持**: 异步端点通过 lock 自动排队，保证线程安全
+- **Playwright 限制**: 同步 API 不支持多线程，必须串行化执行
 
 ## 安全考虑
 
