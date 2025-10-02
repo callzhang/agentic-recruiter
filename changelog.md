@@ -1,5 +1,25 @@
 # 更新日志
 
+## v2.0.1 (2025-10-02) - 并发稳定性修复
+
+### 🐛 关键修复
+- **浏览器并发访问保护** (`boss_service.py`)
+  - 在 `_ensure_browser_session()` 添加 `browser_lock` 互斥锁
+  - 修复多个 Streamlit 请求并发访问 Playwright 导致的 greenlet 错误
+  - 防止页面状态不同步和服务器挂起
+  - 单点控制，自动序列化所有浏览器操作
+
+### 📝 文档更新
+- 新增 `CONCURRENCY_FIX.md` - 并发问题根因分析和解决方案
+- 更新 `docs/technical.md` - 并发处理章节
+
+### 🔧 技术细节
+- Playwright 同步 API 不支持多线程
+- FastAPI 请求处理器需要互斥访问浏览器资源
+- Lock 在 `_ensure_browser_session` 内部，保护所有 Playwright 操作
+
+---
+
 ## v2.0.0 (2025-09-23) - 智能简历处理与AI决策
 
 ### 🎉 重大更新

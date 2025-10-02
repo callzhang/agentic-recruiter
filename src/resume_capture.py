@@ -1214,34 +1214,19 @@ def collect_resume_debug_info(page, logger=None) -> Dict[str, Any]:
             'name': frame.name,
             'url': frame.url,
         }
-        try:
-            frame_info['canvasCount'] = frame.locator('canvas').count()
-        except Exception:
-            frame_info['canvasCount'] = None
-        try:
-            frame_info['iframeCount'] = frame.locator('iframe').count()
-        except Exception:
-            frame_info['iframeCount'] = None
-        try:
-            frame_info['scripts'] = frame.evaluate(
-                "() => Array.from(document.querySelectorAll('script[src]')).map(s => s.src)"
-            )
-        except Exception:
-            frame_info['scripts'] = 'unavailable'
-        try:
-            frame_info['resumeStore'] = frame.evaluate(
-                "() => { try { return window.__resume_data_store || null; } catch (_) { return 'error'; } }"
-            )
-        except Exception:
-            frame_info['resumeStore'] = 'unavailable'
+        frame_info['canvasCount'] = frame.locator('canvas').count()
+        frame_info['iframeCount'] = frame.locator('iframe').count()
+        frame_info['scripts'] = frame.evaluate(
+            "() => Array.from(document.querySelectorAll('script[src]')).map(s => s.src)"
+        )
+        frame_info['resumeStore'] = frame.evaluate(
+            "() => { try { return window.__resume_data_store || null; } catch (_) { return 'error'; } }"
+        )
         info['frames'].append(frame_info)
 
-    try:
-        info['resources'] = page.evaluate(
-            "() => (performance.getEntriesByType('resource') || [])"
-        )
-    except Exception:
-        info['resources'] = 'unavailable'
+    info['resources'] = page.evaluate(
+        "() => (performance.getEntriesByType('resource') || [])"
+    )
 
     return info
 

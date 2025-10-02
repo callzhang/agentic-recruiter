@@ -23,8 +23,8 @@ def _prepare_chat_page(page, *, wait_timeout: int = 5000) -> tuple[Optional[Loca
     close_overlay_dialogs(page)
     # If current URL is not the chat page, click the chat menu to navigate
     if not settings.CHAT_URL in page.url:
-        menu_chat = page.locator(CHAT_MENU_SELECTOR).first
-        menu_chat.click()
+        menu_chat = page.locator(CHAT_MENU_SELECTOR)
+        menu_chat.click(timeout=100)
         page.wait_for_selector(CHAT_ITEM_SELECTORS, timeout=wait_timeout)
     
         # wait for chat box
@@ -94,6 +94,7 @@ def select_chat_job_action(page, job_title: str) -> Dict[str, Any]:
 
 def get_chat_stats_action(page) -> Dict[str, Any]:
     """Get chat stats for the given chat_id"""
+    _prepare_chat_page(page)
     import re
     NEW_MESSAGE_SELECTOR = "span.menu-chat-badge"
     NEW_GREET_SELECTOR = "div.chat-label-item[title*='新招呼']"
@@ -319,7 +320,6 @@ def get_chat_history_action(page, chat_id: str) -> List[Dict[str, Any]]:
         return []
     
     # Simple text extraction for chat history
-    message_box = page.locator("div.conversation-message")
     ''' multiple div.message-time item
     1. 
     - div.message-time: timestamp
@@ -328,13 +328,17 @@ def get_chat_history_action(page, chat_id: str) -> List[Dict[str, Any]]:
     3. div.item-system: system message
     4. div.item-friend > div.text: candidate message
     '''
-    messages = message_box.locator("div.message-item").all()
+    messages = page.locator("div.conversation-message >> div.message-item").all()
     last_timestamp = None
     history = []
     for message in messages:
         type, message_str, status = None, None, None
         try:
-            timestamp = message.locator("div.message-time").inner_text(timeout=100)
+            timestamp_entry = message.locator("div.message-time")
+            if timestamp_entry.count():
+                timestamp = timestamp_entry.inner_text(timeout=100)
+            else:
+                timestamp = ''
             # Convert timestamp to full datetime: if only time, prepend today's date
             import dateutil.parser as parser
             from datetime import date
@@ -351,18 +355,30 @@ def get_chat_history_action(page, chat_id: str) -> List[Dict[str, Any]]:
         except Exception:
             timestamp = last_timestamp
         try:
-            message_str = message.locator("div.item-resume, div.item-system").inner_text(timeout=100)
+            message_str_entry = message.locator("div.item-resume, div.item-system")
+            if message_str_entry.count():
+                message_str = message_str_entry.inner_text(timeout=100)
+            else:
+                message_str = ''
             type = 'system'
         except Exception:
             pass
         try:
-            message_str = message.locator("div.item-myself >> span").inner_text(timeout=100)
-            status = message.locator('i.status').inner_text(timeout=100)
+            message_str_entry = message.locator("div.item-myself >> span")
+            if message_str_entry.count():
+                message_str = message_str_entry.inner_text(timeout=100)
+                status = message_str_entry.locator('i.status').inner_text(timeout=100)
+            else:
+                message_str, status = '', None
             type = 'recruiter'
         except Exception:
             pass
         try:
-            message_str = message.locator("div.item-friend").inner_text(timeout=100)
+            message_str_entry = message.locator("div.item-friend")
+            if message_str_entry.count():
+                message_str = message_str_entry.inner_text(timeout=100)
+            else:
+                message_str = ''
             type = 'candidate'
         except Exception:
             pass
@@ -441,7 +457,7 @@ def view_online_resume_action(page, chat_id: str) -> Dict[str, Any]:
         return { 'success': False, 'details': '未找到指定对话项' }
 
     # get the candidate name
-    candidate_name = dialog.locator("span.name-box").inner_text(timeout=100)
+    candidate_name = page.locator("span.name-box").inner_text(timeout=200)
 
     # Prepare resume context by opening resume and detecting mode.
     from .resume_capture import _setup_wasm_route, _install_parent_message_listener, _open_online_resume, _get_resume_handle, _create_error_result

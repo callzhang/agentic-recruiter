@@ -184,6 +184,7 @@ def start_service(*, run_scheduler: bool = False, scheduler_options: Optional[Di
     # 启动服务
     try:
         env = os.environ.copy()
+        env['BOSS_SERVICE_RUNNING'] = 'true'
         host = env.get('BOSS_SERVICE_HOST', '127.0.0.1')
         port = env.get('BOSS_SERVICE_PORT', '5001')
         cdp_port = env.get('CDP_PORT', '9222')
@@ -270,9 +271,9 @@ def start_service(*, run_scheduler: bool = False, scheduler_options: Optional[Di
                 print(f"[!] Chrome启动失败: {e}")
                 return False
 
-        # 设置环境变量来禁用对虚拟环境的监视
-        # env['WATCHFILES_FORCE_POLLING'] = "true"
-        
+        # Force uvicorn to use legacy reloader to respect include/exclude/delay
+        # Disabling watchfiles allows --reload-delay, --reload-include, and --reload-dir flags to work properly
+        env["UVICORN_RELOAD_USE_WATCHFILES"] = "false"
         # 使用 uvicorn 启动（可开启 --reload；CDP模式下重载不会中断浏览器）
         # 只监控与 boss_service 相关的核心文件，排除不必要的文件
         cmd = [
@@ -280,11 +281,10 @@ def start_service(*, run_scheduler: bool = False, scheduler_options: Optional[Di
             "boss_service:app",
             "--host", host,
             "--port", port,
-            # "--log-level", "info",
-            "--reload", 
-            "--reload-include", "boss_service.py",
+            "--reload",
             "--reload-dir", "src",
-            '--reload-delay', '3.0'
+            "--reload-include", "boss_service.py",
+            "--reload-delay", "3.0"
         ]
         # 新建进程组，以便整体发送信号
         process = subprocess.Popen(cmd, env=env, preexec_fn=os.setsid)

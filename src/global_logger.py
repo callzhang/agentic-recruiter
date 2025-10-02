@@ -4,8 +4,8 @@ This module provides a simple logging interface that can be used anywhere in the
 """
 
 import logging
+import sys
 from typing import Optional
-import colorlog
 
 # Global logger instance
 _global_logger: Optional[logging.Logger] = None
@@ -18,7 +18,10 @@ def get_logger() -> logging.Logger:
         # Create a default logger if none is set
         _global_logger = logging.getLogger("boss_service")
         _global_logger.setLevel(logging.INFO)
+        # Only add handlers if none exist
         if not _global_logger.handlers:
+            # Use colorlog for color support, but only for our logger
+            import colorlog
             handler = colorlog.StreamHandler()
             formatter = colorlog.ColoredFormatter(
                 '%(log_color)s%(asctime)s - %(levelname)s - %(message)s%(reset)s',
@@ -33,5 +36,15 @@ def get_logger() -> logging.Logger:
             )
             handler.setFormatter(formatter)
             _global_logger.addHandler(handler)
+            
+            # Prevent propagation to root logger to avoid conflicts
+            _global_logger.propagate = False
     return _global_logger
 
+
+if __name__ == "__main__":
+    logger = get_logger()
+    logger.info("Hello, world!")
+    logger.error("Error message")
+    logger.warning("Warning message")
+    logger.debug("Debug message")
