@@ -191,7 +191,7 @@ def render_history_section(base_url: str, chat_id: str) -> List[str]:
 def main() -> None:
     st.title("消息列表")
     ensure_state()
-    sidebar_controls(include_config_path=False)
+    sidebar_controls(include_config_path=False, include_job_selector=True)
     
     # Get base_url from session state
     base_url = st.session_state["base_url"]

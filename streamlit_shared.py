@@ -79,7 +79,7 @@ def load_jobs_from_path(path: Path) -> List[Dict[str, Any]]:
     return []
 
 
-def sidebar_controls(*, include_config_path: bool = False) -> None:
+def sidebar_controls(*, include_config_path: bool = False, include_job_selector: bool = False) -> None:
     """Render common sidebar inputs with dropdown controls."""
     ensure_state()
     st.sidebar.header("全局设置")
@@ -121,6 +121,38 @@ def sidebar_controls(*, include_config_path: bool = False) -> None:
         config_path = selected_config.resolve()
         st.session_state["criteria_path"] = str(config_path)
         st.session_state.pop("_jobs_cache", None)
+    
+    # Job selector
+    if include_job_selector:
+        config = load_config(get_config_path())
+        roles = config.get("roles", [])
+        
+        # Update jobs cache
+        st.session_state["_jobs_cache"] = roles
+        
+        if roles:
+            # Get current selection or default to 0
+            current_idx = st.session_state.get("selected_job_index", 0)
+            if current_idx >= len(roles):
+                current_idx = 0
+            
+            job_options = [f"{role.get('position', role.get('id', f'岗位{i+1}'))}" for i, role in enumerate(roles)]
+            
+            selected_idx = st.sidebar.selectbox(
+                "当前岗位",
+                options=list(range(len(roles))),
+                format_func=lambda idx: job_options[idx],
+                index=current_idx,
+                key="__job_selector__",
+            )
+            
+            # Update session state with both index and job object
+            st.session_state["selected_job_index"] = selected_idx
+            st.session_state["selected_job"] = roles[selected_idx]
+        else:
+            st.sidebar.warning("⚠️ 未配置岗位，请到「岗位画像」页面添加")
+            st.session_state["selected_job"] = None
+            st.session_state["selected_job_index"] = 0
 
 
 def get_config_path() -> Path:

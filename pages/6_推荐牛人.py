@@ -42,14 +42,16 @@ def _render_response(ok: bool, payload: Any) -> None:
 def main() -> None:
     st.title("推荐牛人")
     ensure_state()
-    sidebar_controls(include_config_path=False)
+    sidebar_controls(include_config_path=False, include_job_selector=True)
 
     base_url = st.session_state["base_url"]
     jobs = _load_jobs()
     limit = st.sidebar.slider("每次获取数量", min_value=5, max_value=100, value=20, step=5)
 
+    # selected_job is now set by sidebar_controls
+    selected_job = st.session_state.get("selected_job")
     selected_job_idx = st.session_state.get("selected_job_index", 0)
-    selected_job = jobs[selected_job_idx] if jobs and 0 <= selected_job_idx < len(jobs) else {}
+    
     if selected_job:
         sync_key = (selected_job_idx, base_url)
         if st.session_state.get("_recommend_job_synced") != sync_key:
