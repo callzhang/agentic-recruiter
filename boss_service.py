@@ -28,7 +28,7 @@ from src.chat_actions import (
     send_message_action,
     view_full_resume_action,
     discard_candidate_action,
-    get_messages_list_action,
+    get_chat_list_action,
     get_chat_history_action,
     select_chat_job_action,
     view_online_resume_action,
@@ -83,6 +83,7 @@ class BossService:
             self.shutdown_requested = False
             self.startup_complete = threading.Event() # Event to signal startup completion
             self.browser_lock = threading.Lock()  # Critical: protect Playwright resources from concurrent access
+            self.browser_needs_restart = False  # Flag to indicate browser is broken and needs restart
             self.scheduler: BRDWorkScheduler | None = None
             self.scheduler_lock = threading.Lock()
             self.scheduler_config: dict[str, Any] = {}
@@ -322,7 +323,7 @@ class BossService:
             """
             self._ensure_browser_session()
 
-            messages = get_messages_list_action(self.page, limit)
+            messages = get_chat_list_action(self.page, limit)
             return JSONResponse({
                 'success': True,
                 'messages': messages,
@@ -1106,6 +1107,13 @@ class BossService:
         
         DO NOT call this method directly - always use _ensure_browser_session() instead.
         """
+        # Check if browser needs restart due to previous greenlet error
+        if self.browser_needs_restart:
+            logger.info("Browser restart required (previously marked), restarting now...")
+            self.browser_needs_restart = False
+            self.start_browser()
+            return
+        
         if not self.context:
             logger.warning("浏览器Context不存在，将重新启动。")
             self.start_browser()
@@ -1152,9 +1160,10 @@ class BossService:
             # Check for greenlet errors which indicate thread corruption
             error_str = str(e).lower()
             if 'greenlet' in error_str or 'thread' in error_str:
-                logger.error(f"Greenlet/thread error detected, restarting browser: {e}")
-                # For greenlet errors, must restart the entire browser connection
-                # Cannot safely use Playwright sync API from this context
+                logger.error(f"Greenlet/thread error detected, marking browser for restart: {e}")
+                # For greenlet errors, mark for restart but don't block current request
+                # The restart will happen on the next request
+                self.browser_needs_restart = True
                 try:
                     if hasattr(self, 'playwright') and self.playwright:
                         try:
@@ -1166,9 +1175,8 @@ class BossService:
                     self.context = None
                 except:
                     pass
-                # Restart from scratch
-                self.start_browser()
-                return
+                # Raise error immediately instead of blocking on restart
+                raise RuntimeError("Browser session corrupted, please retry in a moment")
             
             # For other errors, try to recreate just the page
             logger.warning(f"Page context lost ({type(e).__name__}), recreating page...")
