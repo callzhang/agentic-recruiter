@@ -172,6 +172,8 @@ def _create_candidate_store() -> CandidateStore:
     config_path = Path("config/secrets.yaml")
     endpoint = os.getenv("ZILLIZ_ENDPOINT", "")
     token = os.getenv("ZILLIZ_TOKEN", "")
+    user = os.getenv("ZILLIZ_USER", "")
+    password = os.getenv("ZILLIZ_PASSWORD", "")
     collection_name = os.getenv("ZILLIZ_CANDIDATE_COLLECTION", DEFAULT_COLLECTION)
     
     if config_path.exists():
@@ -180,8 +182,11 @@ def _create_candidate_store() -> CandidateStore:
                 config = yaml.safe_load(f) or {}
                 zilliz_config = config.get("zilliz", {})
                 endpoint = endpoint or zilliz_config.get("endpoint", "")
-                token = token or zilliz_config.get("token", "")
-                collection_name = collection_name or zilliz_config.get("candidate_collection", DEFAULT_COLLECTION)
+                # Support both 'api_key' and 'token' for backward compatibility
+                token = token or zilliz_config.get("api_key", "") or zilliz_config.get("token", "")
+                user = user or zilliz_config.get("user", "")
+                password = password or zilliz_config.get("password", "")
+                collection_name = collection_name or zilliz_config.get("collection_name", DEFAULT_COLLECTION)
         except Exception as e:
             logger.warning(f"Failed to load config from {config_path}: {e}")
     
@@ -195,6 +200,8 @@ def _create_candidate_store() -> CandidateStore:
         endpoint=endpoint,
         collection_name=collection_name,
         token=token if token else None,
+        user=user if user else None,
+        password=password if password else None,
     )
 
 candidate_store = _create_candidate_store()
