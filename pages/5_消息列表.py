@@ -52,7 +52,6 @@ def _fetch_history(chat_id: str) -> List[str]:
     return messages
 
 
-@st.cache_data(ttl=600, show_spinner="获取简历中...")
 def _fetch_best_resume(chat_id: str) -> tuple[str, str]:
     """
     Fetch best available resume (full resume preferred, online as fallback).
