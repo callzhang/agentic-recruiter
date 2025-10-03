@@ -30,9 +30,7 @@ def render_search_section() -> None:
     if st.button("检索", key="faq_query_btn"):
         with st.spinner("检索中..."):
             from streamlit_shared import call_api
-            base_url = st.session_state[SessionKeys.BASE_URL]
             ok, payload = call_api(
-                base_url, 
                 "POST", 
                 "/assistant/retrieve-answers",
                 json={

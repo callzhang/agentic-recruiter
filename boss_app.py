@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from streamlit_shared import call_api, ensure_state, sidebar_controls, SessionKeys
+from streamlit_shared import call_api, ensure_state, sidebar_controls, SessionKeys, DEFAULT_BASE_URL
 
 
 def main() -> None:
@@ -26,7 +26,7 @@ def main() -> None:
         """
     )
 
-    base_url = st.session_state[SessionKeys.BASE_URL]
+    base_url = DEFAULT_BASE_URL
     status_placeholder = st.container()
     ok, payload = call_api("GET", "/status")
     login_payload = None

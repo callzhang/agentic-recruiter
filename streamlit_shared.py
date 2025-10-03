@@ -23,15 +23,13 @@ DEFAULT_CRITERIA_PATH = Path(os.environ.get("BOSS_CRITERIA_PATH", "config/jobs.y
 # - RECOMMEND_GREET_MESSAGE: Legacy from greeting generation (now uses analysis)
 # - FIRST_ROLE_*, NEW_ROLE_*: Only used to clear inputs (Streamlit handles this automatically)
 # - BASE_URL_*, CONFIG_PATH_SELECT, JOB_SELECTOR: Widget keys (Streamlit auto-generates keys)
+# - BASE_URL, BASE_URL_OPTIONS: Base URL selection (assumed constant, uses DEFAULT_BASE_URL)
 #
 class SessionKeys:
     # ============================================================================
     # CORE APPLICATION STATE
     # ============================================================================
     
-    # API connection management
-    BASE_URL = "base_url"                    # Current API base URL (e.g., "http://127.0.0.1:5001")
-    BASE_URL_OPTIONS = "base_url_options"   # List of available base URLs for selection
     
     # Configuration management
     CRITERIA_PATH = "criteria_path"         # Path to jobs.yaml configuration file
@@ -71,10 +69,6 @@ class SessionKeys:
 
 def ensure_state() -> None:
     """Initialise shared Streamlit session state values once."""
-    if SessionKeys.BASE_URL not in st.session_state:
-        st.session_state[SessionKeys.BASE_URL] = DEFAULT_BASE_URL
-    if SessionKeys.BASE_URL_OPTIONS not in st.session_state:
-        st.session_state[SessionKeys.BASE_URL_OPTIONS] = [DEFAULT_BASE_URL]
     if SessionKeys.CRITERIA_PATH not in st.session_state:
         candidate = DEFAULT_CRITERIA_PATH.resolve()
         st.session_state[SessionKeys.CRITERIA_PATH] = str(candidate)
@@ -88,12 +82,6 @@ def ensure_state() -> None:
         st.session_state[SessionKeys.SELECTED_JOB_INDEX] = 0
     if SessionKeys.RECOMMEND_JOB_SYNCED not in st.session_state:
         st.session_state[SessionKeys.RECOMMEND_JOB_SYNCED] = None
-
-
-def _options_with_current(options: list[str], current: str) -> list[str]:
-    if current and current not in options:
-        options.append(current)
-    return options
 
 
 def discover_config_paths() -> List[Path]:
@@ -142,23 +130,6 @@ def sidebar_controls(*, include_config_path: bool = False, include_job_selector:
     ensure_state()
     st.sidebar.header("全局设置")
 
-    # Base URL selection
-    base_options = _options_with_current(st.session_state[SessionKeys.BASE_URL_OPTIONS], st.session_state[SessionKeys.BASE_URL])
-    st.session_state[SessionKeys.BASE_URL_OPTIONS] = base_options
-    selected_base = st.sidebar.selectbox(
-        "API 服务地址",
-        base_options,
-        index=base_options.index(st.session_state[SessionKeys.BASE_URL]),
-    )
-    st.session_state[SessionKeys.BASE_URL] = selected_base
-
-    new_base = st.sidebar.text_input("新增 API 地址", placeholder="http://127.0.0.1:5001")
-    if st.sidebar.button("添加 API 地址"):
-        if new_base and new_base not in base_options:
-            base_options.append(new_base)
-            st.session_state[SessionKeys.BASE_URL_OPTIONS] = base_options
-            st.session_state[SessionKeys.BASE_URL] = new_base
-            st.sidebar.success("已添加新的 API 地址")
 
     config_path = Path(st.session_state[SessionKeys.CRITERIA_PATH]).resolve()
 
@@ -273,12 +244,11 @@ def refresh_config() -> None:
 def call_api(method: str, path: str, **kwargs) -> Tuple[bool, Any]:
     """Make HTTP request to boss_service API.
     
-    Automatically uses base_url from st.session_state[SessionKeys.BASE_URL].
+    Uses constant base URL from DEFAULT_BASE_URL.
     
     Note: Spinner should be used by callers with: with st.spinner("..."):
     """
-    base_url = st.session_state.get(SessionKeys.BASE_URL, DEFAULT_BASE_URL)
-    url = base_url.rstrip("/") + path
+    url = DEFAULT_BASE_URL.rstrip("/") + path
     try:
         response = requests.request(method.upper(), url, timeout=30, **kwargs)
         response.raise_for_status()
