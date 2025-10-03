@@ -28,15 +28,15 @@ def main() -> None:
 
     base_url = st.session_state["base_url"]
     status_placeholder = st.container()
-    ok, payload = call_api(base_url, "GET", "/status")
+    ok, payload = call_api("GET", "/status")
     login_payload = None
     stats_payload = None
     if ok and isinstance(payload, dict) and not payload.get("logged_in"):
-        login_ok, login_payload = call_api(base_url, "POST", "/login")
+        login_ok, login_payload = call_api("POST", "/login")
         if login_ok and isinstance(login_payload, dict):
             payload["logged_in"] = login_payload.get("success", False)
 
-    stats_ok, stats_payload = call_api(base_url, "GET", "/chat/stats")
+    stats_ok, stats_payload = call_api("GET", "/chat/stats")
 
     with status_placeholder:
         if ok and isinstance(payload, dict):
