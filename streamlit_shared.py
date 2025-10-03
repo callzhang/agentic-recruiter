@@ -14,22 +14,59 @@ import yaml
 DEFAULT_BASE_URL = os.environ.get("BOSS_SERVICE_BASE_URL", "http://127.0.0.1:5001")
 DEFAULT_CRITERIA_PATH = Path(os.environ.get("BOSS_CRITERIA_PATH", "config/jobs.yaml"))
 
+# Session State Keys - Centralized management
+class SessionKeys:
+    # Core application state
+    BASE_URL = "base_url"
+    BASE_URL_OPTIONS = "base_url_options"
+    CRITERIA_PATH = "criteria_path"
+    CONFIG_DATA = "config_data"
+    CONFIG_LOADED_PATH = "_config_loaded_path"
+    LAST_SAVED_YAML = "_last_saved_yaml"
+    
+    # Job management
+    SELECTED_JOB = "selected_job"
+    SELECTED_JOB_INDEX = "selected_job_index"
+    JOBS_CACHE = "_jobs_cache"
+    RECOMMEND_JOB_SYNCED = "_recommend_job_synced"
+    
+    # Resume and greeting management
+    CACHED_ONLINE_RESUME = "cached_online_resume"
+    RECOMMEND_GREET_MESSAGE = "recommend_greet_message"
+    
+    # Page-specific state
+    FIRST_ROLE_POSITION = "first_role_position"
+    FIRST_ROLE_ID = "first_role_id"
+    NEW_ROLE_POSITION = "new_role_position"
+    NEW_ROLE_ID = "new_role_id"
+    
+    # UI control keys
+    BASE_URL_SELECT = "__base_url_select__"
+    BASE_URL_NEW = "__base_url_new__"
+    BASE_URL_ADD_BTN = "__base_url_add_btn__"
+    CONFIG_PATH_SELECT = "__config_path_select__"
+    JOB_SELECTOR = "__job_selector__"
+
 
 def ensure_state() -> None:
     """Initialise shared Streamlit session state values once."""
-    if "base_url" not in st.session_state:
-        st.session_state["base_url"] = DEFAULT_BASE_URL
-    if "base_url_options" not in st.session_state:
-        st.session_state["base_url_options"] = [DEFAULT_BASE_URL]
-    if "criteria_path" not in st.session_state:
+    if SessionKeys.BASE_URL not in st.session_state:
+        st.session_state[SessionKeys.BASE_URL] = DEFAULT_BASE_URL
+    if SessionKeys.BASE_URL_OPTIONS not in st.session_state:
+        st.session_state[SessionKeys.BASE_URL_OPTIONS] = [DEFAULT_BASE_URL]
+    if SessionKeys.CRITERIA_PATH not in st.session_state:
         candidate = DEFAULT_CRITERIA_PATH.resolve()
-        st.session_state["criteria_path"] = str(candidate)
-    if "_last_saved_yaml" not in st.session_state:
-        st.session_state["_last_saved_yaml"] = None
-    if "selected_job" not in st.session_state:
-        st.session_state["selected_job"] = None
-    if "_jobs_cache" not in st.session_state:
-        st.session_state["_jobs_cache"] = []
+        st.session_state[SessionKeys.CRITERIA_PATH] = str(candidate)
+    if SessionKeys.LAST_SAVED_YAML not in st.session_state:
+        st.session_state[SessionKeys.LAST_SAVED_YAML] = None
+    if SessionKeys.SELECTED_JOB not in st.session_state:
+        st.session_state[SessionKeys.SELECTED_JOB] = None
+    if SessionKeys.JOBS_CACHE not in st.session_state:
+        st.session_state[SessionKeys.JOBS_CACHE] = []
+    if SessionKeys.SELECTED_JOB_INDEX not in st.session_state:
+        st.session_state[SessionKeys.SELECTED_JOB_INDEX] = 0
+    if SessionKeys.RECOMMEND_JOB_SYNCED not in st.session_state:
+        st.session_state[SessionKeys.RECOMMEND_JOB_SYNCED] = None
 
 
 def _options_with_current(options: list[str], current: str) -> list[str]:
@@ -85,26 +122,26 @@ def sidebar_controls(*, include_config_path: bool = False, include_job_selector:
     st.sidebar.header("全局设置")
 
     # Base URL selection
-    base_options = _options_with_current(st.session_state["base_url_options"], st.session_state["base_url"])
-    st.session_state["base_url_options"] = base_options
+    base_options = _options_with_current(st.session_state[SessionKeys.BASE_URL_OPTIONS], st.session_state[SessionKeys.BASE_URL])
+    st.session_state[SessionKeys.BASE_URL_OPTIONS] = base_options
     selected_base = st.sidebar.selectbox(
         "API 服务地址",
         base_options,
-        index=base_options.index(st.session_state["base_url"]),
-        key="__base_url_select__",
+        index=base_options.index(st.session_state[SessionKeys.BASE_URL]),
+        key=SessionKeys.BASE_URL_SELECT,
     )
-    st.session_state["base_url"] = selected_base
+    st.session_state[SessionKeys.BASE_URL] = selected_base
 
-    new_base = st.sidebar.text_input("新增 API 地址", key="__base_url_new__", placeholder="http://127.0.0.1:5001")
-    if st.sidebar.button("添加 API 地址", key="__base_url_add_btn__"):
+    new_base = st.sidebar.text_input("新增 API 地址", key=SessionKeys.BASE_URL_NEW, placeholder="http://127.0.0.1:5001")
+    if st.sidebar.button("添加 API 地址", key=SessionKeys.BASE_URL_ADD_BTN):
         if new_base and new_base not in base_options:
             base_options.append(new_base)
-            st.session_state["base_url_options"] = base_options
-            st.session_state["base_url"] = new_base
+            st.session_state[SessionKeys.BASE_URL_OPTIONS] = base_options
+            st.session_state[SessionKeys.BASE_URL] = new_base
             st.sidebar.success("已添加新的 API 地址")
-        st.session_state["__base_url_new__"] = ""
+        st.session_state[SessionKeys.BASE_URL_NEW] = ""
 
-    config_path = Path(st.session_state["criteria_path"]).resolve()
+    config_path = Path(st.session_state[SessionKeys.CRITERIA_PATH]).resolve()
 
     if include_config_path:
         config_options = discover_config_paths()
@@ -116,11 +153,11 @@ def sidebar_controls(*, include_config_path: bool = False, include_job_selector:
             config_options,
             index=config_options.index(config_path) if config_path in config_options else 0,
             format_func=lambda p: p.name,
-            key="__config_path_select__",
+            key=SessionKeys.CONFIG_PATH_SELECT,
         )
         config_path = selected_config.resolve()
-        st.session_state["criteria_path"] = str(config_path)
-        st.session_state.pop("_jobs_cache", None)
+        st.session_state[SessionKeys.CRITERIA_PATH] = str(config_path)
+        st.session_state.pop(SessionKeys.JOBS_CACHE, None)
     
     # Job selector
     if include_job_selector:
@@ -128,11 +165,11 @@ def sidebar_controls(*, include_config_path: bool = False, include_job_selector:
         roles = config.get("roles", [])
         
         # Update jobs cache
-        st.session_state["_jobs_cache"] = roles
+        st.session_state[SessionKeys.JOBS_CACHE] = roles
         
         if roles:
             # Get current selection or default to 0
-            current_idx = st.session_state.get("selected_job_index", 0)
+            current_idx = st.session_state.get(SessionKeys.SELECTED_JOB_INDEX, 0)
             if current_idx >= len(roles):
                 current_idx = 0
             
@@ -143,21 +180,21 @@ def sidebar_controls(*, include_config_path: bool = False, include_job_selector:
                 options=list(range(len(roles))),
                 format_func=lambda idx: job_options[idx],
                 index=current_idx,
-                key="__job_selector__",
+                key=SessionKeys.JOB_SELECTOR,
             )
             
             # Update session state with both index and job object
-            st.session_state["selected_job_index"] = selected_idx
-            st.session_state["selected_job"] = roles[selected_idx]
+            st.session_state[SessionKeys.SELECTED_JOB_INDEX] = selected_idx
+            st.session_state[SessionKeys.SELECTED_JOB] = roles[selected_idx]
         else:
             st.sidebar.warning("⚠️ 未配置岗位，请到「岗位画像」页面添加")
-            st.session_state["selected_job"] = None
-            st.session_state["selected_job_index"] = 0
+            st.session_state[SessionKeys.SELECTED_JOB] = None
+            st.session_state[SessionKeys.SELECTED_JOB_INDEX] = 0
 
 
 def get_config_path() -> Path:
     ensure_state()
-    return Path(st.session_state["criteria_path"]).expanduser().resolve()
+    return Path(st.session_state[SessionKeys.CRITERIA_PATH]).expanduser().resolve()
 
 
 def load_config(path: Path) -> Dict[str, Any]:
@@ -176,12 +213,12 @@ def _dump_yaml(data: Dict[str, Any]) -> str:
 
 def write_config(path: Path, data: Dict[str, Any], *, auto: bool = False) -> bool:
     yaml_text = _dump_yaml(data)
-    last_yaml = st.session_state.get("_last_saved_yaml")
+    last_yaml = st.session_state.get(SessionKeys.LAST_SAVED_YAML)
     if last_yaml == yaml_text and path.exists():
         return False
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(yaml_text, encoding="utf-8")
-    st.session_state["_last_saved_yaml"] = yaml_text
+    st.session_state[SessionKeys.LAST_SAVED_YAML] = yaml_text
     if not auto:
         st.toast("配置已保存", icon="💾")
     return True
@@ -196,34 +233,34 @@ def auto_save_config(data: Dict[str, Any]) -> None:
 
 def get_config_data() -> Tuple[Dict[str, Any], Path]:
     path = get_config_path()
-    cache_key = "_config_loaded_path"
+    cache_key = SessionKeys.CONFIG_LOADED_PATH
     if (
-        "config_data" not in st.session_state
+        SessionKeys.CONFIG_DATA not in st.session_state
         or st.session_state.get(cache_key) != str(path)
     ):
         config = load_config(path)
-        st.session_state["config_data"] = config
+        st.session_state[SessionKeys.CONFIG_DATA] = config
         st.session_state[cache_key] = str(path)
-        st.session_state["_last_saved_yaml"] = _dump_yaml(config)
-    return st.session_state["config_data"], path
+        st.session_state[SessionKeys.LAST_SAVED_YAML] = _dump_yaml(config)
+    return st.session_state[SessionKeys.CONFIG_DATA], path
 
 
 def refresh_config() -> None:
     path = get_config_path()
     config = load_config(path)
-    st.session_state["config_data"] = config
-    st.session_state["_config_loaded_path"] = str(path)
-    st.session_state["_last_saved_yaml"] = _dump_yaml(config)
+    st.session_state[SessionKeys.CONFIG_DATA] = config
+    st.session_state[SessionKeys.CONFIG_LOADED_PATH] = str(path)
+    st.session_state[SessionKeys.LAST_SAVED_YAML] = _dump_yaml(config)
 
 
 def call_api(method: str, path: str, **kwargs) -> Tuple[bool, Any]:
     """Make HTTP request to boss_service API.
     
-    Automatically uses base_url from st.session_state["base_url"].
+    Automatically uses base_url from st.session_state[SessionKeys.BASE_URL].
     
     Note: Spinner should be used by callers with: with st.spinner("..."):
     """
-    base_url = st.session_state.get("base_url", DEFAULT_BASE_URL)
+    base_url = st.session_state.get(SessionKeys.BASE_URL, DEFAULT_BASE_URL)
     url = base_url.rstrip("/") + path
     try:
         response = requests.request(method.upper(), url, timeout=30, **kwargs)

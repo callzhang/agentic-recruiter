@@ -15,6 +15,7 @@ from streamlit_shared import (
     ensure_state,
     get_config_data,
     sidebar_controls,
+    SessionKeys,
 )
 
 
@@ -177,8 +178,8 @@ def main() -> None:
                 st.warning("岗位名称不能为空")
             else:
                 roles.append(_create_role(new_position, new_role_id, existing_ids))
-                st.session_state["first_role_position"] = ""
-                st.session_state["first_role_id"] = ""
+                st.session_state[SessionKeys.FIRST_ROLE_POSITION] = ""
+                st.session_state[SessionKeys.FIRST_ROLE_ID] = ""
                 st.rerun()
         return
 
@@ -214,13 +215,13 @@ def main() -> None:
                     roles.append(_create_role(new_position, new_role_id, existing_ids))
                     auto_save_config(config)
                     st.success("新岗位已保存")
-                    st.session_state["new_role_position"] = ""
-                    st.session_state["new_role_id"] = ""
+                    st.session_state[SessionKeys.NEW_ROLE_POSITION] = ""
+                    st.session_state[SessionKeys.NEW_ROLE_ID] = ""
                     st.rerun()
         with col2:
             if st.button("🗑️ 清空输入", key="clear_new_role", type="secondary", width="stretch"):
-                st.session_state["new_role_position"] = ""
-                st.session_state["new_role_id"] = ""
+                st.session_state[SessionKeys.NEW_ROLE_POSITION] = ""
+                st.session_state[SessionKeys.NEW_ROLE_ID] = ""
 
         # Optionally, keep the old "新增岗位" button for compatibility
         # if st.button("新增岗位", key="roles_add_tab"):

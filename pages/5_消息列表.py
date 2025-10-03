@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional
 
 import streamlit as st
 
-from streamlit_shared import call_api, ensure_state, sidebar_controls
+from streamlit_shared import call_api, ensure_state, sidebar_controls, SessionKeys
 
 COMPANY_MD_PATH = Path("config/company.md")
 DEFAULT_HISTORY_LIMIT = 10
@@ -244,7 +244,7 @@ def main() -> None:
         return
 
     # Sync job selection
-    selected_job = st.session_state["selected_job"]
+    selected_job = st.session_state[SessionKeys.SELECTED_JOB]
 
     # === Data Fetching Phase (upfront, cached by Streamlit) ===
     # Fetch resume data (cached by @st.cache_data for 10 minutes)

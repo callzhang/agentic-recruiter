@@ -6,7 +6,7 @@ from typing import List
 
 import streamlit as st
 
-from streamlit_shared import ensure_state, sidebar_controls
+from streamlit_shared import ensure_state, sidebar_controls, SessionKeys
 # Removed direct import - use API calls instead
 
 
@@ -30,7 +30,7 @@ def render_search_section() -> None:
     if st.button("检索", key="faq_query_btn"):
         with st.spinner("检索中..."):
             from streamlit_shared import call_api
-            base_url = st.session_state["base_url"]
+            base_url = st.session_state[SessionKeys.BASE_URL]
             ok, payload = call_api(
                 base_url, 
                 "POST", 

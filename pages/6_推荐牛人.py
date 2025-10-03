@@ -5,8 +5,16 @@ from typing import Any, Dict, List
 
 import streamlit as st
 
-from streamlit_shared import call_api, ensure_state, sidebar_controls
+from streamlit_shared import call_api, ensure_state, sidebar_controls, SessionKeys
 
+@st.spinner("选择职位中...")
+def _select_recommend_job(job_title: str) -> None:
+    # @self.app.post('/chat/select-job')
+    ok, payload = call_api("POST", "/recommend/select-job", json={"job_title": job_title})
+    if not ok:
+        st.error(f"选择职位失败: {payload}")
+        raise ValueError(f"选择职位失败: {payload}")
+    st.session_state["_recommend_job_synced"] = job_title
 
 @st.cache_data(ttl=300, show_spinner="获取推荐牛人中...")
 def _fetch_recommended_candidate(limit: int) -> List[Dict[str, Any]]:
@@ -41,18 +49,22 @@ def main() -> None:
     sidebar_controls(include_config_path=False, include_job_selector=True)
 
     # Get selected job from sidebar
-    selected_job_info = st.session_state.get("selected_job")
+    selected_job_info = st.session_state.get(SessionKeys.SELECTED_JOB)
     if not selected_job_info:
         st.error("请先选择职位")
         return
+    
+    _select_recommend_job(selected_job_info.get("position"))
 
     limit = st.slider("每次获取数量", min_value=5, max_value=100, value=20, step=5)
 
     # Sync job selection with backend
-    selected_job_idx = st.session_state.get("selected_job_index", 0)
-    if st.session_state.get("_recommend_job_synced") != selected_job_idx:
+    selected_job_idx = st.session_state.get(SessionKeys.SELECTED_JOB_INDEX, 0)
+    job_title = selected_job_info.get("position")
+    
+    if st.session_state.get(SessionKeys.RECOMMEND_JOB_SYNCED) != selected_job_idx:
         call_api("POST", "/recommend/select-job", json={"job": selected_job_info})
-        st.session_state["_recommend_job_synced"] = selected_job_idx
+        st.session_state[SessionKeys.RECOMMEND_JOB_SYNCED] = selected_job_idx
 
     # Fetch candidates
     candidates = _fetch_recommended_candidate(limit)
@@ -69,17 +81,17 @@ def main() -> None:
         options=list(range(len(candidates))),
         format_func=lambda idx: f"#{idx+1} {candidates[idx].get('text', '')[:40]}",
     )
-    online_resume = st.session_state.get("cached_online_resume", None)
+    online_resume = st.session_state.get(SessionKeys.CACHED_ONLINE_RESUME, None)
     if st.button("查看在线简历", key="view_recommend_resume"):
         with st.spinner("获取在线简历中..."):
             online_resume = _fetch_candidate_resume(selected_index)
-            st.session_state["cached_online_resume"] = online_resume
+            st.session_state[SessionKeys.CACHED_ONLINE_RESUME] = online_resume
         st.text_area("在线简历", value=online_resume, height=300)
 
 
     with st.form("greet_recommend_form_page"):
         # Initialize greeting from session state or empty
-        greeting_key = "recommend_greet_message"
+        greeting_key = SessionKeys.RECOMMEND_GREET_MESSAGE
         if greeting_key not in st.session_state:
             st.session_state[greeting_key] = ""
         
