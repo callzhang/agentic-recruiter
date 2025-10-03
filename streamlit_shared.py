@@ -24,6 +24,7 @@ DEFAULT_CRITERIA_PATH = Path(os.environ.get("BOSS_CRITERIA_PATH", "config/jobs.y
 # - FIRST_ROLE_*, NEW_ROLE_*: Only used to clear inputs (Streamlit handles this automatically)
 # - BASE_URL_*, CONFIG_PATH_SELECT, JOB_SELECTOR: Widget keys (Streamlit auto-generates keys)
 # - BASE_URL, BASE_URL_OPTIONS: Base URL selection (assumed constant, uses DEFAULT_BASE_URL)
+# - CONFIG_DATA, CONFIG_LOADED_PATH, LAST_SAVED_YAML: Config data (now uses @st.cache_data)
 #
 class SessionKeys:
     # ============================================================================
@@ -33,9 +34,6 @@ class SessionKeys:
     
     # Configuration management
     CRITERIA_PATH = "criteria_path"         # Path to jobs.yaml configuration file
-    CONFIG_DATA = "config_data"            # Parsed YAML configuration data
-    CONFIG_LOADED_PATH = "_config_loaded_path"  # Path of currently loaded config file
-    LAST_SAVED_YAML = "_last_saved_yaml"   # Last saved YAML content for change detection
     
     # ============================================================================
     # JOB MANAGEMENT
@@ -72,8 +70,6 @@ def ensure_state() -> None:
     if SessionKeys.CRITERIA_PATH not in st.session_state:
         candidate = DEFAULT_CRITERIA_PATH.resolve()
         st.session_state[SessionKeys.CRITERIA_PATH] = str(candidate)
-    if SessionKeys.LAST_SAVED_YAML not in st.session_state:
-        st.session_state[SessionKeys.LAST_SAVED_YAML] = None
     if SessionKeys.SELECTED_JOB not in st.session_state:
         st.session_state[SessionKeys.SELECTED_JOB] = None
     if SessionKeys.JOBS_CACHE not in st.session_state:
@@ -185,7 +181,9 @@ def get_config_path() -> Path:
     return Path(st.session_state[SessionKeys.CRITERIA_PATH]).expanduser().resolve()
 
 
+@st.cache_data(ttl=60, show_spinner="加载配置中...")
 def load_config(path: Path) -> Dict[str, Any]:
+    """Load configuration from YAML file with caching."""
     if not path.exists():
         return {}
     try:
@@ -201,12 +199,12 @@ def _dump_yaml(data: Dict[str, Any]) -> str:
 
 def write_config(path: Path, data: Dict[str, Any], *, auto: bool = False) -> bool:
     yaml_text = _dump_yaml(data)
-    last_yaml = st.session_state.get(SessionKeys.LAST_SAVED_YAML)
-    if last_yaml == yaml_text and path.exists():
+    if path.exists() and path.read_text(encoding="utf-8") == yaml_text:
         return False
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(yaml_text, encoding="utf-8")
-    st.session_state[SessionKeys.LAST_SAVED_YAML] = yaml_text
+    # Clear cache to force reload on next access
+    load_config.clear()
     if not auto:
         st.toast("配置已保存", icon="💾")
     return True
@@ -220,25 +218,15 @@ def auto_save_config(data: Dict[str, Any]) -> None:
 
 
 def get_config_data() -> Tuple[Dict[str, Any], Path]:
+    """Get configuration data and path using cached loading."""
     path = get_config_path()
-    cache_key = SessionKeys.CONFIG_LOADED_PATH
-    if (
-        SessionKeys.CONFIG_DATA not in st.session_state
-        or st.session_state.get(cache_key) != str(path)
-    ):
-        config = load_config(path)
-        st.session_state[SessionKeys.CONFIG_DATA] = config
-        st.session_state[cache_key] = str(path)
-        st.session_state[SessionKeys.LAST_SAVED_YAML] = _dump_yaml(config)
-    return st.session_state[SessionKeys.CONFIG_DATA], path
+    config = load_config(path)
+    return config, path
 
 
 def refresh_config() -> None:
-    path = get_config_path()
-    config = load_config(path)
-    st.session_state[SessionKeys.CONFIG_DATA] = config
-    st.session_state[SessionKeys.CONFIG_LOADED_PATH] = str(path)
-    st.session_state[SessionKeys.LAST_SAVED_YAML] = _dump_yaml(config)
+    """Refresh configuration cache."""
+    load_config.clear()
 
 @st.spinner("正在请求 API...")
 def call_api(method: str, path: str, **kwargs) -> Tuple[bool, Any]:
