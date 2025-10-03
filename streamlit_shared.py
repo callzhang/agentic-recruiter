@@ -19,7 +19,7 @@ DEFAULT_CRITERIA_PATH = Path(os.environ.get("BOSS_CRITERIA_PATH", "config/jobs.y
 # This class centralizes all Streamlit session state keys used across the application.
 # Keys are organized by functional area with detailed comments explaining their purpose.
 # 
-# UNUSED/UNNECESSARY KEYS:
+# REMOVED UNNECESSARY KEYS:
 # - RECOMMEND_GREET_MESSAGE: Legacy from greeting generation (now uses analysis)
 # - FIRST_ROLE_*, NEW_ROLE_*: Only used to clear inputs (Streamlit handles this automatically)
 # - BASE_URL_*, CONFIG_PATH_SELECT, JOB_SELECTOR: Widget keys (Streamlit auto-generates keys)
@@ -56,8 +56,6 @@ class SessionKeys:
     # Resume caching (performance optimization)
     CACHED_ONLINE_RESUME = "cached_online_resume"  # Cached online resume text for current candidate
     
-    # Greeting management (UNUSED - legacy from greeting generation feature)
-    RECOMMEND_GREET_MESSAGE = "recommend_greet_message"  # UNUSED: Was for generated greeting messages
     
     # ============================================================================
     # ANALYSIS & MESSAGING
@@ -69,31 +67,6 @@ class SessionKeys:
     
     # Message generation
     GENERATED_MESSAGES = "generated_messages"  # Generated message drafts by chat_id
-    
-    # ============================================================================
-    # PAGE-SPECIFIC STATE (Job Profile Management)
-    # ============================================================================
-    
-    # Job profile form state (pages/4_岗位画像.py) - UNNECESSARY: Only used to clear inputs
-    FIRST_ROLE_POSITION = "first_role_position"  # UNNECESSARY: Only used to clear input after adding role
-    FIRST_ROLE_ID = "first_role_id"              # UNNECESSARY: Only used to clear input after adding role
-    NEW_ROLE_POSITION = "new_role_position"       # UNNECESSARY: Only used to clear input after adding role
-    NEW_ROLE_ID = "new_role_id"                   # UNNECESSARY: Only used to clear input after adding role
-    
-    # ============================================================================
-    # UI CONTROL KEYS (Streamlit widget keys) - UNNECESSARY
-    # ============================================================================
-    
-    # Base URL selection widgets (UNNECESSARY: key parameter is optional)
-    BASE_URL_SELECT = "__base_url_select__"      # UNNECESSARY: Streamlit auto-generates keys
-    BASE_URL_NEW = "__base_url_new__"             # UNNECESSARY: Streamlit auto-generates keys
-    BASE_URL_ADD_BTN = "__base_url_add_btn__"    # UNNECESSARY: Streamlit auto-generates keys
-    
-    # Configuration widgets (UNNECESSARY: key parameter is optional)
-    CONFIG_PATH_SELECT = "__config_path_select__"  # UNNECESSARY: Streamlit auto-generates keys
-    
-    # Job selection widget (UNNECESSARY: key parameter is optional)
-    JOB_SELECTOR = "__job_selector__"             # UNNECESSARY: Streamlit auto-generates keys
 
 
 def ensure_state() -> None:
@@ -176,18 +149,16 @@ def sidebar_controls(*, include_config_path: bool = False, include_job_selector:
         "API 服务地址",
         base_options,
         index=base_options.index(st.session_state[SessionKeys.BASE_URL]),
-        key=SessionKeys.BASE_URL_SELECT,
     )
     st.session_state[SessionKeys.BASE_URL] = selected_base
 
-    new_base = st.sidebar.text_input("新增 API 地址", key=SessionKeys.BASE_URL_NEW, placeholder="http://127.0.0.1:5001")
-    if st.sidebar.button("添加 API 地址", key=SessionKeys.BASE_URL_ADD_BTN):
+    new_base = st.sidebar.text_input("新增 API 地址", placeholder="http://127.0.0.1:5001")
+    if st.sidebar.button("添加 API 地址"):
         if new_base and new_base not in base_options:
             base_options.append(new_base)
             st.session_state[SessionKeys.BASE_URL_OPTIONS] = base_options
             st.session_state[SessionKeys.BASE_URL] = new_base
             st.sidebar.success("已添加新的 API 地址")
-        st.session_state[SessionKeys.BASE_URL_NEW] = ""
 
     config_path = Path(st.session_state[SessionKeys.CRITERIA_PATH]).resolve()
 
@@ -201,7 +172,6 @@ def sidebar_controls(*, include_config_path: bool = False, include_job_selector:
             config_options,
             index=config_options.index(config_path) if config_path in config_options else 0,
             format_func=lambda p: p.name,
-            key=SessionKeys.CONFIG_PATH_SELECT,
         )
         config_path = selected_config.resolve()
         st.session_state[SessionKeys.CRITERIA_PATH] = str(config_path)
@@ -228,7 +198,6 @@ def sidebar_controls(*, include_config_path: bool = False, include_job_selector:
                 options=list(range(len(roles))),
                 format_func=lambda idx: job_options[idx],
                 index=current_idx,
-                key=SessionKeys.JOB_SELECTOR,
             )
             
             # Update session state with both index and job object
