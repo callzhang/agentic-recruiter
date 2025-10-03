@@ -5,7 +5,7 @@ from typing import Any, Dict, List
 
 import streamlit as st
 
-from streamlit_shared import call_api, ensure_state, sidebar_controls, SessionKeys
+from streamlit_shared import call_api, ensure_state, sidebar_controls, SessionKeys, get_selected_job
 
 @st.spinner("切换职位中...")
 def _select_recommend_job(job_title: str) -> None:
@@ -48,8 +48,9 @@ def main() -> None:
     ensure_state()
     sidebar_controls(include_config_path=False, include_job_selector=True)
 
-    # Get selected job from sidebar
-    selected_job_info = st.session_state.get(SessionKeys.SELECTED_JOB)
+    # Get selected job from cached functions
+    selected_job_idx = st.session_state.get(SessionKeys.SELECTED_JOB_INDEX, 0)
+    selected_job_info = get_selected_job(selected_job_idx)
     if not selected_job_info:
         st.error("请先选择职位")
         return
@@ -57,7 +58,6 @@ def main() -> None:
     limit = st.slider("每次获取数量", min_value=5, max_value=100, value=20, step=5)
 
     # Sync job selection with backend
-    selected_job_idx = st.session_state.get(SessionKeys.SELECTED_JOB_INDEX, 0)
     job_title = selected_job_info.get("position")
     
     if st.session_state.get(SessionKeys.RECOMMEND_JOB_SYNCED) != selected_job_idx:

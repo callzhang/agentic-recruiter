@@ -25,6 +25,7 @@ DEFAULT_CRITERIA_PATH = Path(os.environ.get("BOSS_CRITERIA_PATH", "config/jobs.y
 # - BASE_URL_*, CONFIG_PATH_SELECT, JOB_SELECTOR: Widget keys (Streamlit auto-generates keys)
 # - BASE_URL, BASE_URL_OPTIONS: Base URL selection (assumed constant, uses DEFAULT_BASE_URL)
 # - CONFIG_DATA, CONFIG_LOADED_PATH, LAST_SAVED_YAML: Config data (now uses @st.cache_data)
+# - SELECTED_JOB, JOBS_CACHE, RECOMMEND_JOB_SYNCED: Job data (now uses @st.cache_data + minimal index)
 #
 class SessionKeys:
     # ============================================================================
@@ -35,15 +36,9 @@ class SessionKeys:
     # Configuration management
     CRITERIA_PATH = "criteria_path"         # Path to jobs.yaml configuration file
     
-    # ============================================================================
-    # JOB MANAGEMENT
-    # ============================================================================
+    # Job selection (minimal state)
+    SELECTED_JOB_INDEX = "selected_job_index"  # Index of selected job (only index needed)
     
-    # Job selection state
-    SELECTED_JOB = "selected_job"           # Currently selected job object from jobs.yaml
-    SELECTED_JOB_INDEX = "selected_job_index"  # Index of selected job in the jobs list
-    JOBS_CACHE = "_jobs_cache"              # Cached list of available jobs (performance optimization)
-    RECOMMEND_JOB_SYNCED = "_recommend_job_synced"  # Sync flag for recommendation page job selection
     
     # ============================================================================
     # RESUME & GREETING MANAGEMENT
@@ -70,14 +65,6 @@ def ensure_state() -> None:
     if SessionKeys.CRITERIA_PATH not in st.session_state:
         candidate = DEFAULT_CRITERIA_PATH.resolve()
         st.session_state[SessionKeys.CRITERIA_PATH] = str(candidate)
-    if SessionKeys.SELECTED_JOB not in st.session_state:
-        st.session_state[SessionKeys.SELECTED_JOB] = None
-    if SessionKeys.JOBS_CACHE not in st.session_state:
-        st.session_state[SessionKeys.JOBS_CACHE] = []
-    if SessionKeys.SELECTED_JOB_INDEX not in st.session_state:
-        st.session_state[SessionKeys.SELECTED_JOB_INDEX] = 0
-    if SessionKeys.RECOMMEND_JOB_SYNCED not in st.session_state:
-        st.session_state[SessionKeys.RECOMMEND_JOB_SYNCED] = None
 
 
 def discover_config_paths() -> List[Path]:
@@ -109,7 +96,9 @@ def discover_config_paths() -> List[Path]:
     return results
 
 
+@st.cache_data(ttl=60, show_spinner="加载岗位配置中...")
 def load_jobs_from_path(path: Path) -> List[Dict[str, Any]]:
+    """Load jobs from YAML file with caching."""
     try:
         if not path.exists():
             return []
@@ -119,6 +108,21 @@ def load_jobs_from_path(path: Path) -> List[Dict[str, Any]]:
     except Exception as exc:
         st.warning(f"加载岗位配置失败: {exc}")
     return []
+
+
+@st.cache_data(ttl=60, show_spinner="加载岗位配置中...")
+def load_jobs() -> List[Dict[str, Any]]:
+    """Load jobs from current config path with caching."""
+    path = get_config_path()
+    return load_jobs_from_path(path)
+
+
+def get_selected_job(job_index: int = 0) -> Dict[str, Any]:
+    """Get selected job by index with caching."""
+    jobs = load_jobs()
+    if not jobs or job_index >= len(jobs):
+        return {}
+    return jobs[job_index]
 
 
 def sidebar_controls(*, include_config_path: bool = False, include_job_selector: bool = False) -> None:
@@ -142,23 +146,20 @@ def sidebar_controls(*, include_config_path: bool = False, include_job_selector:
         )
         config_path = selected_config.resolve()
         st.session_state[SessionKeys.CRITERIA_PATH] = str(config_path)
-        st.session_state.pop(SessionKeys.JOBS_CACHE, None)
+        # Clear job cache when config path changes
+        load_jobs.clear()
     
     # Job selector
     if include_job_selector:
-        config = load_config(get_config_path())
-        roles = config.get("roles", [])
-        
-        # Update jobs cache
-        st.session_state[SessionKeys.JOBS_CACHE] = roles
+        roles = load_jobs()
         
         if roles:
+            job_options = [f"{role.get('position', role.get('id', f'岗位{i+1}'))}" for i, role in enumerate(roles)]
+            
             # Get current selection or default to 0
             current_idx = st.session_state.get(SessionKeys.SELECTED_JOB_INDEX, 0)
             if current_idx >= len(roles):
                 current_idx = 0
-            
-            job_options = [f"{role.get('position', role.get('id', f'岗位{i+1}'))}" for i, role in enumerate(roles)]
             
             selected_idx = st.sidebar.selectbox(
                 "当前岗位",
@@ -167,12 +168,10 @@ def sidebar_controls(*, include_config_path: bool = False, include_job_selector:
                 index=current_idx,
             )
             
-            # Update session state with both index and job object
+            # Store only the index, job data is loaded on demand
             st.session_state[SessionKeys.SELECTED_JOB_INDEX] = selected_idx
-            st.session_state[SessionKeys.SELECTED_JOB] = roles[selected_idx]
         else:
             st.sidebar.warning("⚠️ 未配置岗位，请到「岗位画像」页面添加")
-            st.session_state[SessionKeys.SELECTED_JOB] = None
             st.session_state[SessionKeys.SELECTED_JOB_INDEX] = 0
 
 
