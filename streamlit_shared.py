@@ -26,6 +26,7 @@ DEFAULT_CRITERIA_PATH = Path(os.environ.get("BOSS_CRITERIA_PATH", "config/jobs.y
 # - BASE_URL, BASE_URL_OPTIONS: Base URL selection (assumed constant, uses DEFAULT_BASE_URL)
 # - CONFIG_DATA, CONFIG_LOADED_PATH, LAST_SAVED_YAML: Config data (now uses @st.cache_data)
 # - SELECTED_JOB, JOBS_CACHE, RECOMMEND_JOB_SYNCED: Job data (now uses @st.cache_data + minimal index)
+# - ANALYSIS_NOTES: User notes for analysis (not used in analysis API, removed from UI)
 #
 class SessionKeys:
     # ============================================================================
@@ -53,7 +54,6 @@ class SessionKeys:
     # ============================================================================
     
     # AI analysis functionality
-    ANALYSIS_NOTES = "analysis_notes"       # User notes for candidate analysis
     ANALYSIS_RESULTS = "analysis_results"   # AI analysis results (skill, startup_fit, etc.)
     
     # Message generation

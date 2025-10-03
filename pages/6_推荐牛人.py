@@ -89,13 +89,6 @@ def main() -> None:
 
     with st.form("analyze_recommend_form_page"):
         
-        analysis_notes = st.text_area(
-            'analysis_notes', 
-            value=st.session_state.get(SessionKeys.ANALYSIS_NOTES, ""),
-            placeholder="分析说明 (可选)", 
-            label_visibility="collapsed"
-        )
-        
         col1, col2 = st.columns(2)
         
         with col1:
@@ -109,7 +102,6 @@ def main() -> None:
                     "candidate_description": candidates[selected_index].get("text", ""),
                     "candidate_resume": online_resume,
                     "chat_history": "无",  # No chat history for recommended candidates
-                    "notes": analysis_notes,
                 }
                 
                 with st.spinner("AI正在分析候选人..."):

@@ -280,13 +280,6 @@ def main() -> None:
 
     # === Scoring Section (user-triggered) ===
     st.subheader("自动评分")
-    notes = st.text_input(
-        "自动评分", 
-        placeholder="补充说明 (可选)", 
-        value="", 
-        key=f"score_notes_{chat_id}", 
-        label_visibility="collapsed"
-    )
     if st.button("Analyze", key=f"analyze_{chat_id}"):
         # Use cached resume data
         context = {
@@ -294,7 +287,6 @@ def main() -> None:
             "candidate_description": None,
             "candidate_resume": resume_text,
             "chat_history": history_text or "无",
-            "notes": notes,
         }
         with st.spinner("分析中..."):
             ok, payload = call_api(
