@@ -290,7 +290,7 @@ def discard_candidate_action(page, chat_id: str) -> Dict[str, Any]:
 
 
 
-def get_messages_list_action(page, limit: int = 10):
+def get_chat_list_action(page, limit: int = 10):
     """获取消息列表"""
     _prepare_chat_page(page)
     # Simple text extraction for messages
