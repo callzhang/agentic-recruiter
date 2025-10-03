@@ -22,6 +22,7 @@ DEFAULT_CRITERIA_PATH = Path(os.environ.get("BOSS_CRITERIA_PATH", "config/jobs.y
 # UNUSED/UNNECESSARY KEYS:
 # - RECOMMEND_GREET_MESSAGE: Legacy from greeting generation (now uses analysis)
 # - FIRST_ROLE_*, NEW_ROLE_*: Only used to clear inputs (Streamlit handles this automatically)
+# - BASE_URL_*, CONFIG_PATH_SELECT, JOB_SELECTOR: Widget keys (Streamlit auto-generates keys)
 #
 class SessionKeys:
     # ============================================================================
@@ -80,19 +81,19 @@ class SessionKeys:
     NEW_ROLE_ID = "new_role_id"                   # UNNECESSARY: Only used to clear input after adding role
     
     # ============================================================================
-    # UI CONTROL KEYS (Streamlit widget keys)
+    # UI CONTROL KEYS (Streamlit widget keys) - UNNECESSARY
     # ============================================================================
     
-    # Base URL selection widgets
-    BASE_URL_SELECT = "__base_url_select__"      # Base URL selectbox widget key
-    BASE_URL_NEW = "__base_url_new__"             # New base URL input widget key
-    BASE_URL_ADD_BTN = "__base_url_add_btn__"    # Add base URL button widget key
+    # Base URL selection widgets (UNNECESSARY: key parameter is optional)
+    BASE_URL_SELECT = "__base_url_select__"      # UNNECESSARY: Streamlit auto-generates keys
+    BASE_URL_NEW = "__base_url_new__"             # UNNECESSARY: Streamlit auto-generates keys
+    BASE_URL_ADD_BTN = "__base_url_add_btn__"    # UNNECESSARY: Streamlit auto-generates keys
     
-    # Configuration widgets
-    CONFIG_PATH_SELECT = "__config_path_select__"  # Config path selectbox widget key
+    # Configuration widgets (UNNECESSARY: key parameter is optional)
+    CONFIG_PATH_SELECT = "__config_path_select__"  # UNNECESSARY: Streamlit auto-generates keys
     
-    # Job selection widget
-    JOB_SELECTOR = "__job_selector__"             # Job selector selectbox widget key
+    # Job selection widget (UNNECESSARY: key parameter is optional)
+    JOB_SELECTOR = "__job_selector__"             # UNNECESSARY: Streamlit auto-generates keys
 
 
 def ensure_state() -> None:
