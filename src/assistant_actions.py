@@ -286,25 +286,21 @@ class AssistantActions:
     
     def generate_greeting_for_candidate(
         self,
-        candidate_name: str,
-        candidate_title: str,
-        candidate_summary: str,
-        candidate_resume: str,
-        job_title: str,
-        company_description: str,
-        target_profile: str
+        candidate_name: str = None,
+        candidate_title: str = None,
+        candidate_summary: str = None,
+        candidate_resume: str = None,
+        job_info: dict = None
     ) -> str:
         """
         Generate AI-powered greeting message for a specific candidate.
         
         Args:
-            candidate_name: Name of the candidate
-            candidate_title: Current job title of the candidate
-            candidate_summary: Brief summary of candidate's background
-            candidate_resume: Full resume text of the candidate
-            job_title: The job title we're recruiting for
-            company_description: Description of our company
-            target_profile: Ideal candidate profile for the role
+            candidate_name: Name of the candidate (optional)
+            candidate_title: Current job title of the candidate (optional)
+            candidate_summary: Brief summary of candidate's background (optional)
+            candidate_resume: Full resume text of the candidate (optional)
+            job_info: The job info we're recruiting for (optional)
             
         Returns:
             str: Generated greeting message
@@ -312,18 +308,38 @@ class AssistantActions:
         if not self.client:
             return DEFAULT_GREETING
         
+        # Build candidate info section with available data
+        candidate_sections = []
+        if candidate_name:
+            candidate_sections.append(f"姓名：{candidate_name}")
+        if candidate_title:
+            candidate_sections.append(f"当前职位：{candidate_title}")
+        if candidate_summary:
+            candidate_sections.append(f"背景简介：{candidate_summary}")
+        if candidate_resume:
+            candidate_sections.append(f"完整简历：{candidate_resume}")
+        
+        candidate_info = "\n".join(candidate_sections) if candidate_sections else "候选人信息：暂无详细信息"
+        
+        # Build job info section
+        job_sections = []
+        if job_info:
+            if job_info.get("title"):
+                job_sections.append(f"岗位：{job_info['title']}")
+            if job_info.get("company_description"):
+                job_sections.append(f"公司介绍：{job_info['company_description']}")
+            if job_info.get("target_profile"):
+                job_sections.append(f"理想人选：{job_info['target_profile']}")
+        
+        job_info_text = "\n".join(job_sections) if job_sections else "招聘信息：暂无详细信息"
+
         prompt = f"""请为以下候选人生成一条专业的打招呼消息：
 
 【候选人信息】
-姓名：{candidate_name}
-当前职位：{candidate_title}
-背景简介：{candidate_summary}
-完整简历：{candidate_resume}
+{candidate_info}
 
 【招聘信息】
-岗位：{job_title}
-公司介绍：{company_description}
-理想人选：{target_profile}
+{job_info_text}
 
 请生成一条：
 1. 专业且真诚的打招呼消息

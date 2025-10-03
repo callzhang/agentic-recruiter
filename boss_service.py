@@ -381,13 +381,11 @@ class BossService:
         
         @self.app.post('/recommend/candidate/{index}/generate-greeting')
         def generate_greeting_for_candidate(
-            candidate_name: str = Body(..., embed=True),
-            candidate_title: str = Body(..., embed=True),
-            candidate_summary: str = Body(..., embed=True),
+            candidate_name: str = Body(None, embed=True),
+            candidate_title: str = Body(None, embed=True),
+            candidate_summary: str = Body(None, embed=True),
             candidate_resume: str = Body(..., embed=True),
-            job_title: str = Body(..., embed=True),
-            company_description: str = Body(..., embed=True),
-            target_profile: str = Body(..., embed=True)
+            job_info: dict = Body(..., embed=True),
         ):
             """
             Generate a personalized AI-powered greeting message for a recommended candidate.
@@ -398,13 +396,11 @@ class BossService:
 
             Args:
                 index (int): Index of the candidate in the recommended list.
-                candidate_name (str): Name of the candidate.
-                candidate_title (str): Current job title of the candidate.
-                candidate_summary (str): Brief summary of candidate's background.
+                candidate_name (str, optional): Name of the candidate.
+                candidate_title (str, optional): Current job title of the candidate.
+                candidate_summary (str, optional): Brief summary of candidate's background.
                 candidate_resume (str): Full resume text of the candidate.
-                job_title (str): The job title we're recruiting for.
-                company_description (str): Description of our company.
-                target_profile (str): Ideal candidate profile for the role.
+                job_info (dict): Job information containing title, company_description, target_profile.
 
             Returns:
                 JSONResponse: {
@@ -421,9 +417,7 @@ class BossService:
                     candidate_title=candidate_title,
                     candidate_summary=candidate_summary,
                     candidate_resume=candidate_resume,
-                    job_title=job_title,
-                    company_description=company_description,
-                    target_profile=target_profile
+                    job_info=job_info,
                 )
                 
                 return JSONResponse({
@@ -1192,18 +1186,18 @@ class BossService:
             # Page exists, but check if user navigated to a different page in browser
             # If so, sync with the actual chat page
             current_url = getattr(self.page, 'url', '')
-            if settings.CHAT_URL not in current_url:
+            if settings.BASE_URL not in current_url:
                 logger.warning(f"Page out of sync (current: {current_url}), searching for chat page...")
                 pages = list(self.context.pages)
                 for page in pages:
                     page_url = getattr(page, 'url', '')
-                    if settings.CHAT_URL in page_url:
+                    if settings.BASE_URL in page_url:
                         logger.info(f"Synced to active chat page: {page_url}")
                         self.page = page
                         break
                 else:
                     # No chat page found, navigate current page to chat
-                    logger.info(f"No chat page found, navigating from: {current_url}")
+                    logger.info(f"No boss page found, navigating from: {current_url}")
                     self.page.goto(settings.CHAT_URL, wait_until="domcontentloaded", timeout=10000)
                     self.page.wait_for_load_state("networkidle", timeout=5000)
 
