@@ -9,12 +9,12 @@ from streamlit_shared import call_api, ensure_state, sidebar_controls, SessionKe
 
 @st.spinner("选择职位中...")
 def _select_recommend_job(job_title: str) -> None:
-    # @self.app.post('/chat/select-job')
+    # @self.app.post('/recommend/select-job')
     ok, payload = call_api("POST", "/recommend/select-job", json={"job_title": job_title})
     if not ok:
         st.error(f"选择职位失败: {payload}")
         raise ValueError(f"选择职位失败: {payload}")
-    st.session_state["_recommend_job_synced"] = job_title
+    st.session_state[SessionKeys.RECOMMEND_JOB_SYNCED] = job_title
 
 @st.cache_data(ttl=300, show_spinner="获取推荐牛人中...")
 def _fetch_recommended_candidate(limit: int) -> List[Dict[str, Any]]:
@@ -53,8 +53,6 @@ def main() -> None:
     if not selected_job_info:
         st.error("请先选择职位")
         return
-    
-    _select_recommend_job(selected_job_info.get("position"))
 
     limit = st.slider("每次获取数量", min_value=5, max_value=100, value=20, step=5)
 
@@ -63,7 +61,7 @@ def main() -> None:
     job_title = selected_job_info.get("position")
     
     if st.session_state.get(SessionKeys.RECOMMEND_JOB_SYNCED) != selected_job_idx:
-        call_api("POST", "/recommend/select-job", json={"job": selected_job_info})
+        _select_recommend_job(job_title)
         st.session_state[SessionKeys.RECOMMEND_JOB_SYNCED] = selected_job_idx
 
     # Fetch candidates
