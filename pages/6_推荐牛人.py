@@ -139,6 +139,7 @@ def main() -> None:
                             "candidate_name": candidate_info.get("name", "候选人"),
                             "candidate_title": candidate_info.get("title", ""),
                             "candidate_summary": candidate_info.get("summary", ""),
+                            "candidate_resume": candidate_info.get("online_resume", ""),
                             "job_title": job_info.get("title", ""),
                             "company_description": job_info.get("company_description", ""),
                             "target_profile": job_info.get("target_profile", "")

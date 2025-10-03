@@ -381,10 +381,10 @@ class BossService:
         
         @self.app.post('/recommend/candidate/{index}/generate-greeting')
         def generate_greeting_for_candidate(
-            index: int,
             candidate_name: str = Body(..., embed=True),
             candidate_title: str = Body(..., embed=True),
             candidate_summary: str = Body(..., embed=True),
+            candidate_resume: str = Body(..., embed=True),
             job_title: str = Body(..., embed=True),
             company_description: str = Body(..., embed=True),
             target_profile: str = Body(..., embed=True)
@@ -401,6 +401,7 @@ class BossService:
                 candidate_name (str): Name of the candidate.
                 candidate_title (str): Current job title of the candidate.
                 candidate_summary (str): Brief summary of candidate's background.
+                candidate_resume (str): Full resume text of the candidate.
                 job_title (str): The job title we're recruiting for.
                 company_description (str): Description of our company.
                 target_profile (str): Ideal candidate profile for the role.
@@ -419,6 +420,7 @@ class BossService:
                     candidate_name=candidate_name,
                     candidate_title=candidate_title,
                     candidate_summary=candidate_summary,
+                    candidate_resume=candidate_resume,
                     job_title=job_title,
                     company_description=company_description,
                     target_profile=target_profile

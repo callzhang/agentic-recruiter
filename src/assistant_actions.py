@@ -289,6 +289,7 @@ class AssistantActions:
         candidate_name: str,
         candidate_title: str,
         candidate_summary: str,
+        candidate_resume: str,
         job_title: str,
         company_description: str,
         target_profile: str
@@ -300,6 +301,7 @@ class AssistantActions:
             candidate_name: Name of the candidate
             candidate_title: Current job title of the candidate
             candidate_summary: Brief summary of candidate's background
+            candidate_resume: Full resume text of the candidate
             job_title: The job title we're recruiting for
             company_description: Description of our company
             target_profile: Ideal candidate profile for the role
@@ -316,6 +318,7 @@ class AssistantActions:
 姓名：{candidate_name}
 当前职位：{candidate_title}
 背景简介：{candidate_summary}
+完整简历：{candidate_resume}
 
 【招聘信息】
 岗位：{job_title}
