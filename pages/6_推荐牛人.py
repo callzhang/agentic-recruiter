@@ -7,7 +7,7 @@ import streamlit as st
 
 from streamlit_shared import call_api, ensure_state, sidebar_controls, SessionKeys
 
-@st.spinner("选择职位中...")
+@st.spinner("切换职位中...")
 def _select_recommend_job(job_title: str) -> None:
     # @self.app.post('/recommend/select-job')
     ok, payload = call_api("POST", "/recommend/select-job", json={"job_title": job_title})
@@ -87,57 +87,69 @@ def main() -> None:
         st.text_area("在线简历", value=online_resume, height=300)
 
 
-    with st.form("greet_recommend_form_page"):
-        # Initialize greeting from session state or empty
-        greeting_key = SessionKeys.RECOMMEND_GREET_MESSAGE
-        if greeting_key not in st.session_state:
-            st.session_state[greeting_key] = ""
+    with st.form("analyze_recommend_form_page"):
         
-        greeting = st.text_area(
-            'greet_text', 
-            value=st.session_state[greeting_key],
-            placeholder="打招呼内容 (留空使用默认话术)", 
+        analysis_notes = st.text_area(
+            'analysis_notes', 
+            value=st.session_state.get("analysis_notes", ""),
+            placeholder="分析说明 (可选)", 
             label_visibility="collapsed"
         )
         
         col1, col2 = st.columns(2)
         
         with col1:
-            if st.form_submit_button("🤖 AI生成", key="generate_greeting"):
+            if st.form_submit_button("🤖 AI分析", key="analyze_candidate"):
                 if not online_resume:
                     online_resume = _fetch_candidate_resume(selected_index)
                 
-                with st.spinner("AI正在生成个性化打招呼消息..."):
+                # Prepare analysis context
+                context = {
+                    "job_info": selected_job_info,
+                    "candidate_description": candidates[selected_index].get("text", ""),
+                    "candidate_resume": online_resume,
+                    "chat_history": "无",  # No chat history for recommended candidates
+                    "notes": analysis_notes,
+                }
+                
+                with st.spinner("AI正在分析候选人..."):
                     ok, payload = call_api(
                         "POST",
-                        f"/recommend/candidate/{selected_index}/generate-greeting",
-                        json={
-                            "candidate_name": candidates[selected_index].get("name"),
-                            "candidate_title": candidates[selected_index].get("title"),
-                            "candidate_summary": candidates[selected_index].get("text"),
-                            "candidate_resume": online_resume,
-                            "job_info": selected_job_info,
-                        }
+                        "/assistant/analyze-candidate",
+                        json=context
                     )
                 
                 if ok and payload.get("success"):
-                    # Store generated greeting in session state
-                    generated_greeting = payload.get('greeting', '')
-                    st.session_state[greeting_key] = generated_greeting
-                    st.success("AI生成完成！")
-                    st.rerun()  # Refresh to show the greeting in the text area
+                    # Store analysis results in session state
+                    analysis_result = payload.get("analysis")
+                    st.session_state.setdefault("analysis_results", {})[selected_index] = analysis_result
+                    st.success("AI分析完成！")
+                    st.rerun()  # Refresh to show the analysis results
                 else:
-                    st.error(f"AI生成失败: {payload}")
+                    error = payload.get("error") if isinstance(payload, dict) else str(payload)
+                    st.error(f"AI分析失败: {error}")
         
         with col2:
             if st.form_submit_button("发送打招呼"):
-                data = {"message": greeting} if greeting.strip() else None
+                # Use default greeting since we're now focused on analysis
+                data = {"message": ""}  # Empty message will use default greeting
                 ok, payload = call_api(
                     "POST",
                     f"/recommend/candidate/{selected_index}/greet",
                     json=data,
                 )
                 _render_response(ok, payload)
+    
+    # Display analysis results if available
+    analysis_result = st.session_state.get("analysis_results", {}).get(selected_index)
+    if analysis_result:
+        st.subheader("🤖 AI分析结果")
+        cols = st.columns(4)
+        cols[0].metric("技能匹配", analysis_result.get("skill", "—"))
+        cols[1].metric("创业契合", analysis_result.get("startup_fit", "—"))
+        cols[2].metric("加入意愿", analysis_result.get("willingness", "—"))
+        cols[3].metric("综合评分", analysis_result.get("overall", "—"))
+        st.markdown(f"**分析总结：** {analysis_result.get('summary', '—')}")
 
 
 if __name__ == "__main__":
