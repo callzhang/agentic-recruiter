@@ -321,17 +321,6 @@ class AssistantActions:
         
         candidate_info = "\n".join(candidate_sections) if candidate_sections else "候选人信息：暂无详细信息"
         
-        # Build job info section
-        job_sections = []
-        if job_info:
-            if job_info.get("title"):
-                job_sections.append(f"岗位：{job_info['title']}")
-            if job_info.get("company_description"):
-                job_sections.append(f"公司介绍：{job_info['company_description']}")
-            if job_info.get("target_profile"):
-                job_sections.append(f"理想人选：{job_info['target_profile']}")
-        
-        job_info_text = "\n".join(job_sections) if job_sections else "招聘信息：暂无详细信息"
 
         prompt = f"""请为以下候选人生成一条专业的打招呼消息：
 
@@ -339,8 +328,8 @@ class AssistantActions:
 {candidate_info}
 
 【招聘信息】
-{job_info_text}
-
+{job_info}
+你是公司的人才招聘负责人，请根据候选人信息和招聘信息，生成一条专业的打招呼消息。
 请生成一条：
 1. 专业且真诚的打招呼消息
 2. 突出公司与岗位的亮点
@@ -348,7 +337,8 @@ class AssistantActions:
 4. 长度控制在100-200字
 5. 使用中文，语气友好专业
 
-直接输出消息内容，不要包含其他说明文字。"""
+直接输出可以直接发送给候选人的消息，不要包含其他说明文字，也不要包含模板类的话术。
+"""
 
         try:
             response = self.client.chat.completions.create(
