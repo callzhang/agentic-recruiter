@@ -241,19 +241,6 @@ class AssistantActions:
         self._assistant_id = assistant.id
         return self._assistant_id
     
-    # Backward compatibility wrappers
-    def generate_greeting(self, prompt_context: str, thread_id: Optional[str] = None) -> str:
-        """
-        Generate greeting message (backward compatibility).
-        
-        Returns only the message. Use generate_message() for thread_id.
-        """
-        message, _ = self.generate_message(
-            prompt=f"候选人资料：{prompt_context}\n\n请生成一条合适的首次打招呼消息。",
-            thread_id=thread_id
-        )
-        return message
-    
     def generate_followup_message(
         self, 
         candidate_id: str, 
@@ -284,7 +271,8 @@ class AssistantActions:
         
         return message
     
-    def generate_greeting_for_candidate(
+
+    def generate_greeting_message(
         self,
         candidate_name: str = None,
         candidate_title: str = None,
