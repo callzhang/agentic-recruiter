@@ -380,21 +380,48 @@ class BossService:
             })
         
         @self.app.post('/recommend/candidate/{index}/generate-greeting')
-        def generate_greeting_for_candidate(index: int, payload: dict = Body(...)):
-            """Generate AI-powered greeting message for a candidate."""
+        def generate_greeting_for_candidate(
+            index: int,
+            candidate_name: str = Body(..., embed=True),
+            candidate_title: str = Body(..., embed=True),
+            candidate_summary: str = Body(..., embed=True),
+            job_title: str = Body(..., embed=True),
+            company_description: str = Body(..., embed=True),
+            target_profile: str = Body(..., embed=True)
+        ):
+            """
+            Generate a personalized AI-powered greeting message for a recommended candidate.
+
+            This endpoint receives candidate and job information as named parameters, invokes the AI assistant to generate
+            a professional and friendly greeting message tailored to the candidate and job context,
+            and returns the generated message.
+
+            Args:
+                index (int): Index of the candidate in the recommended list.
+                candidate_name (str): Name of the candidate.
+                candidate_title (str): Current job title of the candidate.
+                candidate_summary (str): Brief summary of candidate's background.
+                job_title (str): The job title we're recruiting for.
+                company_description (str): Description of our company.
+                target_profile (str): Ideal candidate profile for the role.
+
+            Returns:
+                JSONResponse: {
+                    'success': bool,           # Whether greeting was generated successfully
+                    'greeting': str,           # The generated greeting message
+                    'timestamp': str,          # ISO timestamp of response
+                    'error': str (optional)    # Error message if generation failed
+                }
+            """
             try:
-                # Get candidate info from the recommendation system
-                candidate_info = payload.get('candidate_info', {})
-                job_info = payload.get('job_info', {})
-                
                 # Generate greeting using AI
                 greeting = self.assistant_actions.generate_greeting_for_candidate(
-                    candidate_name=candidate_info.get('name', '候选人'),
-                    candidate_title=candidate_info.get('title', ''),
-                    candidate_summary=candidate_info.get('summary', ''),
-                    job_title=job_info.get('title', ''),
-                    company_description=job_info.get('company_description', ''),
-                    target_profile=job_info.get('target_profile', '')
+                    candidate_name=candidate_name,
+                    candidate_title=candidate_title,
+                    candidate_summary=candidate_summary,
+                    job_title=job_title,
+                    company_description=company_description,
+                    target_profile=target_profile
                 )
                 
                 return JSONResponse({

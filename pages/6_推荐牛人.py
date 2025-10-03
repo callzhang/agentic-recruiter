@@ -7,6 +7,8 @@ import streamlit as st
 
 from streamlit_shared import call_api, ensure_state, sidebar_controls
 
+CANDIDATES_KEY = "recommend_candidates"
+
 
 def _load_jobs() -> List[Dict[str, Any]]:
     cache = st.session_state.get("_jobs_cache")
@@ -14,7 +16,7 @@ def _load_jobs() -> List[Dict[str, Any]]:
         return cache
     return []
 
-
+@st.cache_data(ttl=600, show_spinner="获取推荐牛人中...")
 def _fetch_recommendations(limit: int) -> List[Dict[str, Any]]:
     ok, payload = call_api("GET", "/recommend/candidates", params={"limit": limit})
     if not ok:
@@ -24,7 +26,7 @@ def _fetch_recommendations(limit: int) -> List[Dict[str, Any]]:
     if not isinstance(candidates, list):
         st.warning("API 返回的推荐数据格式不符合预期")
         return []
-    st.session_state["recommend_candidates"] = candidates
+    st.session_state[CANDIDATES_KEY] = candidates
     return candidates
 
 
@@ -63,13 +65,13 @@ def main() -> None:
             call_api("POST", "/recommend/select-job", json={"job": selected_job})
             st.session_state["_recommend_job_synced"] = sync_key
 
-    if "recommend_candidates" not in st.session_state:
+    if CANDIDATES_KEY not in st.session_state:
         _fetch_recommendations(limit)
 
     if st.button("刷新推荐牛人", key="refresh_recommend"):
         _fetch_recommendations(limit)
 
-    candidates = st.session_state.get("recommend_candidates", [])
+    candidates = st.session_state.get(CANDIDATES_KEY, [])
     if not candidates:
         st.info("暂无推荐牛人")
         return
@@ -106,7 +108,7 @@ def main() -> None:
         greeting = st.text_area(
             "打招呼内容 (留空使用默认话术)", 
             value=st.session_state[greeting_key],
-            key=greeting_key
+            # key=greeting_key
         )
         
         col1, col2 = st.columns(2)
@@ -134,8 +136,12 @@ def main() -> None:
                         "POST",
                         f"/recommend/candidate/{selected_index}/generate-greeting",
                         json={
-                            "candidate_info": candidate_info,
-                            "job_info": job_info
+                            "candidate_name": candidate_info.get("name", "候选人"),
+                            "candidate_title": candidate_info.get("title", ""),
+                            "candidate_summary": candidate_info.get("summary", ""),
+                            "job_title": job_info.get("title", ""),
+                            "company_description": job_info.get("company_description", ""),
+                            "target_profile": job_info.get("target_profile", "")
                         }
                     )
                 
