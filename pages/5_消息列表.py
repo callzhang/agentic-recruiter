@@ -289,8 +289,8 @@ def main() -> None:
     if st.button("Analyze", key=f"analyze_{chat_id}"):
         # Use cached resume data
         context = {
-            "job_description": selected_job.get("description", ""),
-            "target_profile": selected_job.get("target_profile", ""),
+            "job_info": selected_job,
+            "candidate_description": None,
             "candidate_resume": resume_text,
             "chat_history": history_text or "无",
             "notes": notes,
@@ -298,18 +298,18 @@ def main() -> None:
         with st.spinner("分析中..."):
             ok, payload = call_api(
                 "POST", "/assistant/analyze-candidate",
-                json={"chat_id": chat_id, "context": context}
+                json=context
             )
             if ok and payload.get("success"):
                 result = payload.get("analysis")
-                st.session_state.setdefault("analysis_results", {})[chat_id] = result
+                st.session_state.setdefault(SessionKeys.ANALYSIS_RESULTS, {})[chat_id] = result
             else:
                 error = payload.get("error") if isinstance(payload, dict) else str(payload)
                 st.error(f"无法解析评分结果: {error}")
         st.rerun()
 
     # Display analysis results
-    result = st.session_state.get("analysis_results", {}).get(chat_id)
+    result = st.session_state.get(SessionKeys.ANALYSIS_RESULTS, {}).get(chat_id)
     if result:
         cols = st.columns(4)
         cols[0].metric("技能匹配", result.get("skill"))
@@ -320,7 +320,7 @@ def main() -> None:
 
     # === Message Section (user-triggered) ===
     st.subheader("生成消息")
-    message_state = st.session_state.setdefault("generated_messages", {})
+    message_state = st.session_state.setdefault(SessionKeys.GENERATED_MESSAGES, {})
     draft = message_state.get(chat_id, "")
     draft_message = st.empty()
     draft = draft_message.text_area("消息内容", value=draft, height=180, key=f"message_draft_{chat_id}")

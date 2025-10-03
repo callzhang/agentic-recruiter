@@ -34,6 +34,11 @@ class SessionKeys:
     CACHED_ONLINE_RESUME = "cached_online_resume"
     RECOMMEND_GREET_MESSAGE = "recommend_greet_message"
     
+    # Analysis and messaging
+    ANALYSIS_NOTES = "analysis_notes"
+    ANALYSIS_RESULTS = "analysis_results"
+    GENERATED_MESSAGES = "generated_messages"
+    
     # Page-specific state
     FIRST_ROLE_POSITION = "first_role_position"
     FIRST_ROLE_ID = "first_role_id"
@@ -252,7 +257,7 @@ def refresh_config() -> None:
     st.session_state[SessionKeys.CONFIG_LOADED_PATH] = str(path)
     st.session_state[SessionKeys.LAST_SAVED_YAML] = _dump_yaml(config)
 
-
+@st.spinner("正在请求 API...")
 def call_api(method: str, path: str, **kwargs) -> Tuple[bool, Any]:
     """Make HTTP request to boss_service API.
     

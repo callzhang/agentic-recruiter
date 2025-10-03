@@ -91,7 +91,7 @@ def main() -> None:
         
         analysis_notes = st.text_area(
             'analysis_notes', 
-            value=st.session_state.get("analysis_notes", ""),
+            value=st.session_state.get(SessionKeys.ANALYSIS_NOTES, ""),
             placeholder="分析说明 (可选)", 
             label_visibility="collapsed"
         )
@@ -122,7 +122,7 @@ def main() -> None:
                 if ok and payload.get("success"):
                     # Store analysis results in session state
                     analysis_result = payload.get("analysis")
-                    st.session_state.setdefault("analysis_results", {})[selected_index] = analysis_result
+                    st.session_state.setdefault(SessionKeys.ANALYSIS_RESULTS, {})[selected_index] = analysis_result
                     st.success("AI分析完成！")
                     st.rerun()  # Refresh to show the analysis results
                 else:
@@ -141,7 +141,7 @@ def main() -> None:
                 _render_response(ok, payload)
     
     # Display analysis results if available
-    analysis_result = st.session_state.get("analysis_results", {}).get(selected_index)
+    analysis_result = st.session_state.get(SessionKeys.ANALYSIS_RESULTS, {}).get(selected_index)
     if analysis_result:
         st.subheader("🤖 AI分析结果")
         cols = st.columns(4)

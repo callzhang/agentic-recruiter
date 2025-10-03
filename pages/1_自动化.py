@@ -35,7 +35,7 @@ def main() -> None:
             role_id = st.text_input("岗位 ID", value="default", key="scheduler_role_id")
             criteria_path = st.text_input(
                 "画像配置路径",
-        value=st.session_state.get("criteria_path", "config/jobs.yaml"),
+        value=st.session_state.get(SessionKeys.CRITERIA_PATH, "config/jobs.yaml"),
                 key="scheduler_criteria",
             )
             poll_interval = st.number_input("主动沟通轮询 (秒)", min_value=30, value=120, step=30)
