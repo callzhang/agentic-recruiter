@@ -14,7 +14,7 @@ def _select_recommend_job(job_title: str) -> None:
     if not ok:
         st.error(f"选择职位失败: {payload}")
         raise ValueError(f"选择职位失败: {payload}")
-    st.session_state[SessionKeys.RECOMMEND_JOB_SYNCED] = job_title
+    # Job selection completed
 
 @st.cache_data(ttl=300, show_spinner="获取推荐牛人中...")
 def _fetch_recommended_candidate(limit: int) -> List[Dict[str, Any]]:
@@ -60,9 +60,8 @@ def main() -> None:
     # Sync job selection with backend
     job_title = selected_job_info.get("position")
     
-    if st.session_state.get(SessionKeys.RECOMMEND_JOB_SYNCED) != selected_job_idx:
-        _select_recommend_job(job_title)
-        st.session_state[SessionKeys.RECOMMEND_JOB_SYNCED] = selected_job_idx
+    # Always sync job selection with backend
+    _select_recommend_job(job_title)
 
     # Fetch candidates
     candidates = _fetch_recommended_candidate(limit)
