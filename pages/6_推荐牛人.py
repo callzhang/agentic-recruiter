@@ -8,16 +8,13 @@ import streamlit as st
 from streamlit_shared import call_api, ensure_state, sidebar_controls
 
 
-@st.cache_data(ttl=600, show_spinner="获取推荐牛人中...")
-def _fetch_recommendations(limit: int) -> List[Dict[str, Any]]:
+@st.cache_data(ttl=300, show_spinner="获取推荐牛人中...")
+def _fetch_recommended_candidate(limit: int) -> List[Dict[str, Any]]:
     ok, payload = call_api("GET", "/recommend/candidates", params={"limit": limit})
     if not ok:
         st.error(f"获取推荐牛人失败: {payload}")
-        return []
+        raise ValueError(f"获取推荐牛人失败: {payload}")
     candidates = payload.get("candidates") or []
-    if not isinstance(candidates, list):
-        st.warning("API 返回的推荐数据格式不符合预期")
-        return []
     return candidates
 
 
@@ -36,7 +33,7 @@ def _fetch_candidate_resume(index: int) -> str:
     ok, payload = call_api("GET", f"/recommend/candidate/{index}")
     if ok and payload.get("success"):
         return payload['text']
-    return ""
+    raise ValueError(f"获取在线简历失败: {payload}")
 
 def main() -> None:
     st.title("推荐牛人")
@@ -58,7 +55,7 @@ def main() -> None:
         st.session_state["_recommend_job_synced"] = selected_job_idx
 
     # Fetch candidates
-    candidates = _fetch_recommendations(limit)
+    candidates = _fetch_recommended_candidate(limit)
     if not candidates:
         st.info("暂无推荐牛人")
         return
@@ -72,16 +69,26 @@ def main() -> None:
         options=list(range(len(candidates))),
         format_func=lambda idx: f"#{idx+1} {candidates[idx].get('text', '')[:40]}",
     )
-    online_resume = None
+    online_resume = st.session_state.get("cached_online_resume", None)
     if st.button("查看在线简历", key="view_recommend_resume"):
         with st.spinner("获取在线简历中..."):
             online_resume = _fetch_candidate_resume(selected_index)
-            
+            st.session_state["cached_online_resume"] = online_resume
         st.text_area("在线简历", value=online_resume, height=300)
 
 
     with st.form("greet_recommend_form_page"):
-        greeting = st.text_area('greet_text', placeholder="打招呼内容 (留空使用默认话术)", label_visibility="collapsed")
+        # Initialize greeting from session state or empty
+        greeting_key = "recommend_greet_message"
+        if greeting_key not in st.session_state:
+            st.session_state[greeting_key] = ""
+        
+        greeting = st.text_area(
+            'greet_text', 
+            value=st.session_state[greeting_key],
+            placeholder="打招呼内容 (留空使用默认话术)", 
+            label_visibility="collapsed"
+        )
         
         col1, col2 = st.columns(2)
         
@@ -99,17 +106,18 @@ def main() -> None:
                             "candidate_title": candidates[selected_index].get("title"),
                             "candidate_summary": candidates[selected_index].get("text"),
                             "candidate_resume": online_resume,
-                            "job_title": selected_job_info.get("title", ""),
-                            "company_description": selected_job_info.get("company_description", ""),
-                            "target_profile": selected_job_info.get("target_profile", "")
+                            "job_info": selected_job_info,
                         }
                     )
                 
                 if ok and payload.get("success"):
+                    # Store generated greeting in session state
+                    generated_greeting = payload.get('greeting', '')
+                    st.session_state[greeting_key] = generated_greeting
                     st.success("AI生成完成！")
-                    st.info(f"生成的打招呼消息：\n{payload.get('greeting', '')}")
+                    st.rerun()  # Refresh to show the greeting in the text area
                 else:
-                    st.error(f"AI生成失败: {payload.get('error', '未知错误')}")
+                    st.error(f"AI生成失败: {payload}")
         
         with col2:
             if st.form_submit_button("发送打招呼"):
