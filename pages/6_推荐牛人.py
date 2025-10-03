@@ -118,31 +118,18 @@ def main() -> None:
                 if not online_resume:
                     online_resume = _fetch_candidate_resume(selected_index)
                 
-                candidate_info = {
-                    "name": table_rows[selected_index].get("name", "候选人"),
-                    "title": table_rows[selected_index].get("title", ""),
-                    "summary": table_rows[selected_index].get("text", "")[:200] + "...",
-                    "online_resume": online_resume
-                }
-                
-                job_info = {
-                    "title": st.session_state.get("selected_job", {}).get("title", ""),
-                    "company_description": st.session_state.get("selected_job", {}).get("company_description", ""),
-                    "target_profile": st.session_state.get("selected_job", {}).get("target_profile", "")
-                }
-                
                 with st.spinner("AI正在生成个性化打招呼消息..."):
                     ok, payload = call_api(
                         "POST",
                         f"/recommend/candidate/{selected_index}/generate-greeting",
                         json={
-                            "candidate_name": candidate_info.get("name", "候选人"),
-                            "candidate_title": candidate_info.get("title", ""),
-                            "candidate_summary": candidate_info.get("summary", ""),
-                            "candidate_resume": candidate_info.get("online_resume", ""),
-                            "job_title": job_info.get("title", ""),
-                            "company_description": job_info.get("company_description", ""),
-                            "target_profile": job_info.get("target_profile", "")
+                            "candidate_name": table_rows[selected_index].get("name"),
+                            "candidate_title": table_rows[selected_index].get("title", ""),
+                            "candidate_summary": table_rows[selected_index].get("text", "")[:200] + "...",
+                            "candidate_resume": online_resume,
+                            "job_title": st.session_state.get("selected_job", {}).get("title", ""),
+                            "company_description": st.session_state.get("selected_job", {}).get("company_description", ""),
+                            "target_profile": st.session_state.get("selected_job", {}).get("target_profile", "")
                         }
                     )
                 
