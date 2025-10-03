@@ -15,42 +15,84 @@ DEFAULT_BASE_URL = os.environ.get("BOSS_SERVICE_BASE_URL", "http://127.0.0.1:500
 DEFAULT_CRITERIA_PATH = Path(os.environ.get("BOSS_CRITERIA_PATH", "config/jobs.yaml"))
 
 # Session State Keys - Centralized management
+# 
+# This class centralizes all Streamlit session state keys used across the application.
+# Keys are organized by functional area with detailed comments explaining their purpose.
+# 
+# UNUSED/UNNECESSARY KEYS:
+# - RECOMMEND_GREET_MESSAGE: Legacy from greeting generation (now uses analysis)
+# - FIRST_ROLE_*, NEW_ROLE_*: Only used to clear inputs (Streamlit handles this automatically)
+#
 class SessionKeys:
-    # Core application state
-    BASE_URL = "base_url"
-    BASE_URL_OPTIONS = "base_url_options"
-    CRITERIA_PATH = "criteria_path"
-    CONFIG_DATA = "config_data"
-    CONFIG_LOADED_PATH = "_config_loaded_path"
-    LAST_SAVED_YAML = "_last_saved_yaml"
+    # ============================================================================
+    # CORE APPLICATION STATE
+    # ============================================================================
     
-    # Job management
-    SELECTED_JOB = "selected_job"
-    SELECTED_JOB_INDEX = "selected_job_index"
-    JOBS_CACHE = "_jobs_cache"
-    RECOMMEND_JOB_SYNCED = "_recommend_job_synced"
+    # API connection management
+    BASE_URL = "base_url"                    # Current API base URL (e.g., "http://127.0.0.1:5001")
+    BASE_URL_OPTIONS = "base_url_options"   # List of available base URLs for selection
     
-    # Resume and greeting management
-    CACHED_ONLINE_RESUME = "cached_online_resume"
-    RECOMMEND_GREET_MESSAGE = "recommend_greet_message"
+    # Configuration management
+    CRITERIA_PATH = "criteria_path"         # Path to jobs.yaml configuration file
+    CONFIG_DATA = "config_data"            # Parsed YAML configuration data
+    CONFIG_LOADED_PATH = "_config_loaded_path"  # Path of currently loaded config file
+    LAST_SAVED_YAML = "_last_saved_yaml"   # Last saved YAML content for change detection
     
-    # Analysis and messaging
-    ANALYSIS_NOTES = "analysis_notes"
-    ANALYSIS_RESULTS = "analysis_results"
-    GENERATED_MESSAGES = "generated_messages"
+    # ============================================================================
+    # JOB MANAGEMENT
+    # ============================================================================
     
-    # Page-specific state
-    FIRST_ROLE_POSITION = "first_role_position"
-    FIRST_ROLE_ID = "first_role_id"
-    NEW_ROLE_POSITION = "new_role_position"
-    NEW_ROLE_ID = "new_role_id"
+    # Job selection state
+    SELECTED_JOB = "selected_job"           # Currently selected job object from jobs.yaml
+    SELECTED_JOB_INDEX = "selected_job_index"  # Index of selected job in the jobs list
+    JOBS_CACHE = "_jobs_cache"              # Cached list of available jobs (performance optimization)
+    RECOMMEND_JOB_SYNCED = "_recommend_job_synced"  # Sync flag for recommendation page job selection
     
-    # UI control keys
-    BASE_URL_SELECT = "__base_url_select__"
-    BASE_URL_NEW = "__base_url_new__"
-    BASE_URL_ADD_BTN = "__base_url_add_btn__"
-    CONFIG_PATH_SELECT = "__config_path_select__"
-    JOB_SELECTOR = "__job_selector__"
+    # ============================================================================
+    # RESUME & GREETING MANAGEMENT
+    # ============================================================================
+    
+    # Resume caching (performance optimization)
+    CACHED_ONLINE_RESUME = "cached_online_resume"  # Cached online resume text for current candidate
+    
+    # Greeting management (UNUSED - legacy from greeting generation feature)
+    RECOMMEND_GREET_MESSAGE = "recommend_greet_message"  # UNUSED: Was for generated greeting messages
+    
+    # ============================================================================
+    # ANALYSIS & MESSAGING
+    # ============================================================================
+    
+    # AI analysis functionality
+    ANALYSIS_NOTES = "analysis_notes"       # User notes for candidate analysis
+    ANALYSIS_RESULTS = "analysis_results"   # AI analysis results (skill, startup_fit, etc.)
+    
+    # Message generation
+    GENERATED_MESSAGES = "generated_messages"  # Generated message drafts by chat_id
+    
+    # ============================================================================
+    # PAGE-SPECIFIC STATE (Job Profile Management)
+    # ============================================================================
+    
+    # Job profile form state (pages/4_岗位画像.py) - UNNECESSARY: Only used to clear inputs
+    FIRST_ROLE_POSITION = "first_role_position"  # UNNECESSARY: Only used to clear input after adding role
+    FIRST_ROLE_ID = "first_role_id"              # UNNECESSARY: Only used to clear input after adding role
+    NEW_ROLE_POSITION = "new_role_position"       # UNNECESSARY: Only used to clear input after adding role
+    NEW_ROLE_ID = "new_role_id"                   # UNNECESSARY: Only used to clear input after adding role
+    
+    # ============================================================================
+    # UI CONTROL KEYS (Streamlit widget keys)
+    # ============================================================================
+    
+    # Base URL selection widgets
+    BASE_URL_SELECT = "__base_url_select__"      # Base URL selectbox widget key
+    BASE_URL_NEW = "__base_url_new__"             # New base URL input widget key
+    BASE_URL_ADD_BTN = "__base_url_add_btn__"    # Add base URL button widget key
+    
+    # Configuration widgets
+    CONFIG_PATH_SELECT = "__config_path_select__"  # Config path selectbox widget key
+    
+    # Job selection widget
+    JOB_SELECTOR = "__job_selector__"             # Job selector selectbox widget key
 
 
 def ensure_state() -> None:
