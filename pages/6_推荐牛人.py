@@ -44,8 +44,8 @@ def main() -> None:
     sidebar_controls(include_config_path=False, include_job_selector=True)
 
     # Get selected job from sidebar
-    selected_job = st.session_state.get("selected_job")
-    if not selected_job:
+    selected_job_info = st.session_state.get("selected_job")
+    if not selected_job_info:
         st.error("请先选择职位")
         return
 
@@ -54,7 +54,7 @@ def main() -> None:
     # Sync job selection with backend
     selected_job_idx = st.session_state.get("selected_job_index", 0)
     if st.session_state.get("_recommend_job_synced") != selected_job_idx:
-        call_api("POST", "/recommend/select-job", json={"job": selected_job})
+        call_api("POST", "/recommend/select-job", json={"job": selected_job_info})
         st.session_state["_recommend_job_synced"] = selected_job_idx
 
     # Fetch candidates
@@ -79,13 +79,9 @@ def main() -> None:
             
         st.text_area("在线简历", value=online_resume, height=300)
 
-    # Extract job data for use in forms
-    job_title = selected_job.get("title", "")
-    company_description = selected_job.get("company_description", "")
-    target_profile = selected_job.get("target_profile", "")
 
     with st.form("greet_recommend_form_page"):
-        greeting = st.text_area("打招呼内容 (留空使用默认话术)")
+        greeting = st.text_area('greet_text', placeholder="打招呼内容 (留空使用默认话术)", label_visibility="collapsed")
         
         col1, col2 = st.columns(2)
         
@@ -103,9 +99,9 @@ def main() -> None:
                             "candidate_title": candidates[selected_index].get("title"),
                             "candidate_summary": candidates[selected_index].get("text"),
                             "candidate_resume": online_resume,
-                            "job_title": job_title,
-                            "company_description": company_description,
-                            "target_profile": target_profile
+                            "job_title": selected_job_info.get("title", ""),
+                            "company_description": selected_job_info.get("company_description", ""),
+                            "target_profile": selected_job_info.get("target_profile", "")
                         }
                     )
                 
