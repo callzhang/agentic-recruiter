@@ -69,40 +69,41 @@ def _create_role(position: str, desired_id: str | None, existing_ids: Set[str]) 
 
 
 def _edit_role(role: Dict[str, Any], idx: int) -> None:
+    # Use stable keys that don't change with role content
     role["id"] = st.text_input(
         "岗位 ID",
         value=str(role.get("id", "")),
-        key=f"role_{idx}_id",
+        key=f"role_id_{idx}",  # More stable key
     )
     role["position"] = st.text_input(
         "岗位名称",
         value=str(role.get("position", "")),
-        key=f"role_{idx}_position",
+        key=f"role_position_{idx}",  # More stable key
     )
     role["background"] = st.text_area(
         "岗位背景",
         value=str(role.get("background", "")),
-        key=f"role_{idx}_background",
+        key=f"role_background_{idx}",  # More stable key
     )
     role["responsibilities"] = st.text_area(
         "岗位职责",
         value=str(role.get("responsibilities", "")),
-        key=f"role_{idx}_responsibilities",
+        key=f"role_responsibilities_{idx}",  # More stable key
     )
     role["requirements"] = st.text_area(
         "任职要求",
         value=str(role.get("requirements", "")),
-        key=f"role_{idx}_requirements",
+        key=f"role_requirements_{idx}",  # More stable key
     )
     role["description"] = st.text_area(
         "岗位概述",
         value=str(role.get("description", "")),
-        key=f"role_{idx}_description",
+        key=f"role_description_{idx}",  # More stable key
     )
     role["target_profile"] = st.text_area(
         "理想人选画像",
         value=str(role.get("target_profile", "")),
-        key=f"role_{idx}_target",
+        key=f"role_target_{idx}",  # More stable key
     )
 
     keywords = ensure_dict(role, "keywords")
@@ -147,6 +148,7 @@ def _edit_role(role: Dict[str, Any], idx: int) -> None:
         value=extra_yaml,
         key=f"role_{idx}_extra",
         height=220,
+        placeholder="请输入其它配置，格式为 YAML",
     )
     try:
         parsed = yaml.safe_load(updated_extra) or {}
@@ -181,52 +183,47 @@ def main() -> None:
                 st.rerun()
         return
 
+    # Track active tab in session state
+    if "active_tab" not in st.session_state:
+        st.session_state.active_tab = 0
+    
     tab_titles = [
         role.get("position") or role.get("id") or f"岗位#{idx + 1}"
         for idx, role in enumerate(roles)
     ]
     tabs = st.tabs(tab_titles + ["➕ 新增岗位"])
+    
+    # Use session state to maintain active tab
+    if st.session_state.active_tab >= len(tabs):
+        st.session_state.active_tab = 0
 
     for idx, tab in enumerate(tabs[:-1]):
         with tab:
+            # Track if this tab was clicked
+            if st.session_state.get(f"tab_clicked_{idx}", False):
+                st.session_state.active_tab = idx
+                st.session_state[f"tab_clicked_{idx}"] = False
+            
             _edit_role(roles[idx], idx)
             role_name = roles[idx].get("position") or roles[idx].get("id") or f"岗位#{idx + 1}"
-            col1, col2 = st.columns(2)
-            with col1:
-                if st.button("💾 保存", key=f"role_save_{idx}", type="primary", width="stretch"):
-                    auto_save_config(config)
-                    st.success(f"岗位『{role_name}』已保存")
-            with col2:
-                if st.button("🗑️ 删除该岗位", key=f"role_delete_{idx}", type="secondary", width="stretch"):
-                    confirm_delete_role_dialog(role_name, idx, roles)
+            if st.button("💾 保存", key=f"role_save_{idx}", type="primary", width="stretch"):
+                auto_save_config(config)
+                st.success(f"岗位『{role_name}』已保存")
 
     with tabs[-1]:
         st.markdown("### 新增岗位画像")
-        new_position = st.text_input("岗位名称", key="new_role_position")
-        new_role_id = st.text_input("岗位 ID (可选)", key="new_role_id")
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("💾 保存新岗位", key="save_new_role", type="primary", width="stretch"):
-                if not new_position.strip():
-                    st.warning("岗位名称不能为空")
-                else:
-                    roles.append(_create_role(new_position, new_role_id, existing_ids))
-                    auto_save_config(config)
-                    st.success("新岗位已保存")
-                    st.rerun()
-        with col2:
-            if st.button("🗑️ 清空输入", key="clear_new_role", type="secondary", width="stretch"):
+        idx = len(roles)
+        new_role = {}
+        _edit_role(new_role, idx)
+        if st.button("💾 保存新岗位", key="save_new_role", type="primary", width="stretch"):
+            new_position = new_role.get("position")
+            if not new_position.strip():
+                st.warning("岗位名称不能为空")
+            else:
+                roles.append(_create_role(new_position, new_role_id, existing_ids))
+                auto_save_config(config)
+                st.success("新岗位已保存")
                 st.rerun()
-
-        # Optionally, keep the old "新增岗位" button for compatibility
-        # if st.button("新增岗位", key="roles_add_tab"):
-        #     if not new_position.strip():
-        #         st.warning("岗位名称不能为空")
-        #     else:
-        #         roles.append(_create_role(new_position, new_role_id, existing_ids))
-        #         st.session_state["new_role_position"] = ""
-        #         st.session_state["new_role_id"] = ""
-        #         st.rerun()
 
 
 if __name__ == "__main__":
