@@ -138,8 +138,24 @@ class BossService:
             scheduler = self.scheduler
             self.scheduler = None
             self.scheduler_config = {}
+        
         try:
-            scheduler.stop()
+            # Add timeout for scheduler stop
+            import threading
+            import time
+            
+            def stop_with_timeout():
+                scheduler.stop()
+            
+            stop_thread = threading.Thread(target=stop_with_timeout)
+            stop_thread.daemon = True  # Allow thread to be killed if main process exits
+            stop_thread.start()
+            stop_thread.join(timeout=5)  # 5-second timeout
+            
+            if stop_thread.is_alive():
+                logger.warning("调度器停止超时，强制继续...")
+                return False, '调度器停止超时'
+            
             return True, '已停止调度器'
         except Exception as exc:  # pragma: no cover - defensive
             logger.error(f"停止调度器失败: {exc}")
@@ -191,33 +207,6 @@ class BossService:
 
         return options
 
-    def _compose_greeting_context(self, chat_id: str) -> str:
-        """Compose greeting context from chat ID (cache removed for simplicity)"""
-        return f"Chat ID: {chat_id}"
-
-    def send_greeting(self, chat_id: str, message: str | None = None) -> Dict[str, Any]:
-        self._ensure_browser_session()
-        context = self._compose_greeting_context(chat_id)
-        final_message = message if message else self.assistant_actions.generate_greeting(context, DEFAULT_GREETING)
-        result = send_message_action(self.page, chat_id, final_message)
-        success = result.get('success', False)
-        if success and getattr(self.assistant_actions, 'enabled', False):
-            keywords = ['greeting']
-            try:
-                self.assistant_actions.record_qa(
-                    qa_id=f"greet_{chat_id}",
-                    question=context,
-                    answer=final_message,
-                    keywords=keywords,
-                )
-            except Exception as exc:
-                logger.debug("Failed to persist greeting QA: %s", exc)
-        return {
-            'success': success,
-            'message': final_message,
-            'details': result.get('details', ''),
-        }
-
     def _startup_sync(self):
         """Synchronous startup tasks executed in a thread pool.
 
@@ -245,9 +234,30 @@ class BossService:
         Playwright resources and browser contexts.
         """
         logger.info("开始同步关闭任务...")
-        self._graceful_shutdown()
-        self._stop_scheduler()
-        logger.info("同步关闭任务完成。")
+        
+        # Add timeout to prevent hanging
+        import signal
+        
+        def timeout_handler(signum, frame):
+            logger.warning("关闭任务超时，强制退出...")
+            raise TimeoutError("Shutdown timeout")
+        
+        # Set 10-second timeout for shutdown
+        old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+        signal.alarm(10)
+        
+        try:
+            self._graceful_shutdown()
+            self._stop_scheduler()
+            logger.info("同步关闭任务完成。")
+        except TimeoutError:
+            logger.error("关闭任务超时，强制退出")
+        except Exception as e:
+            logger.error(f"关闭任务出错: {e}")
+        finally:
+            # Restore signal handler and cancel alarm
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old_handler)
 
     @asynccontextmanager
     async def lifespan(self, app: FastAPI):
@@ -379,8 +389,8 @@ class BossService:
                 'timestamp': datetime.now().isoformat()
             })
         
-        @self.app.post('/recommend/candidate/{index}/generate-greeting')
-        def generate_greeting_for_candidate(
+        @self.app.post('/chat/generate-greeting-message')
+        def generate_greeting_message(
             candidate_name: str = Body(None, embed=True),
             candidate_title: str = Body(None, embed=True),
             candidate_summary: str = Body(None, embed=True),
@@ -412,7 +422,7 @@ class BossService:
             """
             try:
                 # Generate greeting using AI
-                greeting = self.assistant_actions.generate_greeting_for_candidate(
+                greeting = self.assistant_actions.generate_greeting_message(
                     candidate_name=candidate_name,
                     candidate_title=candidate_title,
                     candidate_summary=candidate_summary,
@@ -1125,13 +1135,37 @@ class BossService:
         the shared browser context.
         """
         logger.info("执行优雅关闭...")
-        if hasattr(self, 'context') and self.context:
-            pass
         
-        if self.playwright:
-            self.playwright.stop()
-            logger.info("Playwright已停止。")
+        # Force release browser lock to prevent deadlock
+        try:
+            if hasattr(self, 'browser_lock') and self.browser_lock.locked():
+                logger.warning("强制释放浏览器锁...")
+                # Try to acquire and release the lock
+                if self.browser_lock.acquire(blocking=False):
+                    self.browser_lock.release()
+                else:
+                    logger.warning("无法获取浏览器锁，可能存在死锁")
+        except Exception as e:
+            logger.warning(f"释放浏览器锁时出错: {e}")
         
+        # Clean up Playwright resources with timeout
+        try:
+            if hasattr(self, 'context') and self.context:
+                logger.info("清理浏览器上下文...")
+                # Don't close context for CDP-attached browsers
+                pass
+        except Exception as e:
+            logger.warning(f"清理浏览器上下文时出错: {e}")
+        
+        try:
+            if hasattr(self, 'playwright') and self.playwright:
+                logger.info("停止Playwright...")
+                self.playwright.stop()
+                logger.info("Playwright已停止。")
+        except Exception as e:
+            logger.warning(f"停止Playwright时出错: {e}")
+        
+        # Clear references
         self.context = None
         self.page = None
         self.playwright = None
