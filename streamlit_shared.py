@@ -129,6 +129,33 @@ def sidebar_controls(*, include_config_path: bool = False, include_job_selector:
     """Render common sidebar inputs with dropdown controls."""
     ensure_state()
     st.sidebar.header("全局设置")
+    
+    # Theme toggle
+    st.sidebar.subheader("🎨 主题设置")
+    theme_mode = st.sidebar.selectbox(
+        "主题模式",
+        options=["自动", "浅色", "深色"],
+        index=0,
+        help="自动模式会根据系统设置切换主题"
+    )
+    
+    if theme_mode == "浅色":
+        st.sidebar.markdown("""
+        <style>
+        .stApp {
+            color-scheme: light;
+        }
+        </style>
+        """, unsafe_allow_html=True)
+    elif theme_mode == "深色":
+        st.sidebar.markdown("""
+        <style>
+        .stApp {
+            color-scheme: dark;
+        }
+        </style>
+        """, unsafe_allow_html=True)
+    # Auto mode uses system preference (default)
 
 
     config_path = Path(st.session_state[SessionKeys.CRITERIA_PATH]).resolve()
