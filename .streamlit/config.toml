@@ -22,25 +22,21 @@ serverPort = 8501
 # level = "debug"
 
 [theme]
-# Auto-switching light/dark theme configuration
-# Streamlit will automatically detect system theme preference
+# Auto-switching theme configuration
 base = "light"  # Base theme, but will auto-switch based on system preference
 
-# Light theme colors (default)
-primaryColor = "#FF6B6B"
+# Light theme colors
+primaryColor = "#2eb8bf"
 backgroundColor = "#FFFFFF"
 secondaryBackgroundColor = "#F0F2F6"
 textColor = "#262730"
 
-# Font settings for better readability
+# Font settings
 font = "sans serif"
 
-# Note: Streamlit automatically provides dark mode variants
-# when base="light" and system is in dark mode
-# The app will automatically switch between light and dark themes
-# based on the user's system preference
+# Note: Streamlit will automatically detect system theme preference
+# and switch between light and dark modes accordingly
 
-# Additional CSS for better theme switching
 [client]
 # Enable theme switching
 showErrorDetails = true
