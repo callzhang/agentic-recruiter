@@ -293,7 +293,7 @@ class BRDWorkScheduler:
 
     def _fetch_recommend_resume(self, index: int) -> str:
         response = self.session.get(
-            f"{self.base_url}/recommend/candidate/{index}",
+            f"{self.base_url}/recommend/candidate/{index}/resume",
             timeout=45,
         )
         data = self._safe_json(response)

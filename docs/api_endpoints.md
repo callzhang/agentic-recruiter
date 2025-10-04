@@ -356,7 +356,7 @@ Get list of recommended candidates.
 }
 ```
 
-### GET `/recommend/candidate/{index}`
+### GET `/recommend/candidate/{index}/resume`
 View a specific recommended candidate's resume.
 
 **Path Parameters:**

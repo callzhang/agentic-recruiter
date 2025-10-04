@@ -120,7 +120,7 @@ Complete API reference available at [`docs/api_endpoints.md`](docs/api_endpoints
 
 ### Recommendation System
 - `GET /recommend/candidates` - Get recommended candidates
-- `GET /recommend/candidate/{index}` - View recommended candidate resume
+- `GET /recommend/candidate/{index}/resume` - View recommended candidate resume
 
 ### Search & Configuration
 - `GET /search` - Get search parameter preview

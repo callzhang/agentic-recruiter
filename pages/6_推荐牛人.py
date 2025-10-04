@@ -38,7 +38,7 @@ def _render_response(ok: bool, payload: Any) -> None:
 
 @st.cache_data(show_spinner="获取在线简历中...")
 def _fetch_candidate_resume(index: int) -> str:
-    ok, payload = call_api("GET", f"/recommend/candidate/{index}")
+    ok, payload = call_api("GET", f"/recommend/candidate/{index}/resume")
     if ok and payload.get("success"):
         return payload['text']
     raise ValueError(f"获取在线简历失败: {payload}")
@@ -98,7 +98,7 @@ def main() -> None:
                 # Prepare analysis context
                 context = {
                     "job_info": selected_job_info,
-                    "candidate_description": candidates[selected_index].get("text", ""),
+                    "candidate_summary": candidates[selected_index].get("text", ""),
                     "candidate_resume": online_resume,
                     "chat_history": "无",  # No chat history for recommended candidates
                 }
