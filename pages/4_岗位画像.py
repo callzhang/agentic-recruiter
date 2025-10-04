@@ -199,10 +199,10 @@ def main() -> None:
 
     for idx, tab in enumerate(tabs[:-1]):
         with tab:
-            # Track if this tab was clicked
-            if st.session_state.get(f"tab_clicked_{idx}", False):
-                st.session_state.active_tab = idx
-                st.session_state[f"tab_clicked_{idx}"] = False
+            # # Track if this tab was clicked
+            # if st.session_state.get(f"tab_clicked_{idx}", False):
+            #     st.session_state.active_tab = idx
+            #     st.session_state[f"tab_clicked_{idx}"] = False
             
             _edit_role(roles[idx], idx)
             role_name = roles[idx].get("position") or roles[idx].get("id") or f"岗位#{idx + 1}"
