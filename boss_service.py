@@ -362,7 +362,7 @@ class BossService:
                 'timestamp': datetime.now().isoformat()
             })
 
-        @self.app.get('/recommend/candidate/{index}')
+        @self.app.get('/recommend/candidate/{index}/resume')
         def view_recommended_candidate_resume(index: int):
             """View resume of a recommended candidate by index.
             
@@ -729,16 +729,14 @@ class BossService:
             Returns:
                 JSONResponse: Analysis results with scoring
             """
-            candidate_id = payload.get('candidate_id') or payload.get('chat_id')
-            if not candidate_id:
-                return JSONResponse({
-                    'success': False,
-                    'error': 'Missing candidate_id or chat_id',
-                    'timestamp': datetime.now().isoformat()
-                })
             
-            context = payload.get('context', {})
-            result = self.assistant_actions.analyze_candidate(candidate_id, context)
+            
+            result = self.assistant_actions.analyze_candidate(
+                job_info = payload.get('job_info', {}),
+                candidate_resume = payload.get('candidate_resume', ''),
+                candidate_summary = payload.get('candidate_summary', ''),
+                chat_history = payload.get('chat_history', {})
+            )
             return JSONResponse({
                 'success': result is not None,
                 'analysis': result,
@@ -1018,6 +1016,21 @@ class BossService:
         return os.path.join(tempfile.gettempdir(), "bosszhipin_playwright_user_data")
         
 
+    def _ensure_page(self):
+        """Get the prefered page from the context.
+        
+        Returns:
+            Page: The prefered page
+        """
+        visible_pages = [page for page in self.context.pages if not page.is_closed() and page.evaluate("document.visibilityState") and page.url.startswith(settings.BASE_URL)]
+        target_pages = [settings.CHAT_URL, settings.RECOMMEND_URL]
+        prefered_pages = [page for page in visible_pages if page.url in target_pages]
+        page = prefered_pages[0] if prefered_pages else self.context.new_page()
+        if settings.BASE_URL not in page.url:
+            logger.info("导航到聊天页面...")
+            self.page.goto(settings.CHAT_URL, wait_until="domcontentloaded", timeout=3000)
+        return page
+
     def start_browser(self):
         """Launch a persistent browser context with recovery.
         
@@ -1037,21 +1050,8 @@ class BossService:
         browser = self.playwright.chromium.connect_over_cdp(settings.CDP_URL)
         self.context = browser.contexts[0] if browser.contexts else browser.new_context()
 
-
-        
-        pages = list(self.context.pages)
-        if pages:
-            self.page = pages[0]
-        else:
-            self.page = self.context.new_page()
-
-        # Event manager removed for simplicity
-
-        if settings.BASE_URL not in getattr(self.page, 'url', ''):
-            logger.info("导航到聊天页面...")
-            self.page.goto(settings.CHAT_URL, wait_until="domcontentloaded", timeout=3000)
-        else:
-            logger.info("已导航到聊天页面")
+        ''' get prefered page '''
+        self.page = self._ensure_page()
 
         logger.info("持久化浏览器会话启动成功！")
         
@@ -1202,38 +1202,12 @@ class BossService:
             return
 
         # Check if we need to sync with browser's active page
-        if not self.page or self.page.is_closed():
+        if not self.page or \
+        self.page.is_closed() or \
+        self.page.url not in [settings.CHAT_URL, settings.RECOMMEND_URL] or \
+        self.page.evaluate("document.visibilityState") == "hidden":
             # Page doesn't exist, find or create one
-            pages = list(self.context.pages)
-            for page in pages:
-                if settings.CHAT_URL in getattr(page, 'url', ''):
-                    self.page = page
-                    logger.info(f"Found existing chat page: {page.url}")
-                    break
-            else:
-                self.page = pages[0] if pages else self.context.new_page()
-                if settings.CHAT_URL not in getattr(self.page, 'url', ''):
-                    logger.info(f"Navigating to chat page from: {self.page.url}")
-                    self.page.goto(settings.CHAT_URL, wait_until="domcontentloaded", timeout=10000)
-                    self.page.wait_for_load_state("networkidle", timeout=5000)
-        else:
-            # Page exists, but check if user navigated to a different page in browser
-            # If so, sync with the actual chat page
-            current_url = getattr(self.page, 'url', '')
-            if settings.BASE_URL not in current_url:
-                logger.warning(f"Page out of sync (current: {current_url}), searching for chat page...")
-                pages = list(self.context.pages)
-                for page in pages:
-                    page_url = getattr(page, 'url', '')
-                    if settings.BASE_URL in page_url:
-                        logger.info(f"Synced to active chat page: {page_url}")
-                        self.page = page
-                        break
-                else:
-                    # No chat page found, navigate current page to chat
-                    logger.info(f"No boss page found, navigating from: {current_url}")
-                    self.page.goto(settings.CHAT_URL, wait_until="domcontentloaded", timeout=10000)
-                    self.page.wait_for_load_state("networkidle", timeout=5000)
+            self.page = self._ensure_page()
 
         # Check if page is still valid without causing errors
         try:

@@ -345,8 +345,10 @@ class AssistantActions:
 
     def analyze_candidate(
         self, 
-        candidate_id: str, 
-        context: Dict[str, Any]
+        job_info: dict,   
+        candidate_resume: str,
+        chat_history: dict,
+        candidate_summary: str = None,
     ) -> Optional[Dict[str, Any]]:
         """Analyze candidate and return scoring results."""
         if not self.client:
@@ -354,20 +356,15 @@ class AssistantActions:
         
         prompt = f"""请基于以下信息对候选人做出量化评估。
 
-【公司介绍】
-{context.get('company_description', '')}
-
 【岗位描述】
-{context.get('job_description', '')}
-
-【理想人选画像】
-{context.get('target_profile', '')}
+{job_info}
 
 【候选人材料】
-{context.get('candidate_resume', '')}
+{candidate_resume}
+{candidate_summary}
 
 【近期对话】
-{context.get('chat_history', '')}
+{chat_history}
 
 请给出 1-10 的四个评分：技能匹配度、创业契合度、加入意愿、综合评分，并提供简要分析。输出严格使用 JSON 格式：
 {{

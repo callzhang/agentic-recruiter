@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 import time
-
+from src.config import settings
 from playwright.sync_api import Locator
 
 from .resume_capture import (
@@ -23,10 +23,13 @@ def _prepare_recommendation_page(page, *, wait_timeout: int = 8000) -> tuple[Opt
     """Ensure the recommendation panel is opened and ready."""
     close_overlay_dialogs(page)
     # Click the recommendation menu
-    if not page.url.startswith("https://www.zhipin.com/web/chat/recommend"):
-        menu_locator = page.locator("dl.menu-recommend").first
-        menu_locator.scroll_into_view_if_needed(timeout=2000)
-        menu_locator.click()
+    if not settings.RECOMMEND_URL in page.url:
+        menu_chat = page.locator('dl.menu-recommend')
+        menu_chat.click(timeout=1000)
+    
+        # wait for chat box
+        # page.wait_for_selector('div.chat-box', timeout=wait_timeout)
+        # logger.info("已导航到聊天页面")
 
     # Wait for the iframe to appear and get its frame
     iframe = page.wait_for_selector(IFRAME_OVERLAY_SELECTOR, timeout=wait_timeout)
@@ -129,17 +132,21 @@ def list_recommended_candidates_action(page, *, limit: int = 20) -> Dict[str, An
     frame = _prepare_recommendation_page(page)
 
     # Use the frame to locate card items
-    card_locators: List[Locator] = frame.locator(CANDIDATE_CARD_SELECTOR).all()
-
     candidates = []
-    for card in card_locators[:limit]:
-        card.scroll_into_view_if_needed(timeout=1000)
-        viewd = 'viewed' in card.get_attribute('class')
-        text = card.inner_text().strip()
-        candidates.append({
-            'viewed': viewd,
-            'text': text,
-        })
+    while len(candidates) < limit:
+        card_locators: List[Locator] = frame.locator(CANDIDATE_CARD_SELECTOR).all()
+        if len(card_locators) < limit:
+            card_locators[-1].hover(timeout=1000)
+            time.sleep(1)
+            continue
+        for card in card_locators[:limit]:
+            card.scroll_into_view_if_needed(timeout=1000)
+            viewd = 'viewed' in card.get_attribute('class')
+            text = card.inner_text().strip()
+            candidates.append({
+                'viewed': viewd,
+                'text': text,
+            })
     success = bool(candidates)
     details = f"成功获取 {len(candidates)} 个推荐候选人" if success else '未找到推荐候选人'
     return { 'success': success, 'details': details, 'candidates': candidates }
@@ -200,17 +207,17 @@ def greet_recommend_candidate_action(page, index: int, message: str) -> Dict[str
 
     card = frame.locator(CANDIDATE_CARD_SELECTOR).all()[index]
     card.scroll_into_view_if_needed(timeout=1000)
-    card.click(timeout=1000)
+    # card.click(timeout=1000)
 
     greet_selectors = [
+        "button.btn-greet",
         "button:has-text('打招呼')",
-        "span:has-text('打招呼')",
-        "text=打招呼",
+        "span:has-text('打招呼')"
     ]
 
     greeted = False
     for selector in greet_selectors:
-        target = page.locator(selector).first
+        target = card.locator(selector).first
         if not target.count():
             continue
         try:
@@ -224,61 +231,39 @@ def greet_recommend_candidate_action(page, index: int, message: str) -> Dict[str
     if not greeted:
         return {'success': False, 'details': '未找到打招呼按钮'}
 
-    input_selectors = [
-        "#boss-chat-editor-input",
-        "textarea",
-        "div.editor textarea",
-    ]
-    input_box = None
-    for selector in input_selectors:
-        candidate = page.locator(selector).first
+    if message:
+        ''' continue chat '''
+        chat_selector = 'button:has-text("继续沟通")'
+        candidate = page.locator(chat_selector)
         if candidate.count():
-            input_box = candidate
-            break
+            candidate.click(timeout=1000)
 
-    if input_box:
-        try:
-            input_box.click()
-            input_box.fill("")
-            input_box.type(message)
-        except Exception:
-            try:
-                input_box.evaluate("(el, value) => { if (el.value !== undefined) el.value = value; }", message)
-            except Exception:
-                pass
+        ''' input message '''
+        input_box = page.locator("div.conversation-bd-content")
+        input_box.click()
+        input_field = input_box.locator("div.bosschat-chat-input")
+        input_field.fill("")
+        input_field.type(message)
 
-    send_selectors = [
-        "div.submit:has-text('发送')",
-        "button:has-text('发送')",
-        "span:has-text('发送')",
-    ]
-    sent = False
-    for selector in send_selectors:
-        btn = page.locator(selector).first
-        if not btn.count():
-            continue
-        try:
-            btn.click(timeout=2000)
+        ''' send message '''
+        send_selector = "span:has-text('发送')"
+        send_btn = page.locator(send_selector)
+        send_btn.click(timeout=1000)
+
+        ''' verify message '''
+        t0, sent = time.time(), False
+        msg = page.locator("div.conversation-message:has-text('" + message + "')")
+        while not msg.count() and (time.time() - t0 < 3) and not sent:
+            time.sleep(0.2)
+            msg = page.locator("div.conversation-message:has-text('" + message + "')")
+        else:
             sent = True
-            break
-        except Exception:
-            continue
 
     close_overlay_dialogs(page)
 
-    chat_id = None
-    try:
-        selected = page.locator("div.geek-item.selected").first
-        if selected.count():
-            chat_id = selected.get_attribute('data-id')
-    except Exception:
-        pass
-
-    if not sent:
-        return {'success': False, 'details': '发送消息失败', 'chat_id': chat_id}
-
-    return {
-        'success': True,
-        'details': '已发送打招呼',
-        'chat_id': chat_id,
-    }
+    if sent:
+        return { 'success': True, 'details': '已发送消息' }
+    elif greeted:
+        return { 'success': True, 'details': '已打招呼' }
+    else:
+        return { 'success': False, 'details': '发送打招呼失败' }
