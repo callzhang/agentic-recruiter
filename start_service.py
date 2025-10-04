@@ -271,10 +271,17 @@ def start_service(*, run_scheduler: bool = False, scheduler_options: Optional[Di
                 print(f"[!] Chrome启动失败: {e}")
                 return False
 
-        # Use polling-based file watching for better reliability
+        # Use modern watchfiles with polling for better reliability
         # Only watch files that belong to the boss server
-        env["UVICORN_RELOAD_USE_WATCHFILES"] = "false"
-        
+        # 
+        # POLLING METHOD EXPLANATION:
+        # - WATCHFILES_FORCE_POLLING=true: Forces polling instead of file system events
+        # - WATCHFILES_POLL_DELAY_MS=1000: Check for changes every 1 second
+        # - Polling is more reliable than file system events in some environments
+        # - Slightly more resource intensive but more stable
+        env["WATCHFILES_FORCE_POLLING"] = "true"
+        env["WATCHFILES_POLL_DELAY_MS"] = "1000"  # 1 second polling interval
+        env["WATCHFILES_IGNORE_PERMISSION_ERRORS"] = "true"  # Ignore permission errors
         # 使用 uvicorn 启动（可开启 --reload；CDP模式下重载不会中断浏览器）
         # 只监控与 boss_service 相关的核心文件，排除不必要的文件
         cmd = [
@@ -283,36 +290,9 @@ def start_service(*, run_scheduler: bool = False, scheduler_options: Optional[Di
             "--host", host,
             "--port", port,
             "--reload",
-            "--reload-delay", "2.0",  # Reduced delay for faster response
-            # Include only boss server files
+            "--reload-dir", "src",
             "--reload-include", "boss_service.py",
-            "--reload-include", "start_service.py", 
-            "--reload-include", "boss_app.py",
-            "--reload-include", "streamlit_shared.py",
-            "--reload-include", "src/*.py",
-            "--reload-include", "pages/*.py",
-            "--reload-include", "config/*.yaml",
-            "--reload-include", "config/*.yml",
-            "--reload-include", "*.yaml",
-            "--reload-include", "*.yml",
-            # Exclude unnecessary files
-            "--reload-exclude", "*.log",
-            "--reload-exclude", "*.tmp",
-            "--reload-exclude", "*.cache",
-            "--reload-exclude", "__pycache__",
-            "--reload-exclude", ".git",
-            "--reload-exclude", "node_modules",
-            "--reload-exclude", "*.pyc",
-            "--reload-exclude", "*.pyo",
-            "--reload-exclude", "test_*",
-            "--reload-exclude", "*_test.py",
-            "--reload-exclude", "*.md",
-            "--reload-exclude", "docs/**",
-            "--reload-exclude", "*.ipynb",
-            "--reload-exclude", "*.json",
-            "--reload-exclude", "data/**",
-            "--reload-exclude", "output/**",
-            "--reload-exclude", "custom_reloader.py",  # Exclude our custom watcher
+            "--reload-delay", "3.0"
         ]
         # 新建进程组，以便整体发送信号
         process = subprocess.Popen(cmd, env=env, preexec_fn=os.setsid)
