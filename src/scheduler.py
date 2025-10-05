@@ -58,8 +58,6 @@ class BRDWorkScheduler:
         # Initialize logger
         self.logger = logger
         
-        # Set up role_id from job data
-        self.role_id = self.job_snapshot.get("id", "default") if self.job_snapshot else "default"
 
         # Use job parameter directly - no need to load from YAML
         if not self.job_snapshot:
@@ -74,8 +72,8 @@ class BRDWorkScheduler:
         self.job_info = self._build_job_context()
 
         self.logger.debug(
-            "BRD scheduler initialised: role=%s, greet>=%.2f, overall>=%.1f, inbound=%s, recommend=%s, followup=%s",
-            self.role_id,
+            "BRD scheduler initialised: position=%s, greet>=%.2f, overall>=%.1f, inbound=%s, recommend=%s, followup=%s",
+            self.role_position,
             self.threshold_greet,
             self.overall_threshold,
             self.enable_inbound,
@@ -589,7 +587,8 @@ class BRDWorkScheduler:
         return False
 
     def _build_candidate_id(self, source: str, index: int, label: str) -> str:
-        base = f"{self.role_id}:{source}:{index}:{label}"
+        job_id = self.criteria.get("id", "default")
+        base = f"{job_id}:{source}:{index}:{label}"
         return uuid5(NAMESPACE_URL, base).hex
 
     def _analyze_candidate_resume(
