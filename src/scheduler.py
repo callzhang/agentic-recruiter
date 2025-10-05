@@ -33,6 +33,8 @@ class BRDWorkScheduler:
         enable_followup: Optional[bool] = None,
         assistant: Optional["AssistantActions"] = None,
         overall_threshold: Optional[float] = None,
+        threshold_greet: Optional[float] = None,
+        threshold_borderline: Optional[float] = None,
         **_: Any,
     ) -> None:
         
@@ -63,17 +65,12 @@ class BRDWorkScheduler:
         if not self.job_snapshot:
             raise ValueError("Job information must be provided as parameter")
         
-        self.criteria = self.job_snapshot
-        scoring = self.criteria.get("scoring", {})
-        self.threshold_greet = float(scoring.get("threshold", {}).get("greet", 0.7))
-        self.threshold_borderline = float(scoring.get("threshold", {}).get("borderline", 0.6))
-        self.weights = scoring.get("weights", {})
-        self.role_position = self.criteria.get("position", "AI岗位")
-        self.job_info = self._build_job_context()
+        # Set thresholds from parameters
+        self.threshold_greet = threshold_greet or 0.7
+        self.threshold_borderline = threshold_borderline or 0.6
 
         self.logger.debug(
             "BRD scheduler initialised: position=%s, greet>=%.2f, overall>=%.1f, inbound=%s, recommend=%s, followup=%s",
-            self.role_position,
             self.threshold_greet,
             self.overall_threshold,
             self.enable_inbound,
@@ -87,7 +84,7 @@ class BRDWorkScheduler:
     def start(self) -> None:
         if self._threads:
             return
-        self.logger.info("启动BRD自动化调度：%s", self.role_position)
+        self.logger.info("启动BRD自动化调度：%s", self.job_snapshot.get("position", "AI岗位"))
         loops = [
             (self._inbound_loop, "brd-inbound"),
             (self._recommendation_loop, "brd-recommend"),
@@ -587,7 +584,7 @@ class BRDWorkScheduler:
         return False
 
     def _build_candidate_id(self, source: str, index: int, label: str) -> str:
-        job_id = self.criteria.get("id", "default")
+        job_id = self.job_snapshot.get("id", "default")
         base = f"{job_id}:{source}:{index}:{label}"
         return uuid5(NAMESPACE_URL, base).hex
 
@@ -601,7 +598,7 @@ class BRDWorkScheduler:
         if self.assistant and getattr(self.assistant, "client", None):
             try:
                 analysis = self.assistant.analyze_candidate(
-                    job_info=self.job_info,
+                    job_info=self.job_snapshot,
                     candidate_resume=resume_text,
                     candidate_summary=candidate_summary,
                     chat_history={},
@@ -640,13 +637,13 @@ class BRDWorkScheduler:
                 message = self.assistant.generate_greeting_message(
                     candidate_summary=label,
                     candidate_resume=resume_text,
-                    job_info=self.job_info,
+                    job_info=self.job_snapshot,
                 )
                 if message:
                     return message
             except Exception as exc:
                 self.logger.warning("AI打招呼生成失败，使用模板: %s", exc)
-        return self.greeting_template.format(position=self.role_position)
+        return self.greeting_template.format(position=self.job_snapshot.get("position", "AI岗位"))
 
     def _record_candidate_profile(
         self,
@@ -664,7 +661,7 @@ class BRDWorkScheduler:
         extra.update({"status": status, "chat_id": chat_id})
         self.assistant.upsert_candidate(
             candidate_id=candidate_id,
-            job_applied=self.role_position,
+            job_applied=self.job_snapshot.get("position", "AI岗位"),
             resume_text=resume_text,
             scores=analysis,
             metadata_extra=extra,
@@ -693,15 +690,6 @@ class BRDWorkScheduler:
             embedding_source=embedding_source,
         )
 
-    def _build_job_context(self) -> Dict[str, Any]:
-        return {
-            "position": self.criteria.get("position"),
-            "company_description": self.criteria.get("background"),
-            "job_description": self.criteria.get("description"),
-            "target_profile": self.criteria.get("target_profile"),
-            "requirements": self.criteria.get("requirements"),
-            "keywords": self.criteria.get("keywords"),
-        }
 
     # ------------------------------------------------------------------
     # Reporting
@@ -750,7 +738,7 @@ class BRDWorkScheduler:
 
     def _score_resume(self, text: str) -> Dict[str, Any]:
         text_lower = text.lower()
-        filters = self.criteria.get("filters", {})
+        filters = self.job_snapshot.get("filters", {})
         must_have = [str(item).lower() for item in filters.get("must_have", [])]
         nice_to_have = [str(item).lower() for item in filters.get("nice_to_have", [])]
         must_not = [str(item).lower() for item in filters.get("must_not", [])]
@@ -771,10 +759,10 @@ class BRDWorkScheduler:
         education_score = self._score_education(text_lower)
 
         weighted_score = 0.0
-        weighted_score += skills_score * float(self.weights.get("skills_match", 0.35))
-        weighted_score += experience_score * float(self.weights.get("experience", 0.35))
-        weighted_score += project_score * float(self.weights.get("projects", 0.2))
-        weighted_score += education_score * float(self.weights.get("education", 0.1))
+        weighted_score += skills_score * 0.35
+        weighted_score += experience_score * 0.35
+        weighted_score += project_score * 0.2
+        weighted_score += education_score * 0.1
         if penalty:
             weighted_score *= 0.5
 
