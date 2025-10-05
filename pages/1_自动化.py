@@ -42,7 +42,19 @@ def main() -> None:
             jobs = load_jobs()
             job = jobs[selected_job_idx]
             st.markdown(f"**当前岗位: {job.get('position')}**")
-            check_recommend_candidates = st.checkbox("检查推荐候选人", value=job.get("check_recommend_candidates", True))
+            check_recommend_candidates_limit = job.get("check_recommend_candidates_limit", 20)
+            check_recommend_candidates = st.checkbox(
+                "检查推荐候选人",
+                value=job.get("check_recommend_candidates", True)
+            )
+            if check_recommend_candidates:
+                check_recommend_candidates_limit = st.number_input(
+                    "推荐候选人数量",
+                    value=int(check_recommend_candidates_limit or 20),
+                    min_value=1,
+                    max_value=100,
+                    step=1,
+                )
             check_new_chats = st.checkbox("检查新聊天", value=job.get("check_new_chats", False))
             check_followups = st.checkbox("检查跟进", value=job.get("check_followups", False))
 
@@ -51,6 +63,7 @@ def main() -> None:
                 payload = {
                     "job": job,
                     "check_recommend_candidates": check_recommend_candidates,
+                    "check_recommend_candidates_limit": check_recommend_candidates_limit,
                     "check_new_chats": check_new_chats,
                     "check_followups": check_followups,
                 }

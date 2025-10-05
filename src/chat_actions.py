@@ -18,22 +18,27 @@ RESUME_BUTTON_SELECTOR = "div.resume-btn-file, a.resume-btn-file"
 RESUME_IFRAME_SELECTOR = "iframe.attachment-box"
 PDF_VIEWER_SELECTOR = "div.pdfViewer"
 
+CHAT_TAB_SELECTOR = "div.chat-label-item"
 
-def _prepare_chat_page(page, *, wait_timeout: int = 5000) -> tuple[Optional[Locator], Optional[Dict[str, Any]]]:
+def _prepare_chat_page(page, tab: Optional[str], wait_timeout: int = 5000) -> tuple[Optional[Locator], Optional[Dict[str, Any]]]:
     close_overlay_dialogs(page)
     # If current URL is not the chat page, click the chat menu to navigate
     if not settings.CHAT_URL in page.url:
         menu_chat = page.locator(CHAT_MENU_SELECTOR)
         menu_chat.click(timeout=100)
-        page.wait_for_selector(CHAT_ITEM_SELECTORS, timeout=wait_timeout)
     
         # wait for chat box
         page.wait_for_selector('div.chat-box', timeout=wait_timeout)
         logger.info("已导航到聊天页面")
 
+    if tab:
+        CHAT_TAB_SELECTOR = f"div.chat-label-item[title*='{tab}']"
+        chat_tab = page.locator(CHAT_TAB_SELECTOR)
+        chat_tab.click(timeout=100)
+        page.locator(CHAT_ITEM_SELECTORS).wait_for(state="visible", timeout=wait_timeout)
     return page
 
-def _go_to_chat_dialog(page, chat_id: str, *, wait_timeout: int = 5000) -> tuple[Optional[Locator], Optional[Dict[str, Any]]]:
+def _go_to_chat_dialog(page, chat_id: str, wait_timeout: int = 5000) -> tuple[Optional[Locator], Optional[Dict[str, Any]]]:
     # Ensure we are on the chat page; if not, click the chat menu
     # If current URL is not the chat page, click the chat menu to navigate
     """Ensure the chat is focused and the conversation panel is ready."""

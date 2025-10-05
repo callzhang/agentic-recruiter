@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 import os
 from functools import lru_cache
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 from uuid import uuid4
 
 try:
@@ -16,6 +16,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 
 from .candidate_store import CandidateStore, candidate_store
 from .scheduler import BRDWorkScheduler
+from .config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +29,7 @@ class AssistantActions:
     
     def __init__(self, store: CandidateStore | None = None) -> None:
         self.store = store or candidate_store
-        self.enabled = bool(self.store and self.store.enabled)
+        self.enabled = bool(self.store and getattr(self.store, "enabled", False))
         api_key = self._load_openai_key()
         if OpenAI and api_key:
             self.client = OpenAI(api_key=api_key)
@@ -42,28 +43,8 @@ class AssistantActions:
         self.scheduler_config: dict[str, Any] = {}
     
     def _load_openai_key(self) -> Optional[str]:
-        """Load OpenAI API key from environment or config file."""
-        # Try environment variable first
-        api_key = os.getenv("OPENAI_API_KEY")
-        if api_key:
-            return api_key
-        
-        # Try loading from config/secrets.yaml
-        try:
-            import yaml
-            from pathlib import Path
-            config_path = Path("config/secrets.yaml")
-            if config_path.exists():
-                with open(config_path, "r") as f:
-                    config = yaml.safe_load(f) or {}
-                    openai_config = config.get("openai", {})
-                    api_key = openai_config.get("api_key", "")
-                    if api_key:
-                        return api_key
-        except Exception as e:
-            logger.warning(f"Failed to load OpenAI key from config: {e}")
-        
-        return None
+        """Load OpenAI API key from settings."""
+        return settings.OPENAI_API_KEY if settings.OPENAI_API_KEY else None
 
     # Embeddings ----------------------------------------------------
     @lru_cache(maxsize=1000)
@@ -411,10 +392,13 @@ class AssistantActions:
     # Candidate Management --------------------------------------
     def get_candidate_record(self, candidate_id: str) -> Optional[Dict[str, Any]]:
         """Retrieve candidate record from store."""
-        if not self.enabled:
+        if not self.enabled or not self.store:
             return None
-        # This would query Zilliz - simplified for now
-        return None
+        try:
+            return self.store.get_candidate_profile(candidate_id)
+        except AttributeError:
+            logger.warning("Candidate store missing get_candidate_profile implementation")
+            return None
 
     def upsert_candidate(
         self,
@@ -428,17 +412,70 @@ class AssistantActions:
         metadata_extra: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """Upsert candidate information to the store."""
-        if not self.enabled:
+        if not self.enabled or not self.store:
             logger.warning("Store not available, cannot upsert candidate")
             return False
-        
-        # Simplified implementation - in full version this would:
-        # 1. Get existing record
-        # 2. Merge with new data
-        # 3. Generate embeddings if resume_text changed
-        # 4. Upsert to Zilliz
-        logger.info(f"Upsert candidate {candidate_id} (store enabled but simplified)")
-        return True
+
+        metadata_extra = metadata_extra or {}
+        chat_id = metadata_extra.get("chat_id")
+        status = metadata_extra.get("status", "pending")
+        metadata: Dict[str, Any] = {k: v for k, v in metadata_extra.items() if k not in {"chat_id", "status"}}
+        if scores:
+            metadata.setdefault("scores_raw", scores)
+
+        embedding: Optional[Iterable[float]] = None
+        if resume_text:
+            embedding = self.get_embedding(resume_text)
+
+        try:
+            return self.store.upsert_candidate_profile(
+                candidate_id=candidate_id,
+                chat_id=chat_id,
+                name=name,
+                job_applied=job_applied,
+                status=status,
+                overall_score=scores.get("overall") if scores else None,
+                score_detail=scores,
+                last_message=last_message,
+                embedding=embedding,
+                metadata=metadata,
+            )
+        except AttributeError:
+            logger.warning("Candidate store missing upsert_candidate_profile implementation")
+            return False
+
+    def record_candidate_action(
+        self,
+        *,
+        candidate_id: str,
+        action_type: str,
+        summary: str,
+        chat_id: Optional[str] = None,
+        score: Optional[float] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        embedding_source: Optional[str] = None,
+    ) -> bool:
+        """Persist a candidate action log into the store."""
+        if not self.enabled or not self.store:
+            return False
+
+        vector: Optional[Iterable[float]] = None
+        if embedding_source:
+            vector = self.get_embedding(embedding_source)
+
+        try:
+            return self.store.log_candidate_action(
+                candidate_id=candidate_id,
+                chat_id=chat_id,
+                action_type=action_type,
+                score=score,
+                summary=summary,
+                embedding=vector,
+                metadata=metadata,
+            )
+        except AttributeError:
+            logger.warning("Candidate store missing log_candidate_action implementation")
+            return False
 
     # QA Persistence ---------------------------------------------------
     def record_qa(
@@ -504,11 +541,40 @@ class AssistantActions:
                 return False, '调度器已运行'
             
             try:
-                options = self._build_scheduler_options(payload)
+                """Build scheduler options from payload."""
+                job_payload = payload.get('job') if isinstance(payload.get('job'), dict) else {}
+                recommend_limit = payload.get('check_recommend_candidates_limit') or 20
+
+                options: Dict[str, Any] = {
+                    'job': job_payload,
+                    'recommend_limit': recommend_limit,
+                    'enable_recommend': bool(payload.get('check_recommend_candidates', True)),
+                    'enable_inbound': bool(payload.get('check_new_chats')),
+                    'enable_followup': bool(payload.get('check_followups')),
+                    'assistant': self,
+                    'base_url': settings.BOSS_SERVICE_BASE_URL,
+                    'criteria_path': settings.BOSS_CRITERIA_PATH,
+                }
+                try:
+                    options['recommend_limit'] = int(options['recommend_limit'])
+                except (TypeError, ValueError):
+                    options['recommend_limit'] = 20
+                webhook = payload.get('dingtalk_webhook') or settings.DINGTALK_URL
+                if webhook:
+                    options['dingtalk_webhook'] = webhook
+
                 scheduler = BRDWorkScheduler(**options)
                 scheduler.start()
                 self.scheduler = scheduler
-                self.scheduler_config = options
+                config_copy: Dict[str, Any] = {}
+                for key, value in options.items():
+                    if key == 'assistant':
+                        continue
+                    if key == 'job' and isinstance(value, dict):
+                        config_copy[key] = dict(value)
+                    else:
+                        config_copy[key] = value
+                self.scheduler_config = config_copy
                 return True, '调度器已启动'
             except Exception as exc:
                 logger.error(f"启动调度器失败: {exc}")
@@ -547,34 +613,22 @@ class AssistantActions:
             logger.error(f"停止调度器失败: {exc}")
             return False, f'停止调度器失败: {exc}'
 
-    def _build_scheduler_options(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        """Build scheduler options from payload."""
-        base_url = payload.get('base_url') or os.environ.get('BOSS_SERVICE_BASE_URL', 'http://127.0.0.1:5001')
-        criteria_path = payload.get('criteria_path') or os.environ.get('BOSS_CRITERIA_PATH', 'config/jobs.yaml')
-
-        options = {
-            'base_url': base_url.rstrip('/'),
-            'criteria_path': os.path.abspath(criteria_path),
-            'role_id': payload.get('role_id', 'default'),
-            'poll_interval': self._coerce_int(payload.get('poll_interval'), 120),
-            'recommend_interval': self._coerce_int(payload.get('recommend_interval'), 600),
-            'followup_interval': self._coerce_int(payload.get('followup_interval'), 3600),
-            'report_interval': self._coerce_int(payload.get('report_interval'), 604800),
-            'inbound_limit': self._coerce_int(payload.get('inbound_limit'), 40),
-            'recommend_limit': self._coerce_int(payload.get('recommend_limit'), 20),
-        }
-
-        greeting_template = payload.get('greeting_template')
-        if isinstance(greeting_template, str) and greeting_template.strip():
-            options['greeting_template'] = greeting_template
-
-        return options
 
     @staticmethod
     def _coerce_int(value: Any, default: int) -> int:
         """Coerce value to int with default fallback."""
         try:
             return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _coerce_float(value: Any, default: Optional[float]) -> Optional[float]:
+        """Coerce value to float with default fallback."""
+        try:
+            if value is None:
+                return default
+            return float(value)
         except (TypeError, ValueError):
             return default
 

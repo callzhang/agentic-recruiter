@@ -2,24 +2,24 @@
 
 from __future__ import annotations
 
+import copy
 import csv
 import logging
+import os
 import threading
-import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional
-
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from uuid import NAMESPACE_URL, uuid5
+from src.config import settings
 import requests
 import yaml
 from requests import Response
+from .global_logger import get_logger
+logger = get_logger()
 
-DEFAULT_GREETING_TEMPLATE = (
-    "您好，我们是一家AI科技公司，是奔驰全球创新代表中唯一的中国公司，"
-    "代表中国参加中德Autobahn汽车大会，是华为云自动驾驶战略合作伙伴中唯一创业公司，"
-    "也是经过华为严选的唯一产品级AI数据合作伙伴。您对我们{position}岗位有没有兴趣？"
-)
-
+if TYPE_CHECKING:  # pragma: no cover - import guard
+    from .assistant_actions import AssistantActions
 
 class BRDWorkScheduler:
     """Coordinates inbound/outbound recruitment workflows defined in the BRD."""
@@ -27,31 +27,26 @@ class BRDWorkScheduler:
     def __init__(
         self,
         *,
-        base_url: str,
-        criteria_path: str | Path,
-        role_id: str = "default",
-        poll_interval: int = 120,
-        recommend_interval: int = 600,
-        followup_interval: int = 3600,
-        report_interval: int = 86400 * 7,
-        inbound_limit: int = 40,
-        recommend_limit: int = 20,
-        greeting_template: str | None = None,
-        session: Optional[requests.Session] = None,
-        logger: Optional[logging.Logger] = None,
+        job: Optional[Dict[str, Any]] = None,
+        recommend_limit: Optional[int] = None,
+        enable_recommend: Optional[bool] = None,
+        enable_inbound: Optional[bool] = None,
+        enable_followup: Optional[bool] = None,
+        assistant: Optional["AssistantActions"] = None,
+        overall_threshold: Optional[float] = None,
+        **_: Any,
     ) -> None:
-        self.base_url = base_url.rstrip("/")
-        self.criteria_path = Path(criteria_path)
-        self.role_id = role_id
-        self.poll_interval = max(30, poll_interval)
-        self.recommend_interval = max(120, recommend_interval)
-        self.followup_interval = max(600, followup_interval)
-        self.report_interval = max(3600, report_interval)
-        self.inbound_limit = max(5, inbound_limit)
-        self.recommend_limit = max(5, recommend_limit)
-        self.session = session or requests.Session()
-        self.logger = logger or logging.getLogger("brd_scheduler")
-        self.greeting_template = greeting_template or DEFAULT_GREETING_TEMPLATE
+        
+        self.recommend_limit = recommend_limit
+        # self.session = requests.Session()
+        self.assistant = assistant
+        self.overall_threshold = overall_threshold or 8.0
+        self.dingtalk_webhook = settings.dingtalk.url
+
+        self.enable_inbound = bool(enable_inbound)
+        self.enable_recommend = bool(enable_recommend)
+        self.enable_followup = bool(enable_followup)
+        self.job_snapshot = job
 
         self._threads: List[threading.Thread] = []
         self._stop_event = threading.Event()
@@ -59,17 +54,24 @@ class BRDWorkScheduler:
         self._recommended_history: Dict[str, Dict[str, Any]] = {}
         self._pending_followups: Dict[str, Dict[str, Any]] = {}
         self._candidate_records: List[Dict[str, Any]] = []
-        self._last_report_at = datetime.utcnow()
+        self._last_report_at = datetime.now()
 
-        self.criteria = self._load_role_criteria()
+        self.criteria = self.job_snapshot or self._load_role_criteria()
         scoring = self.criteria.get("scoring", {})
         self.threshold_greet = float(scoring.get("threshold", {}).get("greet", 0.7))
         self.threshold_borderline = float(scoring.get("threshold", {}).get("borderline", 0.6))
         self.weights = scoring.get("weights", {})
         self.role_position = self.criteria.get("position", "AI岗位")
+        self.job_info = self._build_job_context()
 
         self.logger.debug(
-            "BRD scheduler initialised: role=%s, greet>=%.2f", self.role_id, self.threshold_greet
+            "BRD scheduler initialised: role=%s, greet>=%.2f, overall>=%.1f, inbound=%s, recommend=%s, followup=%s",
+            self.role_id,
+            self.threshold_greet,
+            self.overall_threshold,
+            self.enable_inbound,
+            self.enable_recommend,
+            self.enable_followup,
         )
 
     # ------------------------------------------------------------------
@@ -106,7 +108,8 @@ class BRDWorkScheduler:
     def _inbound_loop(self) -> None:
         while not self._stop_event.is_set():
             try:
-                self._process_inbound_chats()
+                if self.enable_inbound:
+                    self._process_inbound_chats()
             except Exception as exc:  # pragma: no cover - defensive
                 self.logger.exception("处理牛人主动沟通失败: %s", exc)
             self._wait(self.poll_interval)
@@ -114,7 +117,8 @@ class BRDWorkScheduler:
     def _recommendation_loop(self) -> None:
         while not self._stop_event.is_set():
             try:
-                self._process_recommendations()
+                if self.enable_recommend:
+                    self._process_recommendations()
             except Exception as exc:  # pragma: no cover - defensive
                 self.logger.exception("处理推荐牛人失败: %s", exc)
             self._wait(self.recommend_interval)
@@ -122,7 +126,8 @@ class BRDWorkScheduler:
     def _followup_loop(self) -> None:
         while not self._stop_event.is_set():
             try:
-                self._process_followups()
+                if self.enable_followup:
+                    self._process_followup_cycle()
             except Exception as exc:  # pragma: no cover - defensive
                 self.logger.exception("执行跟进策略失败: %s", exc)
             self._wait(self.followup_interval)
@@ -249,61 +254,133 @@ class BRDWorkScheduler:
             return
         candidates = data.get("candidates") or []
         for index, entry in enumerate(candidates):
-            label = entry.get("text") or f"candidate-{index}"
-            key = f"{index}:{hash(label)}"
+            label = (entry.get("text") or "").strip() or f"candidate-{index}"
+            candidate_id = self._build_candidate_id("recommend", index, label)
+            key = candidate_id
             if key in self._recommended_history:
                 continue
-            resume = self._fetch_recommend_resume(index)
-            score_info = self._score_resume(resume) if resume else {"score": 0.0, "explanation": ""}
-            score = score_info["score"]
-            decision = "skip"
+
+            resume_payload = self._fetch_recommend_resume(index)
+            resume_text = resume_payload.get("text", "")
+            analysis = self._analyze_candidate_resume(resume_text, label)
+            overall = self._extract_overall_score(analysis)
+            decision = "no_resume" if not resume_text else "discarded"
             chat_id: Optional[str] = None
 
-            if resume and score >= self.threshold_greet:
-                chat_id = self._greet_recommendation(index, label)
+            metadata = {
+                "source": "recommendation",
+                "index": index,
+                "label": label,
+                "resume_meta": resume_payload.get("raw"),
+            }
+
+            if resume_text and overall >= self.overall_threshold:
+                greeting_message = self._generate_greeting(label, resume_text, resume_payload.get("raw"))
+                chat_id = self._greet_recommendation(index, label, greeting=greeting_message)
                 if chat_id:
                     decision = "greeted"
-                    followup_at = datetime.utcnow() + timedelta(seconds=self.followup_interval)
-                    self._pending_followups[chat_id] = {
-                        "index": index,
-                        "label": label,
-                        "next": followup_at,
-                        "score": score,
-                    }
+                    if self.enable_followup:
+                        followup_at = datetime.utcnow() + timedelta(seconds=self.followup_interval)
+                        self._pending_followups[chat_id] = {
+                            "candidate_id": candidate_id,
+                            "index": index,
+                            "label": label,
+                            "next": followup_at,
+                            "status": "awaiting_reply",
+                            "score": overall,
+                            "analysis": analysis,
+                            "resume": resume_text,
+                            "metadata": metadata,
+                        }
+                    self._log_candidate_action(
+                        candidate_id,
+                        chat_id,
+                        action_type="greet",
+                        score=overall,
+                        summary=analysis.get("summary", ""),
+                        extra=metadata,
+                        embedding_source=resume_text,
+                    )
                 else:
                     decision = "greet_failed"
-            elif resume and score >= self.threshold_borderline:
-                decision = "manual_review"
-            elif resume:
-                decision = "skipped_low_score"
+                    self._log_candidate_action(
+                        candidate_id,
+                        chat_id,
+                        action_type="greet_failed",
+                        score=overall,
+                        summary="自动打招呼失败",
+                        extra=metadata,
+                        embedding_source=resume_text,
+                    )
+            elif resume_text:
+                decision = "discarded"
+                self._log_candidate_action(
+                    candidate_id,
+                    chat_id,
+                    action_type="discard",
+                    score=overall,
+                    summary=analysis.get("summary", "不满足阈值"),
+                    extra=metadata,
+                    embedding_source=resume_text,
+                )
+            else:
+                self._log_candidate_action(
+                    candidate_id,
+                    chat_id,
+                    action_type="missing_resume",
+                    score=None,
+                    summary="未抓取到在线简历",
+                    extra=metadata,
+                )
+
+            self._record_candidate_profile(
+                candidate_id,
+                chat_id,
+                decision,
+                overall,
+                analysis,
+                resume_text,
+                metadata,
+            )
 
             record = {
                 "chat_id": chat_id,
+                "candidate_id": candidate_id,
                 "source": "recommendation",
                 "index": index,
                 "snippet": label,
-                "score": score,
+                "score": overall,
                 "decision": decision,
-                "details": score_info.get("explanation", ""),
+                "analysis": analysis,
                 "timestamp": datetime.utcnow().isoformat(),
             }
             self._candidate_records.append(record)
             self._recommended_history[key] = record
-            self.logger.info("[recommend] #%s %.1f -> %s", index, score * 100, decision)
+            self.logger.info("[recommend] #%s overall=%.1f -> %s", index, overall, decision)
 
-    def _fetch_recommend_resume(self, index: int) -> str:
+    def _fetch_recommend_resume(self, index: int) -> Dict[str, Any]:
         response = self.session.get(
             f"{self.base_url}/recommend/candidate/{index}/resume",
             timeout=45,
         )
         data = self._safe_json(response)
         if not data or not data.get("success"):
-            return ""
-        return self._extract_resume_text(data.get("text"))
+            return {"text": "", "raw": data or {}, "success": False}
+        return {
+            "text": self._extract_resume_text(data.get("text")),
+            "raw": data,
+            "success": True,
+        }
 
-    def _greet_recommendation(self, index: int, label: str) -> Optional[str]:
+    def _greet_recommendation(
+        self,
+        index: int,
+        label: str,
+        *,
+        greeting: Optional[str] = None,
+    ) -> Optional[str]:
         payload = {
-            "message": self.greeting_template.format(position=self.role_position),
+            "message": (greeting or self.greeting_template.format(position=self.role_position)),
         }
         response = self.session.post(
             f"{self.base_url}/recommend/candidate/{index}/greet",
@@ -322,20 +399,104 @@ class BRDWorkScheduler:
     # ------------------------------------------------------------------
     # Follow-up processing
     # ------------------------------------------------------------------
-    def _process_followups(self) -> None:
+    def _process_followup_cycle(self) -> None:
         now = datetime.utcnow()
-        for chat_id, payload in list(self._pending_followups.items()):
-            if now < payload.get("next", now):
+        for chat_id, state in list(self._pending_followups.items()):
+            if now < state.get("next", now):
                 continue
+
+            status = state.get("status", "awaiting_reply")
             history = self._fetch_chat_history(chat_id)
-            if self._has_positive_reply(history):
-                if self._request_resume(chat_id):
-                    self._pending_followups.pop(chat_id, None)
-                    self.logger.info("回复积极，已自动求简历: %s", chat_id)
+            metadata = dict(state.get("metadata", {}))
+
+            if status == "awaiting_reply":
+                if self._has_positive_reply(history) and self._request_resume(chat_id):
+                    metadata["stage"] = "resume_requested"
+                    state.update({
+                        "status": "resume_requested",
+                        "next": now + timedelta(seconds=self.followup_interval),
+                        "last_history": history,
+                        "metadata": metadata,
+                    })
+                    self._log_candidate_action(
+                        state.get("candidate_id", chat_id),
+                        chat_id,
+                        action_type="resume_requested",
+                        score=state.get("score"),
+                        summary="候选人回复积极，已自动求简历",
+                        extra=metadata,
+                    )
+                    self._record_candidate_profile(
+                        state.get("candidate_id", chat_id),
+                        chat_id,
+                        "resume_requested",
+                        state.get("score", 0.0),
+                        state.get("analysis"),
+                        state.get("resume", ""),
+                        metadata,
+                    )
+                    continue
+                # No positive reply yet -> postpone
+                state["next"] = now + timedelta(seconds=self.followup_interval)
+                self.logger.info("候选人暂无回复，保留跟进计划: %s", chat_id)
                 continue
-            # No reply yet -> schedule reminder
-            payload["next"] = now + timedelta(seconds=self.followup_interval)
-            self.logger.info("候选人暂无回复，保留跟进计划: %s", chat_id)
+
+            if status == "resume_requested":
+                if self._check_full_resume(chat_id):
+                    full_resume = self._view_full_resume(chat_id)
+                    if full_resume:
+                        analysis = self._analyze_candidate_resume(
+                            full_resume,
+                            state.get("label", ""),
+                        )
+                        overall = self._extract_overall_score(analysis)
+                        metadata["stage"] = "resume_received"
+                        self._log_candidate_action(
+                            state.get("candidate_id", chat_id),
+                            chat_id,
+                            action_type="resume_received",
+                            score=overall,
+                            summary=analysis.get("summary", ""),
+                            extra=metadata,
+                            embedding_source=full_resume,
+                        )
+                        self._record_candidate_profile(
+                            state.get("candidate_id", chat_id),
+                            chat_id,
+                            "resume_received",
+                            overall,
+                            analysis,
+                            full_resume,
+                            metadata,
+                        )
+                        notified = False
+                        if overall >= self.overall_threshold:
+                            notified = self._notify_hr(
+                                candidate_id=state.get("candidate_id", chat_id),
+                                chat_id=chat_id,
+                                label=state.get("label", ""),
+                                analysis=analysis,
+                                resume_text=full_resume,
+                            )
+                        if notified:
+                            metadata["stage"] = "notify_hr"
+                            self._log_candidate_action(
+                                state.get("candidate_id", chat_id),
+                                chat_id,
+                                action_type="notify_hr",
+                                score=overall,
+                                summary="已通知HR获取完整简历",
+                                extra=metadata,
+                                embedding_source=full_resume,
+                            )
+                        self._pending_followups.pop(chat_id, None)
+                        continue
+                # No resume yet, reschedule check
+                state["next"] = now + timedelta(seconds=self.followup_interval)
+                continue
+
+            # Unknown status, clean up to avoid stale records
+            self._pending_followups.pop(chat_id, None)
 
     def _fetch_chat_history(self, chat_id: str) -> str:
         response = self.session.get(
@@ -357,6 +518,182 @@ class BRDWorkScheduler:
             return False
         keywords = ["好的", "可以", "有兴趣", "感兴趣", "聊聊", "简历"]
         return any(keyword in history for keyword in keywords)
+
+    def _check_full_resume(self, chat_id: str) -> bool:
+        response = self.session.post(
+            f"{self.base_url}/resume/check_full",
+            json={"chat_id": chat_id},
+            timeout=20,
+        )
+        data = self._safe_json(response)
+        return bool(data and (data.get("available") or data.get("success")))
+
+    def _view_full_resume(self, chat_id: str) -> str:
+        response = self.session.post(
+            f"{self.base_url}/resume/view_full",
+            json={"chat_id": chat_id},
+            timeout=60,
+        )
+        data = self._safe_json(response)
+        if not data or not data.get("success"):
+            return ""
+        content = data.get("content") or data.get("text") or ""
+        if isinstance(content, list):  # pages list
+            return "\n".join(str(item) for item in content)
+        if isinstance(content, dict):
+            return self._extract_resume_text(content)
+        return str(content)
+
+    def _notify_hr(
+        self,
+        *,
+        candidate_id: str,
+        chat_id: str,
+        label: str,
+        analysis: Dict[str, Any],
+        resume_text: str,
+    ) -> bool:
+        if not self.dingtalk_webhook:
+            return False
+        overall = self._extract_overall_score(analysis)
+        summary = analysis.get("summary", "")
+        message = (
+            f"候选人提醒\n"
+            f"来源: 推荐\n"
+            f"标识: {label or candidate_id}\n"
+            f"沟通ID: {chat_id}\n"
+            f"综合评分: {overall:.1f}/10\n"
+            f"分析: {summary}"
+        )
+        payload = {
+            "msgtype": "text",
+            "text": {"content": message[:1800]},
+        }
+        try:
+            response = requests.post(self.dingtalk_webhook, json=payload, timeout=15)
+            if response.ok:
+                self.logger.info("已通知HR，候选人:%s", candidate_id)
+                return True
+            self.logger.warning("通知HR失败(%s): %s", response.status_code, response.text)
+        except Exception as exc:  # pragma: no cover - network operations
+            self.logger.warning("通知HR异常: %s", exc)
+        return False
+
+    def _build_candidate_id(self, source: str, index: int, label: str) -> str:
+        base = f"{self.role_id}:{source}:{index}:{label}"
+        return uuid5(NAMESPACE_URL, base).hex
+
+    def _analyze_candidate_resume(
+        self,
+        resume_text: str,
+        candidate_summary: str,
+    ) -> Dict[str, Any]:
+        if not resume_text:
+            return {}
+        if self.assistant and getattr(self.assistant, "client", None):
+            try:
+                analysis = self.assistant.analyze_candidate(
+                    job_info=self.job_info,
+                    candidate_resume=resume_text,
+                    candidate_summary=candidate_summary,
+                    chat_history={},
+                )
+                if analysis:
+                    return analysis
+            except Exception as exc:
+                self.logger.warning("AI分析失败，回退规则评分: %s", exc)
+        fallback = self._score_resume(resume_text)
+        overall = round(float(fallback.get("score", 0.0)) * 10, 2)
+        return {
+            "overall": overall,
+            "skill": None,
+            "startup_fit": None,
+            "willingness": None,
+            "summary": fallback.get("explanation", ""),
+        }
+
+    def _extract_overall_score(self, analysis: Optional[Dict[str, Any]]) -> float:
+        if not analysis:
+            return 0.0
+        overall = analysis.get("overall")
+        try:
+            return float(overall)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _generate_greeting(
+        self,
+        label: str,
+        resume_text: str,
+        raw_resume: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        if self.assistant and getattr(self.assistant, "client", None):
+            try:
+                message = self.assistant.generate_greeting_message(
+                    candidate_summary=label,
+                    candidate_resume=resume_text,
+                    job_info=self.job_info,
+                )
+                if message:
+                    return message
+            except Exception as exc:
+                self.logger.warning("AI打招呼生成失败，使用模板: %s", exc)
+        return self.greeting_template.format(position=self.role_position)
+
+    def _record_candidate_profile(
+        self,
+        candidate_id: str,
+        chat_id: Optional[str],
+        status: str,
+        overall: float,
+        analysis: Optional[Dict[str, Any]],
+        resume_text: str,
+        metadata: Optional[Dict[str, Any]],
+    ) -> None:
+        if not self.assistant:
+            return
+        extra = dict(metadata or {})
+        extra.update({"status": status, "chat_id": chat_id})
+        self.assistant.upsert_candidate(
+            candidate_id=candidate_id,
+            job_applied=self.role_position,
+            resume_text=resume_text,
+            scores=analysis,
+            metadata_extra=extra,
+        )
+
+    def _log_candidate_action(
+        self,
+        candidate_id: str,
+        chat_id: Optional[str],
+        *,
+        action_type: str,
+        score: Optional[float],
+        summary: str,
+        extra: Optional[Dict[str, Any]] = None,
+        embedding_source: Optional[str] = None,
+    ) -> None:
+        if not self.assistant:
+            return
+        self.assistant.record_candidate_action(
+            candidate_id=candidate_id,
+            chat_id=chat_id,
+            action_type=action_type,
+            score=score,
+            summary=summary,
+            metadata=extra,
+            embedding_source=embedding_source,
+        )
+
+    def _build_job_context(self) -> Dict[str, Any]:
+        return {
+            "position": self.criteria.get("position"),
+            "company_description": self.criteria.get("background"),
+            "job_description": self.criteria.get("description"),
+            "target_profile": self.criteria.get("target_profile"),
+            "requirements": self.criteria.get("requirements"),
+            "keywords": self.criteria.get("keywords"),
+        }
 
     # ------------------------------------------------------------------
     # Reporting
