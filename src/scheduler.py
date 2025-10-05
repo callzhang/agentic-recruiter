@@ -57,8 +57,6 @@ class BRDWorkScheduler:
         self._candidate_records: List[Dict[str, Any]] = []
         self._last_report_at = datetime.now()
         
-        # Initialize logger
-        self.logger = logger
         
 
         # Use job parameter directly - no need to load from YAML
@@ -69,7 +67,7 @@ class BRDWorkScheduler:
         self.threshold_greet = threshold_greet or 0.7
         self.threshold_borderline = threshold_borderline or 0.6
 
-        self.logger.debug(
+        logger.debug(
             "BRD scheduler initialised: position=%s, greet>=%.2f, overall>=%.1f, inbound=%s, recommend=%s, followup=%s",
             self.threshold_greet,
             self.overall_threshold,
@@ -84,7 +82,7 @@ class BRDWorkScheduler:
     def start(self) -> None:
         if self._threads:
             return
-        self.logger.info("启动BRD自动化调度：%s", self.job_snapshot.get("position", "AI岗位"))
+        logger.info("启动BRD自动化调度：%s", self.job_snapshot.get("position", "AI岗位"))
         loops = [
             (self._inbound_loop, "brd-inbound"),
             (self._recommendation_loop, "brd-recommend"),
@@ -101,7 +99,7 @@ class BRDWorkScheduler:
         for thread in self._threads:
             thread.join(timeout=5)
         self._threads.clear()
-        self.logger.info("BRD自动化调度已停止")
+        logger.info("BRD自动化调度已停止")
 
     def add_manual_record(self, record: Dict[str, Any]) -> None:
         self._candidate_records.append(record)
@@ -115,7 +113,7 @@ class BRDWorkScheduler:
                 if self.enable_inbound:
                     self._process_inbound_chats()
             except Exception as exc:  # pragma: no cover - defensive
-                self.logger.exception("处理牛人主动沟通失败: %s", exc)
+                logger.exception("处理牛人主动沟通失败: %s", exc)
             self._wait(120)  # 2 minutes
 
     def _recommendation_loop(self) -> None:
@@ -124,7 +122,7 @@ class BRDWorkScheduler:
                 if self.enable_recommend:
                     self._process_recommendations()
             except Exception as exc:  # pragma: no cover - defensive
-                self.logger.exception("处理推荐牛人失败: %s", exc)
+                logger.exception("处理推荐牛人失败: %s", exc)
             self._wait(600)  # 10 minutes
 
     def _followup_loop(self) -> None:
@@ -133,7 +131,7 @@ class BRDWorkScheduler:
                 if self.enable_followup:
                     self._process_followup_cycle()
             except Exception as exc:  # pragma: no cover - defensive
-                self.logger.exception("执行跟进策略失败: %s", exc)
+                logger.exception("执行跟进策略失败: %s", exc)
             self._wait(3600)  # 1 hour
 
     def _reporting_loop(self) -> None:
@@ -141,7 +139,7 @@ class BRDWorkScheduler:
             try:
                 self._flush_weekly_report()
             except Exception as exc:  # pragma: no cover - defensive
-                self.logger.exception("生成周报失败: %s", exc)
+                logger.exception("生成周报失败: %s", exc)
             self._wait(3600)  # check hourly
 
     def _wait(self, seconds: int) -> None:
@@ -198,7 +196,7 @@ class BRDWorkScheduler:
             "meta": resume_meta,
         }
         self._candidate_records.append(record)
-        self.logger.info(
+        logger.info(
             "[%s] %s 分数 %.1f -> %s", source, chat_id, score * 100, decision
         )
         return record
@@ -211,7 +209,7 @@ class BRDWorkScheduler:
                 timeout=60,
             )
         except requests.RequestException as exc:  # pragma: no cover - defensive
-            self.logger.warning("获取在线简历异常(%s): %s", chat_id, exc)
+            logger.warning("获取在线简历异常(%s): %s", chat_id, exc)
             return "", {"error": str(exc)}
 
         data = self._safe_json(response)
@@ -229,7 +227,7 @@ class BRDWorkScheduler:
         data = self._safe_json(response)
         ok = bool(data and data.get("success"))
         if not ok:
-            self.logger.warning("求简历失败: %s -> %s", chat_id, data)
+            logger.warning("求简历失败: %s -> %s", chat_id, data)
         return ok
 
     def _discard_candidate(self, chat_id: str) -> bool:
@@ -241,7 +239,7 @@ class BRDWorkScheduler:
         data = self._safe_json(response)
         ok = bool(data and data.get("success"))
         if not ok:
-            self.logger.warning("标记不合适失败: %s -> %s", chat_id, data)
+            logger.warning("标记不合适失败: %s -> %s", chat_id, data)
         return ok
 
     # ------------------------------------------------------------------
@@ -360,7 +358,7 @@ class BRDWorkScheduler:
             }
             self._candidate_records.append(record)
             self._recommended_history[key] = record
-            self.logger.info("[recommend] #%s overall=%.1f -> %s", index, overall, decision)
+            logger.info("[recommend] #%s overall=%.1f -> %s", index, overall, decision)
 
     def _fetch_recommend_resume(self, index: int) -> Dict[str, Any]:
         response = self.session.get(
@@ -395,9 +393,9 @@ class BRDWorkScheduler:
         if data and data.get("success"):
             chat_id = data.get("chat_id")
             if chat_id:
-                self.logger.info("对推荐候选人发送打招呼成功: %s", chat_id)
+                logger.info("对推荐候选人发送打招呼成功: %s", chat_id)
             return chat_id
-        self.logger.warning("打招呼失败 #%s: %s", index, data)
+        logger.warning("打招呼失败 #%s: %s", index, data)
         return None
 
     # ------------------------------------------------------------------
@@ -442,7 +440,7 @@ class BRDWorkScheduler:
                     continue
                 # No positive reply yet -> postpone
                 state["next"] = now + timedelta(seconds=3600)  # 1 hour
-                self.logger.info("候选人暂无回复，保留跟进计划: %s", chat_id)
+                logger.info("候选人暂无回复，保留跟进计划: %s", chat_id)
                 continue
 
             if status == "resume_requested":
@@ -576,11 +574,11 @@ class BRDWorkScheduler:
         try:
             response = requests.post(self.dingtalk_webhook, json=payload, timeout=15)
             if response.ok:
-                self.logger.info("已通知HR，候选人:%s", candidate_id)
+                logger.info("已通知HR，候选人:%s", candidate_id)
                 return True
-            self.logger.warning("通知HR失败(%s): %s", response.status_code, response.text)
+            logger.warning("通知HR失败(%s): %s", response.status_code, response.text)
         except Exception as exc:  # pragma: no cover - network operations
-            self.logger.warning("通知HR异常: %s", exc)
+            logger.warning("通知HR异常: %s", exc)
         return False
 
     def _build_candidate_id(self, source: str, index: int, label: str) -> str:
@@ -606,7 +604,7 @@ class BRDWorkScheduler:
                 if analysis:
                     return analysis
             except Exception as exc:
-                self.logger.warning("AI分析失败，回退规则评分: %s", exc)
+                logger.warning("AI分析失败，回退规则评分: %s", exc)
         fallback = self._score_resume(resume_text)
         overall = round(float(fallback.get("score", 0.0)) * 10, 2)
         return {
@@ -642,7 +640,7 @@ class BRDWorkScheduler:
                 if message:
                     return message
             except Exception as exc:
-                self.logger.warning("AI打招呼生成失败，使用模板: %s", exc)
+                logger.warning("AI打招呼生成失败，使用模板: %s", exc)
         return self.greeting_template.format(position=self.job_snapshot.get("position", "AI岗位"))
 
     def _record_candidate_profile(
@@ -701,7 +699,7 @@ class BRDWorkScheduler:
         path.parent.mkdir(parents=True, exist_ok=True)
         rows = list(self._candidate_records)
         if not rows:
-            self.logger.debug("暂无数据生成周报")
+            logger.debug("暂无数据生成周报")
             return
         fieldnames = [
             "timestamp",
@@ -719,7 +717,7 @@ class BRDWorkScheduler:
             for row in rows:
                 writer.writerow({key: row.get(key, "") for key in fieldnames})
         self._last_report_at = datetime.utcnow()
-        self.logger.info("周报已更新: %s", path)
+        logger.info("周报已更新: %s", path)
 
     # ------------------------------------------------------------------
     # Helpers
@@ -822,7 +820,7 @@ class BRDWorkScheduler:
             response.raise_for_status()
             return response.json()
         except Exception:  # pragma: no cover - defensive
-            self.logger.debug("解析响应失败: %s", getattr(response, "text", ""))
+            logger.debug("解析响应失败: %s", getattr(response, "text", ""))
             return {}
 
 
