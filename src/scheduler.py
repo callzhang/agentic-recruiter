@@ -13,7 +13,6 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from uuid import NAMESPACE_URL, uuid5
 from src.config import settings
 import requests
-import yaml
 from requests import Response
 from .global_logger import get_logger
 logger = get_logger()
@@ -41,7 +40,7 @@ class BRDWorkScheduler:
         # self.session = requests.Session()
         self.assistant = assistant
         self.overall_threshold = overall_threshold or 8.0
-        self.dingtalk_webhook = settings.dingtalk.url
+        self.dingtalk_webhook = settings.DINGTALK_URL
 
         self.enable_inbound = bool(enable_inbound)
         self.enable_recommend = bool(enable_recommend)
@@ -55,8 +54,21 @@ class BRDWorkScheduler:
         self._pending_followups: Dict[str, Dict[str, Any]] = {}
         self._candidate_records: List[Dict[str, Any]] = []
         self._last_report_at = datetime.now()
+        
+        # Initialize logger
+        self.logger = logger
+        
+        # Set up role_id and intervals (these were removed from constructor but still needed)
+        self.role_id = self.job_snapshot.get("id", "default") if self.job_snapshot else "default"
+        self.poll_interval = 120  # Default poll interval
+        self.recommend_interval = 600  # Default recommend interval  
+        self.followup_interval = 3600  # Default followup interval
 
-        self.criteria = self.job_snapshot or self._load_role_criteria()
+        # Use job parameter directly - no need to load from YAML
+        if not self.job_snapshot:
+            raise ValueError("Job information must be provided as parameter")
+        
+        self.criteria = self.job_snapshot
         scoring = self.criteria.get("scoring", {})
         self.threshold_greet = float(scoring.get("threshold", {}).get("greet", 0.7))
         self.threshold_borderline = float(scoring.get("threshold", {}).get("borderline", 0.6))
@@ -728,17 +740,6 @@ class BRDWorkScheduler:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
-    def _load_role_criteria(self) -> Dict[str, Any]:
-        if not self.criteria_path.exists():
-            raise FileNotFoundError(f"未找到岗位画像配置: {self.criteria_path}")
-        data = yaml.safe_load(self.criteria_path.read_text(encoding="utf-8"))
-        roles = data.get("roles") if isinstance(data, dict) else []
-        for role in roles or []:
-            if str(role.get("id")) == str(self.role_id):
-                return role
-        if roles:
-            return roles[0]
-        raise ValueError("画像配置缺少 roles")
 
     def _extract_resume_text(self, payload: Any) -> str:
         if isinstance(payload, str):

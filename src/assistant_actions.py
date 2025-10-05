@@ -552,8 +552,6 @@ class AssistantActions:
                     'enable_inbound': bool(payload.get('check_new_chats')),
                     'enable_followup': bool(payload.get('check_followups')),
                     'assistant': self,
-                    'base_url': settings.BOSS_SERVICE_BASE_URL,
-                    'criteria_path': settings.BOSS_CRITERIA_PATH,
                 }
                 try:
                     options['recommend_limit'] = int(options['recommend_limit'])
