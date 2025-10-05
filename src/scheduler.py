@@ -49,7 +49,7 @@ class BRDWorkScheduler:
         self.enable_followup = bool(enable_followup)
         self.job_snapshot = job
 
-        self._threads: List[threading.Thread] = []
+        self._running = False
         self._stop_event = threading.Event()
         self._processed_chats: Dict[str, Dict[str, Any]] = {}
         self._recommended_history: Dict[str, Dict[str, Any]] = {}
@@ -66,9 +66,13 @@ class BRDWorkScheduler:
         # Set thresholds from parameters
         self.threshold_greet = threshold_greet or 0.7
         self.threshold_borderline = threshold_borderline or 0.6
+        
+        # Set report interval (weekly)
+        self.report_interval = 604800  # 7 days in seconds
 
         logger.debug(
             "BRD scheduler initialised: position=%s, greet>=%.2f, overall>=%.1f, inbound=%s, recommend=%s, followup=%s",
+            self.job_snapshot.get("position", "AI岗位"),
             self.threshold_greet,
             self.overall_threshold,
             self.enable_inbound,
@@ -80,67 +84,59 @@ class BRDWorkScheduler:
     # Public API
     # ------------------------------------------------------------------
     def start(self) -> None:
-        if self._threads:
+        if self._running:
             return
-        logger.info("启动BRD自动化调度：%s", self.job_snapshot.get("position", "AI岗位"))
-        loops = [
-            (self._inbound_loop, "brd-inbound"),
-            (self._recommendation_loop, "brd-recommend"),
-            (self._followup_loop, "brd-followup"),
-            (self._reporting_loop, "brd-report"),
-        ]
-        for target, name in loops:
-            thread = threading.Thread(target=target, name=name, daemon=True)
-            self._threads.append(thread)
-            thread.start()
+        self._running = True
+        self._stop_event.clear()
+        logger.info("启动BRD自动化调度：%s", self.job_snapshot.get("position"))
+        
+        # Start single sequential loop in a daemon thread
+        self._main_thread = threading.Thread(target=self._main_loop, name="brd-main", daemon=True)
+        self._main_thread.start()
 
     def stop(self) -> None:
         self._stop_event.set()
-        for thread in self._threads:
-            thread.join(timeout=5)
-        self._threads.clear()
+        self._running = False
+        if hasattr(self, '_main_thread') and self._main_thread:
+            self._main_thread.join(timeout=5)
         logger.info("BRD自动化调度已停止")
 
     def add_manual_record(self, record: Dict[str, Any]) -> None:
         self._candidate_records.append(record)
 
-    # ------------------------------------------------------------------
-    # Loops
-    # ------------------------------------------------------------------
-    def _inbound_loop(self) -> None:
+    def _main_loop(self) -> None:
+        """Main sequential loop that runs all tasks in sequence."""
+        logger.info("BRD主循环启动")
+        
         while not self._stop_event.is_set():
             try:
+                # Run inbound processing
                 if self.enable_inbound:
                     self._process_inbound_chats()
-            except Exception as exc:  # pragma: no cover - defensive
-                logger.exception("处理牛人主动沟通失败: %s", exc)
-            self._wait(120)  # 2 minutes
-
-    def _recommendation_loop(self) -> None:
-        while not self._stop_event.is_set():
-            try:
+                
+                # Run recommendation processing
                 if self.enable_recommend:
                     self._process_recommendations()
-            except Exception as exc:  # pragma: no cover - defensive
-                logger.exception("处理推荐牛人失败: %s", exc)
-            self._wait(600)  # 10 minutes
-
-    def _followup_loop(self) -> None:
-        while not self._stop_event.is_set():
-            try:
+                
+                # Run followup processing
                 if self.enable_followup:
                     self._process_followup_cycle()
-            except Exception as exc:  # pragma: no cover - defensive
-                logger.exception("执行跟进策略失败: %s", exc)
-            self._wait(3600)  # 1 hour
-
-    def _reporting_loop(self) -> None:
-        while not self._stop_event.is_set():
-            try:
+                
+                # Run reporting
                 self._flush_weekly_report()
-            except Exception as exc:  # pragma: no cover - defensive
-                logger.exception("生成周报失败: %s", exc)
-            self._wait(3600)  # check hourly
+                
+                # Wait before next iteration
+                self._wait(120)  # 2 minutes between cycles
+                
+            except Exception as exc:
+                logger.exception("BRD主循环异常: %s", exc)
+                self._wait(60)  # Wait 1 minute on error before retrying
+        
+        logger.info("BRD主循环结束")
+
+    # ------------------------------------------------------------------
+    # Processing Methods
+    # ------------------------------------------------------------------
 
     def _wait(self, seconds: int) -> None:
         self._stop_event.wait(seconds)
