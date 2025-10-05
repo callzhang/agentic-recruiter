@@ -8,11 +8,12 @@ from typing import Any, Dict, Iterable, List, Tuple
 import requests
 import streamlit as st
 import yaml
+from src.config import settings
 
 
 
-DEFAULT_BASE_URL = os.environ.get("BOSS_SERVICE_BASE_URL", "http://127.0.0.1:5001")
-DEFAULT_CRITERIA_PATH = Path(os.environ.get("BOSS_CRITERIA_PATH", "config/jobs.yaml"))
+DEFAULT_BASE_URL = settings.BOSS_SERVICE_BASE_URL
+DEFAULT_CRITERIA_PATH = Path(settings.BOSS_CRITERIA_PATH)
 
 # Session State Keys - Centralized management
 # 

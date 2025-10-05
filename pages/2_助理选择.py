@@ -10,6 +10,7 @@ import streamlit as st
 
 from openai import OpenAI
 from streamlit_shared import ensure_state, sidebar_controls
+from src.config import settings
 
 
 # Local helper to load company markdown from config/company.md
@@ -60,25 +61,8 @@ def dataframe_to_dict(df_data: list[dict]) -> dict:
     return result
 
 def load_openai_key() -> str | None:
-    """Load OpenAI API key from environment or config."""
-    # Try environment first
-    api_key = os.getenv("OPENAI_API_KEY")
-    if api_key:
-        return api_key
-    
-    # Try config file
-    path = Path("config/secrets.yaml")
-    if path.exists():
-        try:
-            with open(path, encoding="utf-8") as f:
-                payload = yaml.safe_load(f)
-                if payload and payload.get("openai"):
-                    return str(payload["openai"].get("api_key") or "")
-                if payload and payload.get("openai_api_key"):
-                    return str(payload["openai_api_key"])
-        except Exception:
-            pass
-    return None
+    """Load OpenAI API key from settings."""
+    return settings.OPENAI_API_KEY if settings.OPENAI_API_KEY else None
 
 # Initialize OpenAI client with API key
 api_key = load_openai_key()
