@@ -58,11 +58,8 @@ class BRDWorkScheduler:
         # Initialize logger
         self.logger = logger
         
-        # Set up role_id and intervals (these were removed from constructor but still needed)
+        # Set up role_id from job data
         self.role_id = self.job_snapshot.get("id", "default") if self.job_snapshot else "default"
-        self.poll_interval = 120  # Default poll interval
-        self.recommend_interval = 600  # Default recommend interval  
-        self.followup_interval = 3600  # Default followup interval
 
         # Use job parameter directly - no need to load from YAML
         if not self.job_snapshot:
@@ -124,7 +121,7 @@ class BRDWorkScheduler:
                     self._process_inbound_chats()
             except Exception as exc:  # pragma: no cover - defensive
                 self.logger.exception("处理牛人主动沟通失败: %s", exc)
-            self._wait(self.poll_interval)
+            self._wait(120)  # 2 minutes
 
     def _recommendation_loop(self) -> None:
         while not self._stop_event.is_set():
@@ -133,7 +130,7 @@ class BRDWorkScheduler:
                     self._process_recommendations()
             except Exception as exc:  # pragma: no cover - defensive
                 self.logger.exception("处理推荐牛人失败: %s", exc)
-            self._wait(self.recommend_interval)
+            self._wait(600)  # 10 minutes
 
     def _followup_loop(self) -> None:
         while not self._stop_event.is_set():
@@ -142,7 +139,7 @@ class BRDWorkScheduler:
                     self._process_followup_cycle()
             except Exception as exc:  # pragma: no cover - defensive
                 self.logger.exception("执行跟进策略失败: %s", exc)
-            self._wait(self.followup_interval)
+            self._wait(3600)  # 1 hour
 
     def _reporting_loop(self) -> None:
         while not self._stop_event.is_set():
@@ -292,7 +289,7 @@ class BRDWorkScheduler:
                 if chat_id:
                     decision = "greeted"
                     if self.enable_followup:
-                        followup_at = datetime.utcnow() + timedelta(seconds=self.followup_interval)
+                        followup_at = datetime.utcnow() + timedelta(seconds=3600)  # 1 hour
                         self._pending_followups[chat_id] = {
                             "candidate_id": candidate_id,
                             "index": index,
@@ -426,7 +423,7 @@ class BRDWorkScheduler:
                     metadata["stage"] = "resume_requested"
                     state.update({
                         "status": "resume_requested",
-                        "next": now + timedelta(seconds=self.followup_interval),
+                        "next": now + timedelta(seconds=3600),  # 1 hour
                         "last_history": history,
                         "metadata": metadata,
                     })
@@ -449,7 +446,7 @@ class BRDWorkScheduler:
                     )
                     continue
                 # No positive reply yet -> postpone
-                state["next"] = now + timedelta(seconds=self.followup_interval)
+                state["next"] = now + timedelta(seconds=3600)  # 1 hour
                 self.logger.info("候选人暂无回复，保留跟进计划: %s", chat_id)
                 continue
 
@@ -504,7 +501,7 @@ class BRDWorkScheduler:
                         self._pending_followups.pop(chat_id, None)
                         continue
                 # No resume yet, reschedule check
-                state["next"] = now + timedelta(seconds=self.followup_interval)
+                state["next"] = now + timedelta(seconds=3600)  # 1 hour
                 continue
 
             # Unknown status, clean up to avoid stale records
