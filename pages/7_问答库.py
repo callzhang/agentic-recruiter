@@ -7,7 +7,11 @@ from typing import List
 import streamlit as st
 
 from streamlit_shared import ensure_state, sidebar_controls, SessionKeys
-# Removed direct import - use API calls instead
+
+try:
+    from src.assistant_actions import assistant_actions
+except ImportError:  # pragma: no cover - defensive
+    assistant_actions = None  # type: ignore
 
 
 def render_search_section() -> None:

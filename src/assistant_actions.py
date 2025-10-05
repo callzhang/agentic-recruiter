@@ -15,6 +15,7 @@ except ImportError:  # pragma: no cover - optional dependency
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from .candidate_store import CandidateStore, candidate_store
+from .scheduler import BRDWorkScheduler
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,12 @@ class AssistantActions:
             self.client = OpenAI(api_key=api_key)
         else:
             self.client = None
+        
+        # Scheduler management
+        import threading
+        self.scheduler: BRDWorkScheduler | None = None
+        self.scheduler_lock = threading.Lock()
+        self.scheduler_config: dict[str, Any] = {}
     
     def _load_openai_key(self) -> Optional[str]:
         """Load OpenAI API key from environment or config file."""
@@ -478,6 +485,98 @@ class AssistantActions:
     def generate_id() -> str:
         """Generate a unique ID."""
         return uuid4().hex
+
+    # Scheduler Management -----------------------------------------
+    def get_scheduler_status(self) -> Dict[str, Any]:
+        """Get scheduler status and configuration."""
+        with self.scheduler_lock:
+            running = self.scheduler is not None
+            config = dict(self.scheduler_config) if running else {}
+        return {
+            'running': running,
+            'config': config,
+        }
+
+    def start_scheduler(self, payload: Dict[str, Any]) -> tuple[bool, str]:
+        """Start the automation scheduler."""
+        with self.scheduler_lock:
+            if self.scheduler:
+                return False, '调度器已运行'
+            
+            try:
+                options = self._build_scheduler_options(payload)
+                scheduler = BRDWorkScheduler(**options)
+                scheduler.start()
+                self.scheduler = scheduler
+                self.scheduler_config = options
+                return True, '调度器已启动'
+            except Exception as exc:
+                logger.error(f"启动调度器失败: {exc}")
+                self.scheduler = None
+                self.scheduler_config = {}
+                return False, f'启动调度器失败: {exc}'
+
+    def stop_scheduler(self) -> tuple[bool, str]:
+        """Stop the automation scheduler."""
+        with self.scheduler_lock:
+            if not self.scheduler:
+                return False, '调度器未运行'
+            scheduler = self.scheduler
+            self.scheduler = None
+            self.scheduler_config = {}
+        
+        try:
+            # Add timeout for scheduler stop
+            import threading
+            import time
+            
+            def stop_with_timeout():
+                scheduler.stop()
+            
+            stop_thread = threading.Thread(target=stop_with_timeout)
+            stop_thread.daemon = True  # Allow thread to be killed if main process exits
+            stop_thread.start()
+            stop_thread.join(timeout=5)  # 5-second timeout
+            
+            if stop_thread.is_alive():
+                logger.warning("调度器停止超时，强制继续...")
+                return False, '调度器停止超时'
+            
+            return True, '已停止调度器'
+        except Exception as exc:
+            logger.error(f"停止调度器失败: {exc}")
+            return False, f'停止调度器失败: {exc}'
+
+    def _build_scheduler_options(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Build scheduler options from payload."""
+        base_url = payload.get('base_url') or os.environ.get('BOSS_SERVICE_BASE_URL', 'http://127.0.0.1:5001')
+        criteria_path = payload.get('criteria_path') or os.environ.get('BOSS_CRITERIA_PATH', 'config/jobs.yaml')
+
+        options = {
+            'base_url': base_url.rstrip('/'),
+            'criteria_path': os.path.abspath(criteria_path),
+            'role_id': payload.get('role_id', 'default'),
+            'poll_interval': self._coerce_int(payload.get('poll_interval'), 120),
+            'recommend_interval': self._coerce_int(payload.get('recommend_interval'), 600),
+            'followup_interval': self._coerce_int(payload.get('followup_interval'), 3600),
+            'report_interval': self._coerce_int(payload.get('report_interval'), 604800),
+            'inbound_limit': self._coerce_int(payload.get('inbound_limit'), 40),
+            'recommend_limit': self._coerce_int(payload.get('recommend_limit'), 20),
+        }
+
+        greeting_template = payload.get('greeting_template')
+        if isinstance(greeting_template, str) and greeting_template.strip():
+            options['greeting_template'] = greeting_template
+
+        return options
+
+    @staticmethod
+    def _coerce_int(value: Any, default: int) -> int:
+        """Coerce value to int with default fallback."""
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
 
 
 # Global instance

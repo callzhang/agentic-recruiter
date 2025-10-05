@@ -3,7 +3,13 @@ from __future__ import annotations
 
 import streamlit as st
 
-from streamlit_shared import call_api, ensure_state, sidebar_controls
+from streamlit_shared import (
+    SessionKeys,
+    call_api,
+    ensure_state,
+    sidebar_controls,
+    load_jobs,
+)
 
 
 def main() -> None:
@@ -32,43 +38,30 @@ def main() -> None:
     else:
         st.info("调度器未运行，配置参数后点击按钮启动。")
         with st.form("scheduler_start_form"):
-            role_id = st.text_input("岗位 ID", value="default", key="scheduler_role_id")
-            criteria_path = st.text_input(
-                "画像配置路径",
-        value=st.session_state.get(SessionKeys.CRITERIA_PATH, "config/jobs.yaml"),
-                key="scheduler_criteria",
-            )
-            poll_interval = st.number_input("主动沟通轮询 (秒)", min_value=30, value=120, step=30)
-            recommend_interval = st.number_input("推荐轮询 (秒)", min_value=120, value=600, step=60)
-            followup_interval = st.number_input("跟进周期 (秒)", min_value=600, value=3600, step=300)
-            report_interval = st.number_input("报表周期 (秒)", min_value=3600, value=604800, step=3600)
-            inbound_limit = st.number_input("主动沟通批次", min_value=5, value=40, step=5)
-            recommend_limit = st.number_input("推荐批次", min_value=5, value=20, step=5)
-            greeting_template = st.text_area("打招呼模板 (可选)", key="scheduler_greeting")
+            selected_job_idx = st.session_state.get(SessionKeys.SELECTED_JOB_INDEX, 0)
+            jobs = load_jobs()
+            job = jobs[selected_job_idx]
+            st.markdown(f"**当前岗位: {job.get('position')}**")
+            check_recommend_candidates = st.checkbox("检查推荐候选人", value=job.get("check_recommend_candidates", True))
+            check_new_chats = st.checkbox("检查新聊天", value=job.get("check_new_chats", False))
+            check_followups = st.checkbox("检查跟进", value=job.get("check_followups", False))
 
             submitted = st.form_submit_button("启动调度器")
             if submitted:
                 payload = {
-                    "role_id": role_id,
-                    "criteria_path": criteria_path,
-                    "poll_interval": int(poll_interval),
-                    "recommend_interval": int(recommend_interval),
-                    "followup_interval": int(followup_interval),
-                    "report_interval": int(report_interval),
-                    "inbound_limit": int(inbound_limit),
-                    "recommend_limit": int(recommend_limit),
+                    "job": job,
+                    "check_recommend_candidates": check_recommend_candidates,
+                    "check_new_chats": check_new_chats,
+                    "check_followups": check_followups,
                 }
-                if greeting_template.strip():
-                    payload["greeting_template"] = greeting_template.strip()
                 with st.spinner("启动调度器..."):
                     ok, response = call_api(
-                        base_url,
                         "POST",
                         "/automation/scheduler/start",
                         json=payload,
                     )
                 if ok:
-                    st.success("调度器已启动")
+                    st.success(f"调度器已启动: {response}")
                     st.rerun()
                 else:
                     st.error(f"启动失败: {response}")

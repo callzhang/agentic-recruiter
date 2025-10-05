@@ -46,7 +46,6 @@ from src.recommendation_actions import (
 from src.global_logger import get_logger
 from src.candidate_store import candidate_store
 from src.assistant_actions import assistant_actions, DEFAULT_GREETING
-from src.scheduler import BRDWorkScheduler
 from typing import Any, Dict, List, Optional, Callable, Tuple, Union
 from functools import wraps
 
@@ -83,9 +82,6 @@ class BossService:
             self.shutdown_requested = False
             self.startup_complete = threading.Event() # Event to signal startup completion
             self.browser_lock = threading.Lock()  # Critical: protect Playwright resources from concurrent access
-            self.scheduler: BRDWorkScheduler | None = None
-            self.scheduler_lock = threading.Lock()
-            self.scheduler_config: dict[str, Any] = {}
             self.candidate_store = candidate_store
             if getattr(self.candidate_store, "enabled", False):
                 logger.info("QA store initialised and connected to Zilliz")
@@ -122,90 +118,6 @@ class BossService:
     def _service_base_url(self) -> str:
         return os.environ.get('BOSS_SERVICE_BASE_URL', 'http://127.0.0.1:5001')
 
-    def _scheduler_status(self):
-        with self.scheduler_lock:
-            running = self.scheduler is not None
-            config = dict(self.scheduler_config) if running else {}
-        return {
-            'running': running,
-            'config': config,
-        }
-
-    def _stop_scheduler(self) -> tuple[bool, str]:
-        with self.scheduler_lock:
-            if not self.scheduler:
-                return False, '调度器未运行'
-            scheduler = self.scheduler
-            self.scheduler = None
-            self.scheduler_config = {}
-        
-        try:
-            # Add timeout for scheduler stop
-            import threading
-            import time
-            
-            def stop_with_timeout():
-                scheduler.stop()
-            
-            stop_thread = threading.Thread(target=stop_with_timeout)
-            stop_thread.daemon = True  # Allow thread to be killed if main process exits
-            stop_thread.start()
-            stop_thread.join(timeout=5)  # 5-second timeout
-            
-            if stop_thread.is_alive():
-                logger.warning("调度器停止超时，强制继续...")
-                return False, '调度器停止超时'
-            
-            return True, '已停止调度器'
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.error(f"停止调度器失败: {exc}")
-            return False, f'停止调度器失败: {exc}'
-
-    def _start_scheduler(self, payload) -> tuple[bool, str]:
-        with self.scheduler_lock:
-            if self.scheduler:
-                return False, '调度器已运行'
-            try:
-                options = self._build_scheduler_options(payload)
-                scheduler = BRDWorkScheduler(**options)
-                scheduler.start()
-                self.scheduler = scheduler
-                self.scheduler_config = options
-                return True, '调度器已启动'
-            except Exception as exc:  # pragma: no cover - defensive
-                logger.error(f"启动调度器失败: {exc}")
-                self.scheduler = None
-                self.scheduler_config = {}
-                return False, f'启动调度器失败: {exc}'
-
-    @staticmethod
-    def _coerce_int(value: Any, default: int) -> int:
-        try:
-            return int(value)
-        except (TypeError, ValueError):
-            return default
-
-    def _build_scheduler_options(self, payload):
-        base_url = payload.get('base_url') or self._service_base_url()
-        criteria_path = payload.get('criteria_path') or os.environ.get('BOSS_CRITERIA_PATH', 'config/jobs.yaml')
-
-        options = {
-            'base_url': base_url.rstrip('/'),
-            'criteria_path': os.path.abspath(criteria_path),
-            'role_id': payload.get('role_id', 'default'),
-            'poll_interval': self._coerce_int(payload.get('poll_interval'), 120),
-            'recommend_interval': self._coerce_int(payload.get('recommend_interval'), 600),
-            'followup_interval': self._coerce_int(payload.get('followup_interval'), 3600),
-            'report_interval': self._coerce_int(payload.get('report_interval'), 604800),
-            'inbound_limit': self._coerce_int(payload.get('inbound_limit'), 40),
-            'recommend_limit': self._coerce_int(payload.get('recommend_limit'), 20),
-        }
-
-        greeting_template = payload.get('greeting_template')
-        if isinstance(greeting_template, str) and greeting_template.strip():
-            options['greeting_template'] = greeting_template
-
-        return options
 
     def _startup_sync(self):
         """Synchronous startup tasks executed in a thread pool.
@@ -248,7 +160,7 @@ class BossService:
         
         try:
             self._graceful_shutdown()
-            self._stop_scheduler()
+            assistant_actions.stop_scheduler()
             logger.info("同步关闭任务完成。")
         except TimeoutError:
             logger.error("关闭任务超时，强制退出")
@@ -472,19 +384,19 @@ class BossService:
         '''
         @self.app.get('/automation/scheduler/status')
         def scheduler_status():
-            return JSONResponse(self._scheduler_status())
+            return JSONResponse(assistant_actions.get_scheduler_status())
 
         @self.app.post('/automation/scheduler/start')
         def scheduler_start(payload: dict | None = Body(default=None)):
-            success, details = self._start_scheduler(payload or {})
-            status = self._scheduler_status()
+            success, details = assistant_actions.start_scheduler(payload or {})
+            status = assistant_actions.get_scheduler_status()
             status.update({'success': success, 'details': details})
             return JSONResponse(status)
 
         @self.app.post('/automation/scheduler/stop')
         def scheduler_stop():
-            success, details = self._stop_scheduler()
-            status = self._scheduler_status()
+            success, details = assistant_actions.stop_scheduler()
+            status = assistant_actions.get_scheduler_status()
             status.update({'success': success, 'details': details})
             return JSONResponse(status)
 
