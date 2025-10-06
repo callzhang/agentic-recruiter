@@ -23,10 +23,9 @@ def _get_dialogs_cached(limit: int) -> List[Dict[str, Any]]:
     ok, payload = call_api("GET", "/chat/dialogs", params={"limit": limit})
     if not ok:
         raise ValueError(f"获取消息列表失败: {payload}")
-    messages = payload.get("messages") or []
-    if not isinstance(messages, list):
+    if not isinstance(payload, list):
         raise ValueError("API 返回的消息格式不符合预期")
-    return messages
+    return payload
 
 @st.cache_data(ttl=300, show_spinner="获取简历中...")
 def _fetch_resume(chat_id: str, endpoint: str) -> Optional[Dict[str, Any]]:
@@ -42,14 +41,9 @@ def _fetch_resume(chat_id: str, endpoint: str) -> Optional[Dict[str, Any]]:
 def _fetch_history(chat_id: str) -> List[str]:
     """Fetch chat history with Streamlit caching."""
     ok, payload = call_api("GET", f"/chat/{chat_id}/messages")
-    messages: List[str] = []
-    if ok and isinstance(payload, dict):
-        raw = payload.get("messages") 
-        for item in raw[-DEFAULT_HISTORY_LIMIT:]:
-            messages.append(item)
-    else:
+    if not ok or not isinstance(payload, list):
         raise ValueError(f"获取聊天记录失败: {payload}")
-    return messages
+    return payload[-DEFAULT_HISTORY_LIMIT:]
 
 
 def _fetch_best_resume(chat_id: str) -> tuple[str, str]:
@@ -67,7 +61,7 @@ def _fetch_best_resume(chat_id: str) -> tuple[str, str]:
         json={"chat_id": chat_id}
     )
     
-    if ok_check and check_payload.get("available"):
+    if ok_check and check_payload:
         # Step 2: Get full resume if available
         full_payload = _fetch_full_resume(chat_id)
         if full_payload.get("success"):
@@ -159,13 +153,6 @@ def render_resume_section(
         return text
 
 
-def _get_history_data(chat_id: str) -> List[Dict[str, Any]]:
-    """Fetch history data (separated from UI rendering)"""
-    try:
-        return _fetch_history(chat_id)
-    except ValueError as e:
-        st.error(str(e))
-        return []
 
 
 def render_history_section(history: List[Dict[str, Any]]) -> None:
@@ -252,7 +239,7 @@ def main() -> None:
     resume_text, resume_source = _fetch_best_resume(chat_id)
     
     # Fetch history data (cached by @st.cache_data for 5 minutes)
-    history_lines = _get_history_data(chat_id)
+    history_lines = _fetch_history(chat_id)
     history_text = "\n".join([
         f"{item.get('type', 'unknown')}: {item.get('message', '')}"
         for item in history_lines
@@ -293,12 +280,10 @@ def main() -> None:
                 "POST", "/assistant/analyze-candidate",
                 json=context
             )
-            if ok and payload.get("success"):
-                result = payload.get("analysis")
-                st.session_state.setdefault(SessionKeys.ANALYSIS_RESULTS, {})[chat_id] = result
+            if ok:
+                st.session_state.setdefault(SessionKeys.ANALYSIS_RESULTS, {})[chat_id] = payload
             else:
-                error = payload.get("error") if isinstance(payload, dict) else str(payload)
-                st.error(f"无法解析评分结果: {error}")
+                st.error(f"无法解析评分结果: {payload}")
         st.rerun()
 
     # Display analysis results
@@ -320,24 +305,37 @@ def main() -> None:
     col_generate, col_send = st.columns(2)
     # Generate button
     if col_generate.button("生成建议", key=f"generate_msg_{chat_id}"):
-        # Use cached resume data
-        context = {
-            "job_description": selected_job.get("description", ""),
-            "target_profile": selected_job.get("target_profile", ""),
+        analysis_result = st.session_state.get(SessionKeys.ANALYSIS_RESULTS, {}).get(chat_id)
+        assistant_id = st.session_state.get(SessionKeys.SELECTED_ASSISTANT_ID)
+        candidate_summary = (selected_dialog or {}).get("text", "")
+
+        payload = {
+            "chat_id": chat_id,
+            "prompt": draft or "",
+            "assistant_id": assistant_id,
+            "chat_history": history_lines,
+            "job_info": selected_job,
+            "candidate_summary": candidate_summary,
             "candidate_resume": resume_text,
-            "chat_history": history_text or "无",
-            "notes": draft,
+            "analysis": analysis_result,
+            # Retain legacy context shape for backward compatibility with the API.
+            "context": {
+                "job_description": selected_job.get("description", ""),
+                "target_profile": selected_job.get("target_profile", ""),
+                "candidate_resume": resume_text,
+                "chat_history": history_text or "无",
+                "notes": draft,
+                "assistant_id": assistant_id,
+                "analysis": analysis_result,
+            },
         }
+
         with st.spinner("生成中..."):
             ok, payload = call_api(
                 "POST", "/assistant/generate-followup",
-                json={
-                    "chat_id": chat_id,
-                    "prompt": draft or "",
-                    "context": context
-                }
+                json=payload,
             )
-            message = payload.get("message") if ok else None
+            message = payload if ok else None
         if message:
             message_state[chat_id] = message
             st.success("生成完成！")

@@ -33,32 +33,18 @@ class SessionKeys:
     # ============================================================================
     # CORE APPLICATION STATE
     # ============================================================================
-    
-    
-    # Configuration management
     CRITERIA_PATH = "criteria_path"         # Path to jobs.yaml configuration file
-    
-    # Job selection (minimal state)
     SELECTED_JOB_INDEX = "selected_job_index"  # Index of selected job (only index needed)
-    
-    
     # ============================================================================
     # RESUME & GREETING MANAGEMENT
     # ============================================================================
-    
-    # Resume caching (performance optimization)
     CACHED_ONLINE_RESUME = "cached_online_resume"  # Cached online resume text for current candidate
-    
-    
     # ============================================================================
     # ANALYSIS & MESSAGING
     # ============================================================================
-    
-    # AI analysis functionality
     ANALYSIS_RESULTS = "analysis_results"   # AI analysis results (skill, startup_fit, etc.)
-    
-    # Message generation
     GENERATED_MESSAGES = "generated_messages"  # Generated message drafts by chat_id
+    SELECTED_ASSISTANT_ID = "selected_assistant_id"  # Selected assistant ID
 
 
 def ensure_state() -> None:
@@ -100,14 +86,11 @@ def discover_config_paths() -> List[Path]:
 @st.cache_data(ttl=60, show_spinner="加载岗位配置中...")
 def load_jobs_from_path(path: Path) -> List[Dict[str, Any]]:
     """Load jobs from YAML file with caching."""
-    try:
-        if not path.exists():
-            return []
-        data = yaml.safe_load(path.read_text(encoding="utf-8"))
-        if isinstance(data, dict) and isinstance(data.get("roles"), list):
-            return data["roles"]
-    except Exception as exc:
-        st.warning(f"加载岗位配置失败: {exc}")
+    if not path.exists():
+        return []
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if isinstance(data, dict) and isinstance(data.get("roles"), list):
+        return data["roles"]
     return []
 
 
@@ -126,7 +109,7 @@ def get_selected_job(job_index: int = 0) -> Dict[str, Any]:
     return jobs[job_index]
 
 
-def sidebar_controls(*, include_config_path: bool = False, include_job_selector: bool = True) -> None:
+def sidebar_controls(*, include_config_path: bool = False, include_job_selector: bool = True, include_assistant_selector: bool = True) -> None:
     """Render common sidebar inputs with dropdown controls."""
     ensure_state()
     st.sidebar.header("全局设置")
@@ -147,6 +130,23 @@ def sidebar_controls(*, include_config_path: bool = False, include_job_selector:
         st.session_state[SessionKeys.CRITERIA_PATH] = str(config_path)
         # Clear job cache when config path changes
         load_jobs.clear()
+
+    if include_assistant_selector:
+        # Get assistants via API
+        ok, response = call_api("GET", "/assistant/list")
+        if ok and isinstance(response, list):
+            assistants = response
+            id_name_map = {assistant["id"]: assistant["name"] for assistant in assistants}
+            selected_assistant = st.sidebar.selectbox(
+                "当前助手",
+                options=list(id_name_map.keys()),
+                index=0,
+                format_func=lambda id: id_name_map[id],
+            )
+            st.session_state[SessionKeys.SELECTED_ASSISTANT_ID] = selected_assistant
+        else:
+            st.sidebar.error("无法加载助手列表")
+            st.session_state[SessionKeys.SELECTED_ASSISTANT_ID] = None
     
     # Job selector
     if include_job_selector:
@@ -184,11 +184,7 @@ def load_config(path: Path) -> Dict[str, Any]:
     """Load configuration from YAML file with caching."""
     if not path.exists():
         return {}
-    try:
-        return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    except Exception as exc:  # pragma: no cover - defensive
-        st.error(f"解析 YAML 失败: {exc}")
-        return {}
+    return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
 
 
 def _dump_yaml(data: Dict[str, Any]) -> str:

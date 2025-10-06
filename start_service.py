@@ -282,6 +282,7 @@ def start_service(*, run_scheduler: bool = False, scheduler_options: Optional[Di
         env["WATCHFILES_FORCE_POLLING"] = "true"
         env["WATCHFILES_POLL_DELAY_MS"] = "1000"  # 1 second polling interval
         env["WATCHFILES_IGNORE_PERMISSION_ERRORS"] = "true"  # Ignore permission errors
+        env["WATCHFILES_DEFAULT_FILTERS"] = "*.py"
         # 使用 uvicorn 启动（可开启 --reload；CDP模式下重载不会中断浏览器）
         # 只监控与 boss_service 相关的核心文件，排除不必要的文件
         cmd = [
@@ -290,8 +291,10 @@ def start_service(*, run_scheduler: bool = False, scheduler_options: Optional[Di
             "--host", host,
             "--port", port,
             "--reload",
-            "--reload-dir", "src",
+            "--reload-dir", ".",
             "--reload-include", "boss_service.py",
+            "--reload-exclude", "src/scheduler.py",
+            "--reload-exclude", "src/assistant_actions.py",
             "--reload-delay", "3.0"
         ]
         # 新建进程组，以便整体发送信号

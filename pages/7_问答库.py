@@ -8,10 +8,8 @@ import streamlit as st
 
 from streamlit_shared import ensure_state, sidebar_controls, SessionKeys
 
-try:
-    from src.assistant_actions import assistant_actions
-except ImportError:  # pragma: no cover - defensive
-    assistant_actions = None  # type: ignore
+# Use API calls instead of direct imports
+from streamlit_shared import call_api
 
 
 def render_search_section() -> None:
@@ -43,7 +41,7 @@ def render_search_section() -> None:
                     "similarity_threshold": threshold
                 }
             )
-            results = payload.get("results", []) if ok else []
+            results = payload if ok and isinstance(payload, list) else []
         
         if not results:
             st.info(f"未检索到相似度 >= {threshold:.2f} 的记录")
@@ -77,7 +75,9 @@ def _text_to_keywords(text: str) -> List[str]:
 
 
 def render_entries() -> None:
-    entries = assistant_actions.list_entries(limit=500)
+    # Get entries via API
+    ok, response = call_api("GET", "/assistant/list-entries", params={"limit": 500})
+    entries = response if ok and isinstance(response, list) else []
     if not entries:
         st.info("当前没有 QA 记录")
         return
@@ -127,17 +127,20 @@ def render_entries() -> None:
                 st.warning("问题与回答均不能为空")
             else:
                 with st.spinner("更新中..."):
-                    assistant_actions.record_qa(
-                        qa_id=selected_id,
-                        question=question.strip(),
-                        answer=answer.strip(),
-                        keywords=_text_to_keywords(keywords_text),
-                    )
+                    # Record QA via API
+                    ok, response = call_api("POST", "/assistant/record-qa", json={
+                        "qa_id": selected_id,
+                        "question": question.strip(),
+                        "answer": answer.strip(),
+                        "keywords": _text_to_keywords(keywords_text),
+                    })
                 st.success("记录已更新")
                 st.rerun()
     if st.button("删除该记录", key=f"faq_delete_{selected_id}"):
         with st.spinner("删除中..."):
-            ok = assistant_actions.delete_entry(selected_id)
+            # Delete entry via API
+            ok, response = call_api("POST", "/assistant/delete-entry", json={"entry_id": selected_id})
+            ok = response if ok else False
         if ok:
             st.success("已删除")
         else:
@@ -156,14 +159,17 @@ def render_create_form() -> None:
             if not question.strip() or not answer.strip():
                 st.warning("问题与回答均不能为空")
             else:
-                qa_id = assistant_actions.generate_id()
-                with st.spinner("写入中..."):
-                    assistant_actions.record_qa(
-                        qa_id=qa_id,
-                        question=question.strip(),
-                        answer=answer.strip(),
-                        keywords=_text_to_keywords(keywords_text),
-                    )
+                # Generate ID and record QA via API
+                ok, id_response = call_api("GET", "/assistant/generate-id")
+                qa_id = id_response if ok else None
+                if qa_id:
+                    with st.spinner("写入中..."):
+                        ok, response = call_api("POST", "/assistant/record-qa", json={
+                            "qa_id": qa_id,
+                            "question": question.strip(),
+                            "answer": answer.strip(),
+                            "keywords": _text_to_keywords(keywords_text),
+                        })
                 st.success(f"已新增 QA 记录: {qa_id}")
                 st.rerun()
 
@@ -199,12 +205,16 @@ def generate_company_faq() -> None:
 
     with st.spinner("生成示例 QA..."):
         for question, answer, keywords in samples:
-            assistant_actions.record_qa(
-                qa_id=assistant_actions.generate_id(),
-                question=question,
-                answer=answer,
-                keywords=keywords,
-            )
+            # Generate ID and record QA via API
+            ok, id_response = call_api("GET", "/assistant/generate-id")
+            qa_id = id_response if ok else None
+            if qa_id:
+                ok, response = call_api("POST", "/assistant/record-qa", json={
+                    "qa_id": qa_id,
+                    "question": question,
+                    "answer": answer,
+                    "keywords": keywords,
+                })
     st.success("已写入示例 QA 记录")
     st.rerun()
 
@@ -214,8 +224,10 @@ def main() -> None:
     ensure_state()
     sidebar_controls(include_config_path=False)
 
-    if not getattr(assistant_actions, 'enabled', False):
-        st.warning("QA Store 未启用，请检查 Zilliz 配置和 OPENAI_API_KEY")
+    # Check if service is available via API
+    ok, response = call_api("GET", "/status")
+    if not ok:
+        st.warning("服务不可用，请检查服务器状态")
         return
 
     render_search_section()

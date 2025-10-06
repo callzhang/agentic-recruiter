@@ -30,13 +30,10 @@ def main() -> None:
     status_placeholder = st.container()
     ok, payload = call_api("GET", "/status")
     login_payload = None
-    stats_payload = None
     if ok and isinstance(payload, dict) and not payload.get("logged_in"):
         login_ok, login_payload = call_api("POST", "/login")
-        if login_ok and isinstance(login_payload, dict):
-            payload["logged_in"] = login_payload.get("success", False)
-
-    stats_ok, stats_payload = call_api("GET", "/chat/stats")
+        if login_ok:
+            payload["logged_in"] = login_payload
 
     with status_placeholder:
         if ok and isinstance(payload, dict):
@@ -44,11 +41,11 @@ def main() -> None:
             cols = st.columns(4)
             cols[0].metric("状态", payload.get("status", "未知"))
             cols[1].metric("登录", "已登录" if payload.get("logged_in") else "未登录")
-            cols[2].metric("通知数量", stats_payload.get("new_message_count", 0))
-            cols[3].metric("通知数量", stats_payload.get("new_greet_count", 0))
+            cols[2].metric("通知数量", payload.get("new_message_count", 0))
+            cols[3].metric("通知数量", payload.get("new_greet_count", 0))
             st.caption(f"数据时间: {payload.get('timestamp', '—')}")
-            if login_payload and isinstance(login_payload, dict):
-                st.caption(f"登录接口返回: {login_payload.get('message', login_payload)}")
+            if login_payload is not None:
+                st.caption(f"登录接口返回: {login_payload}")
         else:
             st.error(f"无法获取服务状态: {payload}")
 

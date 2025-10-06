@@ -150,14 +150,11 @@ def _edit_role(role: Dict[str, Any], idx: int) -> None:
         height=220,
         placeholder="请输入其它配置，格式为 YAML",
     )
-    try:
-        parsed = yaml.safe_load(updated_extra) or {}
-        for key in list(role.keys()):
-            if key not in handled:
-                role.pop(key)
-        role.update(parsed)
-    except yaml.YAMLError as exc:
-        st.error(f"解析其它字段失败: {exc}")
+    parsed = yaml.safe_load(updated_extra) or {}
+    for key in list(role.keys()):
+        if key not in handled:
+            role.pop(key)
+    role.update(parsed)
 
 
 def main() -> None:

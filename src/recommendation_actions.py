@@ -41,7 +41,6 @@ def _prepare_recommendation_page(page, *, wait_timeout: int = 8000) -> tuple[Opt
         page.wait_for_selector(CANDIDATE_CARD_SELECTOR, timeout=wait_timeout)
     return frame
 
-
 def select_recommend_job_action(frame, job_title: str) -> Dict[str, Any]:
     """选择当前职位从下拉菜单中。
     
@@ -124,9 +123,6 @@ def select_recommend_job_action(frame, job_title: str) -> Dict[str, Any]:
             'expected_job': job_title,
         }
 
-                
-
-
 def list_recommended_candidates_action(page, *, limit: int = 20) -> Dict[str, Any]:
     """Click the recommended panel and return structured card information."""
     frame = _prepare_recommendation_page(page)
@@ -142,15 +138,16 @@ def list_recommended_candidates_action(page, *, limit: int = 20) -> Dict[str, An
         for card in card_locators[:limit]:
             card.scroll_into_view_if_needed(timeout=1000)
             viewd = 'viewed' in card.get_attribute('class')
+            greeted = card.locator('button:has-text("继续沟通")').count() > 0
             text = card.inner_text().strip()
             candidates.append({
                 'viewed': viewd,
+                'greeted': greeted,
                 'text': text,
             })
     success = bool(candidates)
     details = f"成功获取 {len(candidates)} 个推荐候选人" if success else '未找到推荐候选人'
     return { 'success': success, 'details': details, 'candidates': candidates }
-
 
 def view_recommend_candidate_resume_action(page, index: int) -> Dict[str, Any]:
     """点击推荐候选人卡片并抓取在线简历内容。
@@ -182,7 +179,7 @@ def view_recommend_candidate_resume_action(page, index: int) -> Dict[str, Any]:
     ''' click candidate card '''
     card = frame.locator(CANDIDATE_CARD_SELECTOR).all()[index]
     card.scroll_into_view_if_needed(timeout=1000)
-    card.click(timeout=1000)
+    card.click(timeout=800)
 
     ''' prepare resume context '''
     from .resume_capture import _setup_wasm_route, _install_parent_message_listener, _get_resume_handle, _process_resume_entry
@@ -198,8 +195,6 @@ def view_recommend_candidate_resume_action(page, index: int) -> Dict[str, Any]:
     if not result.get('success'):
         result['debug'] = collect_resume_debug_info(page)
     return result
-
-
 
 def greet_recommend_candidate_action(page, index: int, message: str) -> Dict[str, Any]:
     """发送标准化打招呼消息给推荐候选人。"""
@@ -218,15 +213,10 @@ def greet_recommend_candidate_action(page, index: int, message: str) -> Dict[str
     greeted = False
     for selector in greet_selectors:
         target = card.locator(selector).first
-        if not target.count():
-            continue
-        try:
-            target.wait_for(state="visible", timeout=2000)
+        if target.count():
             target.click(timeout=2000)
             greeted = True
             break
-        except Exception:
-            continue
 
     if not greeted:
         return {'success': False, 'details': '未找到打招呼按钮'}
@@ -234,9 +224,9 @@ def greet_recommend_candidate_action(page, index: int, message: str) -> Dict[str
     if message:
         ''' continue chat '''
         chat_selector = 'button:has-text("继续沟通")'
-        candidate = page.locator(chat_selector)
-        if candidate.count():
-            candidate.click(timeout=1000)
+        chat_btn = card.locator(chat_selector)
+        if chat_btn.count():
+            chat_btn.click(timeout=1000)
 
         ''' input message '''
         input_box = page.locator("div.conversation-bd-content")

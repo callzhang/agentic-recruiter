@@ -13,7 +13,6 @@ import threading
 import hashlib
 from datetime import datetime
 from fastapi import FastAPI, Query, Request, Body
-from fastapi.responses import JSONResponse
 from fastapi.concurrency import run_in_threadpool
 from contextlib import asynccontextmanager
 import signal
@@ -45,7 +44,7 @@ from src.recommendation_actions import (
 )
 from src.global_logger import get_logger
 from src.candidate_store import candidate_store
-from src.assistant_actions import assistant_actions, DEFAULT_GREETING
+from src.assistant_actions import assistant_actions
 from typing import Any, Dict, List, Optional, Callable, Tuple, Union
 from functools import wraps
 
@@ -156,7 +155,7 @@ class BossService:
         
         # Set 10-second timeout for shutdown
         old_handler = signal.signal(signal.SIGALRM, timeout_handler)
-        signal.alarm(10)
+        signal.alarm(10) # That sets a timer to deliver SIGALRM in 10 seconds. If your shutdown code hangs longer than that, the OS will “ring the bell,” calling timeout_handler, which raises a TimeoutError.
         
         try:
             self._graceful_shutdown()
@@ -190,743 +189,7 @@ class BossService:
         logger.info("FastAPI lifespan: Shutdown event triggered.")
         await run_in_threadpool(self._shutdown_sync)
 
-    def setup_routes(self):
-        """设置API路由
-        
-        Configures all FastAPI routes and endpoints for the Boss直聘 service.
-        Includes endpoints for candidates, messages, resumes, and other operations.
-        """
-        
-
-        @self.app.get('/status')
-        def get_status():
-            """Get service status and login state.
-            
-            Returns:
-                JSONResponse: Service status including login state and notification count
-            """
-            self._ensure_browser_session()
-            chat_stats = get_chat_stats_action(self.page)
-            return JSONResponse({
-                'status': 'running',
-                'logged_in': self.is_logged_in,
-                'timestamp': datetime.now().isoformat(),
-                'new_message_count': chat_stats.get('new_message_count', 0), 
-                'new_greet_count': chat_stats.get('new_greet_count', 0)
-            })
-        
-        
-        @self.app.post('/login')
-        def login():
-            """Check login status.
-            
-            Returns:
-                JSONResponse: Login status and success message
-            """
-            self._ensure_browser_session()
-            return JSONResponse({
-                'success': self.is_logged_in,
-                'message': '登录成功' if self.is_logged_in else '登录失败',
-                'timestamp': datetime.now().isoformat()
-            })
-        
-        
-        
-        @self.app.get('/chat/dialogs')
-        def get_messages(limit: int = Query(10, ge=1, le=100)):
-            """Get list of chat dialogs/messages.
-            
-            Args:
-                limit (int): Maximum number of messages to return (1-100)
-                
-            Returns:
-                JSONResponse: List of messages with count and timestamp
-            """
-            self._ensure_browser_session()
-
-            messages = get_chat_list_action(self.page, limit)
-            return JSONResponse({
-                'success': True,
-                'messages': messages,
-                'count': len(messages),
-                'timestamp': datetime.now().isoformat()
-            })
-
-        @self.app.get('/recommend/candidates')
-        def get_recommended_candidates(limit: int = Query(20, ge=1, le=100)):
-            """Get list of recommended candidates.
-            
-            Args:
-                limit (int): Maximum number of candidates to return (1-100)
-                
-            Returns:
-                JSONResponse: List of recommended candidates with success status
-            """
-            self._ensure_browser_session()
-            result = list_recommended_candidates_action(self.page, limit=limit)
-
-            candidates = result.get('candidates', [])
-            return JSONResponse({
-                'success': result.get('success', False),
-                'candidates': candidates,
-                'count': len(candidates),
-                'details': result.get('details', ''),
-                'timestamp': datetime.now().isoformat()
-            })
-
-        @self.app.get('/recommend/candidate/{index}/resume')
-        def view_recommended_candidate_resume(index: int):
-            """View resume of a recommended candidate by index.
-            
-            Args:
-                index (int): Index of the candidate in the recommended list
-                
-            Returns:
-                JSONResponse: Candidate resume information
-            """
-            self._ensure_browser_session()
-            result = view_recommend_candidate_resume_action(self.page, index)
-            return JSONResponse(result)
-
-        @self.app.post('/recommend/candidate/{index}/greet')
-        def greet_recommended_candidate(index: int, payload: dict | None = Body(default=None)):
-            """Send greeting message to recommended candidate by index."""
-            self._ensure_browser_session()
-            message = (payload or {}).get('message') or DEFAULT_GREET_MESSAGE
-            result = greet_recommend_candidate_action(self.page, index, message)
-            return JSONResponse({
-                'success': result.get('success', False),
-                'chat_id': result.get('chat_id'),
-                'details': result.get('details', ''),
-                'timestamp': datetime.now().isoformat()
-            })
-        
-        @self.app.post('/chat/generate-greeting-message')
-        def generate_greeting_message(
-            candidate_name: str = Body(None, embed=True),
-            candidate_title: str = Body(None, embed=True),
-            candidate_summary: str = Body(None, embed=True),
-            candidate_resume: str = Body(..., embed=True),
-            job_info: dict = Body(..., embed=True),
-        ):
-            """
-            Generate a personalized AI-powered greeting message for a recommended candidate.
-
-            This endpoint receives candidate and job information as named parameters, invokes the AI assistant to generate
-            a professional and friendly greeting message tailored to the candidate and job context,
-            and returns the generated message.
-
-            Args:
-                index (int): Index of the candidate in the recommended list.
-                candidate_name (str, optional): Name of the candidate.
-                candidate_title (str, optional): Current job title of the candidate.
-                candidate_summary (str, optional): Brief summary of candidate's background.
-                candidate_resume (str): Full resume text of the candidate.
-                job_info (dict): Job information containing title, company_description, target_profile.
-
-            Returns:
-                JSONResponse: {
-                    'success': bool,           # Whether greeting was generated successfully
-                    'greeting': str,           # The generated greeting message
-                    'timestamp': str,          # ISO timestamp of response
-                    'error': str (optional)    # Error message if generation failed
-                }
-            """
-            try:
-                # Generate greeting using AI
-                greeting = self.assistant_actions.generate_greeting_message(
-                    candidate_name=candidate_name,
-                    candidate_title=candidate_title,
-                    candidate_summary=candidate_summary,
-                    candidate_resume=candidate_resume,
-                    job_info=job_info,
-                )
-                
-                return JSONResponse({
-                    'success': True,
-                    'greeting': greeting,
-                    'timestamp': datetime.now().isoformat()
-                })
-                
-            except Exception as exc:
-                logger.error(f"Failed to generate greeting: {exc}")
-                return JSONResponse({
-                    'success': False,
-                    'error': str(exc),
-                    'greeting': DEFAULT_GREET_MESSAGE,
-                    'timestamp': datetime.now().isoformat()
-                })
-
-        @self.app.post('/recommend/select-job')
-        def select_recommend_job(job_title: str = Body(..., embed=True)):
-            """Select current job from dropdown menu.
-            
-            Args:
-                payload: Dictionary containing 'job_title' key
-                
-            Returns:
-                JSONResponse: Selection result with success status and details
-            """
-            self._ensure_browser_session()
-            frame = _prepare_recommendation_page(self.page)
-            result = select_recommend_job_action(frame, job_title)
-            return JSONResponse({
-                'success': result.get('success', False),
-                'details': result.get('details', ''),
-                'selected_job': result.get('selected_job'),
-                'available_jobs': result.get('available_jobs'),
-                'timestamp': datetime.now().isoformat()
-            })
-            
-
-        '''
-        Automation Scheduler Endpoints
-        '''
-        @self.app.get('/automation/scheduler/status')
-        def scheduler_status():
-            return JSONResponse(assistant_actions.get_scheduler_status())
-
-        @self.app.post('/automation/scheduler/start')
-        def scheduler_start(payload: dict | None = Body(default=None)):
-            success, details = assistant_actions.start_scheduler(payload or {})
-            status = assistant_actions.get_scheduler_status()
-            status.update({'success': success, 'details': details})
-            return JSONResponse(status)
-
-        @self.app.post('/automation/scheduler/stop')
-        def scheduler_stop():
-            success, details = assistant_actions.stop_scheduler()
-            status = assistant_actions.get_scheduler_status()
-            status.update({'success': success, 'details': details})
-            return JSONResponse(status)
-
-        '''
-        Chat Endpoints
-        '''
-        @self.app.get('/chat/stats')
-        def get_chat_stats():
-            result = get_chat_stats_action(self.page)
-            return result
-
-
-        @self.app.post('/chat/{chat_id}/greet')
-        def greet_candidate(chat_id: str, message: str | None = Body(default=None)):
-            """Send a greeting message to a candidate.
-            
-            Args:
-                chat_id (str): ID of the chat/conversation
-                message (str, optional): Custom greeting message. Defaults to standard greeting.
-                
-            Returns:
-                JSONResponse: Success status and message
-            """
-            result = self.send_greeting(chat_id, message)
-            return JSONResponse({
-                'success': result.get('success', False),
-                'message': result.get('message'),
-                'details': result.get('details', ''),
-                'timestamp': datetime.now().isoformat()
-            })
-        
-
-        @self.app.post('/chat/{chat_id}/send')
-        def send_message_api(chat_id: str, message: str = Body(..., embed=True)):
-            """Send a text message to a specific conversation.
-            
-            Args:
-                chat_id (str): ID of the chat/conversation
-                message (str): Message content to send
-                
-            Returns:
-                JSONResponse: Success status and details
-            """
-            self._ensure_browser_session()
-
-            result = send_message_action(self.page, chat_id, message)
-            return JSONResponse({
-                'success': result.get('success', False),
-                'chat_id': chat_id,
-                'message': message,
-                'details': result.get('details', ''),
-                'timestamp': datetime.now().isoformat()
-            })
-
-        @self.app.get('/chat/{chat_id}/messages')
-        def get_message_history(chat_id: str):
-            """Get chat history for a specific conversation.
-            
-            Args:
-                chat_id (str): ID of the chat/conversation
-                
-            Returns:
-                JSONResponse: Chat history with message count
-            """
-            self._ensure_browser_session()
-
-            history = get_chat_history_action(self.page, chat_id)
-            return JSONResponse({
-                'success': True,
-                'chat_id': chat_id,
-                'messages': history,
-                'count': len(history),
-                'timestamp': datetime.now().isoformat()
-            })
-
-
-        @self.app.post('/chat/select-job')
-        def select_chat_job(job_title: str = Body(..., embed=True)):
-            """Select job for a specific conversation.
-            
-            Args:
-                job_title (str): Title of the job to select
-                
-            Returns:
-                JSONResponse: Selection result with success status and details
-            """
-            self._ensure_browser_session()
-            result = select_chat_job_action(self.page, job_title)
-            return JSONResponse({
-                'success': result.get('success', False),
-                'details': result.get('details', ''),
-                'selected_job': result.get('selected_job'),
-                'available_jobs': result.get('available_jobs'),
-                'timestamp': datetime.now().isoformat()
-            })
-
-        '''
-        Resume Endpoints
-        '''
-        @self.app.post('/resume/request')
-        def request_resume_api(chat_id: str = Body(..., embed=True)):
-            """Request resume from a candidate.
-            
-            Args:
-                chat_id (str): ID of the chat/conversation
-                
-            Returns:
-                JSONResponse: Success status and details
-            """
-            self._ensure_browser_session()
-
-            result = request_resume_action(self.page, chat_id)
-            return JSONResponse({
-                'success': result.get('success', False),
-                'chat_id': chat_id,
-                'already_sent': result.get('already_sent', False),
-                'details': result.get('details', ''),
-                'timestamp': datetime.now().isoformat()
-            })
-
-
-        @self.app.post('/resume/view_full')
-        def view_full_resume(chat_id: str = Body(..., embed=True)):
-            """View candidate's attached resume.
-            
-            Args:
-                chat_id (str): ID of the chat/conversation
-                
-            Returns:
-                JSONResponse: Resume viewing result
-            """
-            self._ensure_browser_session()
-
-            result = view_full_resume_action(self.page, chat_id)
-            return result
-
-        @self.app.post('/resume/check_full')
-        def check_full_resume(chat_id: str = Body(..., embed=True)):
-            """Check if full resume is available without retrieving content."""
-            self._ensure_browser_session()
-            result = check_full_resume_available(self.page, chat_id)
-            if result is None:
-                return JSONResponse({
-                    'success': False,
-                    'available': False,
-                    'details': '未找到指定对话项',
-                })
-            return JSONResponse({
-                'success': result.get('success', False),
-                'available': result.get('success', False),
-                'details': result.get('details', ''),
-            })
-
-        @self.app.post('/resume/online')
-        def view_online_resume_api(chat_id: str = Body(..., embed=True)):
-            """View online resume and return canvas image base64 data.
-            
-            Opens the conversation and views the online resume, capturing
-            canvas content and returning base64 encoded image data.
-            
-            Args:
-                chat_id (str): ID of the chat/conversation
-                
-            Returns:
-                JSONResponse: Resume data including text, HTML, images, and metadata
-            """
-            # 会话与登录
-            self._ensure_browser_session()
-
-            result = view_online_resume_action(self.page, chat_id)
-            return JSONResponse({
-                'success': result.get('success', False),
-                'chat_id': chat_id,
-                'text': result.get('text'),
-                'html': result.get('html'),
-                'image_base64': result.get('image_base64'),
-                'images_base64': result.get('images_base64'),
-                'data_url': result.get('data_url'),
-                'width': result.get('width'),
-                'height': result.get('height'),
-                'details': result.get('details', ''),
-                'error': result.get('error'),
-                'timestamp': datetime.now().isoformat(),
-                'capture_method': result.get('capture_method'),
-            })
-
-        @self.app.post('/resume/accept')
-        def accept_resume_api(chat_id: str = Body(..., embed=True)):
-            """Accept a candidate by clicking "接受" button.
-            
-            Args:
-                chat_id (str): ID of the chat/conversation
-                
-            Returns:
-                JSONResponse: Success status and details
-            """
-            self._ensure_browser_session()
-            
-            result = accept_resume_action(self.page, chat_id)
-            return JSONResponse({
-                'success': result.get('success', False),
-                'chat_id': chat_id,
-                'details': result.get('details', ''),
-                'timestamp': datetime.now().isoformat()
-            })
-
-        '''
-        Candidate Endpoints
-        '''
-
-        @self.app.post('/candidate/discard')
-        def discard_candidate_api(chat_id: str = Body(..., embed=True)):
-            """Discard a candidate by clicking "不合适" button.
-            
-            Args:
-                chat_id (str): ID of the chat/conversation
-                
-            Returns:
-                JSONResponse: Success status and details
-            """
-            self._ensure_browser_session()
-
-            result = discard_candidate_action(self.page, chat_id)
-            return JSONResponse({
-                'success': result.get('success', False),
-                'chat_id': chat_id,
-                'details': result.get('details', ''),
-                'timestamp': datetime.now().isoformat()
-            })
-
-        
-        '''
-        Assistant Actions Endpoints
-        '''
-        @self.app.post('/assistant/analyze-candidate')
-        def analyze_candidate_api(payload: dict = Body(...)):
-            """Analyze candidate using assistant actions.
-            
-            Args:
-                payload: Dictionary containing candidate_id and context information
-                
-            Returns:
-                JSONResponse: Analysis results with scoring
-            """
-            
-            
-            result = self.assistant_actions.analyze_candidate(
-                job_info = payload.get('job_info', {}),
-                candidate_resume = payload.get('candidate_resume', ''),
-                candidate_summary = payload.get('candidate_summary', ''),
-                chat_history = payload.get('chat_history', {})
-            )
-            return JSONResponse({
-                'success': result is not None,
-                'analysis': result,
-                'timestamp': datetime.now().isoformat()
-            })
-
-        @self.app.post('/assistant/generate-followup')
-        def generate_followup_api(payload: dict = Body(...)):
-            """Generate followup message using assistant actions.
-            
-            Args:
-                payload: Dictionary containing chat_id, prompt, and context
-                
-            Returns:
-                JSONResponse: Generated followup message
-            """
-            chat_id = payload.get('chat_id')
-            prompt = payload.get('prompt', '')
-            context = payload.get('context', {})
-            result = self.assistant_actions.generate_followup_message(chat_id, prompt=prompt, context=context)
-            return JSONResponse({
-                'success': True,
-                'message': result,
-                'timestamp': datetime.now().isoformat()
-            })
-
-        @self.app.post('/assistant/upsert-candidate')
-        def upsert_candidate_api(
-            candidate_id: Optional[str] = Body(None),
-            chat_id: Optional[str] = Body(None),
-            name: Optional[str] = Body(None),
-            job_applied: Optional[str] = Body(None),
-            last_message: Optional[str] = Body(None),
-            resume_text: Optional[str] = Body(None),
-            scores: Optional[Dict[str, Any]] = Body(None),
-            metadata_extra: Optional[Dict[str, Any]] = Body(None),
-        ):
-            """Upsert candidate information using assistant actions.
-            
-            Args:
-                candidate_id: Candidate ID (alternative to chat_id)
-                chat_id: Chat ID (alternative to candidate_id)
-                name: Candidate name
-                job_applied: Job position applied for
-                last_message: Last message from candidate
-                resume_text: Resume text content
-                scores: Scoring results
-                metadata_extra: Additional metadata
-                
-            Returns:
-                JSONResponse: Success status
-            """
-            # Use candidate_id or chat_id
-            final_candidate_id = candidate_id or chat_id
-            if not final_candidate_id:
-                return JSONResponse({
-                    'success': False,
-                    'details': 'Missing candidate_id or chat_id',
-                    'timestamp': datetime.now().isoformat()
-                })
-            
-            success = self.assistant_actions.upsert_candidate(
-                candidate_id=final_candidate_id,
-                name=name,
-                job_applied=job_applied,
-                last_message=last_message,
-                resume_text=resume_text,
-                scores=scores,
-                metadata_extra=metadata_extra,
-            )
-            
-            if success:
-                return JSONResponse({
-                    'success': True,
-                    'details': 'Candidate information updated',
-                    'timestamp': datetime.now().isoformat()
-                })
-            else:
-                return JSONResponse({
-                    'success': False,
-                    'details': 'Failed to update candidate information',
-                    'timestamp': datetime.now().isoformat()
-                })
-
-        @self.app.post('/assistant/retrieve-answers')
-        def retrieve_answers_api(payload: dict = Body(...)):
-            """Retrieve relevant answers using assistant actions.
-            
-            Args:
-                payload: Dictionary containing query
-                
-            Returns:
-                JSONResponse: Retrieved answers
-            """
-            query = payload.get('query', '')
-            results = self.assistant_actions.retrieve_relevant_answers(query)
-            return JSONResponse({
-                'success': True,
-                'results': results,
-                'timestamp': datetime.now().isoformat()
-            })
-
-        @self.app.get('/assistant/list-entries')
-        def list_entries_api(limit: int = Query(100, ge=1, le=1000)):
-            """List QA entries using assistant actions.
-            
-            Args:
-                limit: Maximum number of entries to return
-                
-            Returns:
-                JSONResponse: List of entries
-            """
-            entries = self.assistant_actions.list_entries(limit=limit)
-            return JSONResponse({
-                'success': True,
-                'entries': entries,
-                'count': len(entries),
-                'timestamp': datetime.now().isoformat()
-            })
-
-        @self.app.post('/assistant/record-qa')
-        def record_qa_api(payload: dict = Body(...)):
-            """Record QA entry using assistant actions.
-            
-            Args:
-                payload: Dictionary containing QA information
-                
-            Returns:
-                JSONResponse: Success status
-            """
-            result = self.assistant_actions.record_qa(**payload)
-            return JSONResponse({
-                'success': True,
-                'details': 'QA entry recorded',
-                'timestamp': datetime.now().isoformat()
-            })
-
-        @self.app.post('/assistant/delete-entry')
-        def delete_entry_api(payload: dict = Body(...)):
-            """Delete QA entry using assistant actions.
-            
-            Args:
-                payload: Dictionary containing entry ID
-                
-            Returns:
-                JSONResponse: Success status
-            """
-            entry_id = payload.get('entry_id')
-            result = self.assistant_actions.delete_entry(entry_id)
-            return JSONResponse({
-                'success': result,
-                'details': 'Entry deleted' if result else 'Failed to delete entry',
-                'timestamp': datetime.now().isoformat()
-            })
-
-        @self.app.get('/assistant/generate-id')
-        def generate_id_api():
-            """Generate unique ID using assistant actions.
-            
-            Returns:
-                JSONResponse: Generated ID
-            """
-            qa_id = self.assistant_actions.generate_id()
-            return JSONResponse({
-                'success': True,
-                'qa_id': qa_id,
-                'timestamp': datetime.now().isoformat()
-            })
-
-        '''
-        System Endpoints
-        '''
-        @self.app.post('/restart')
-        def soft_restart():
-            """Soft restart the API service while keeping browser session.
-            
-            Returns:
-                JSONResponse: Success status and message
-            """
-            self.soft_restart()
-            return JSONResponse({
-                'success': True,
-                'message': 'API服务已重启，浏览器会话保持',
-                'timestamp': datetime.now().isoformat()
-            })
-        
-        @self.app.get('/debug/page')
-        def debug_page():
-            """Debug endpoint - get current page content.
-            
-            Returns:
-                JSONResponse: Page information including URL, title, content, and metadata
-            """
-            self._ensure_browser_session()
-            
-            # 等待页面完全渲染（事件驱动）
-            self.page.locator("body").wait_for(state="visible", timeout=5000)
-            self.page.wait_for_load_state("networkidle", timeout=5000)
-            
-            if not self.page or self.page.is_closed():
-                return JSONResponse({
-                    'success': False,
-                    'error': '页面未打开或已关闭',
-                    'timestamp': datetime.now().isoformat()
-                })
-            
-            # 获取页面信息
-            full_content = self.page.content()
-            # 截取前5000个字符，避免返回过长的HTML
-            readable_content = full_content[:5000] + "..." if len(full_content) > 5000 else full_content
-            
-            page_info = {
-                'url': self.page.url,
-                'title': self.page.title(),
-                'content': readable_content,
-                'content_length': len(full_content),
-                'screenshot': None,
-                'cookies': [],
-                'local_storage': {},
-                'session_storage': {}
-            }
-            
-            return JSONResponse({
-                'success': True,
-                'page_info': page_info,
-                'timestamp': datetime.now().isoformat()
-            })
-        
-        @self.app.get('/debug/cache')
-        def get_cache_stats():
-            """Get event cache statistics.
-            
-            Returns:
-                JSONResponse: Cache statistics and performance metrics
-            """
-            stats = self.event_manager.get_cache_stats()
-            return JSONResponse({
-                'success': True,
-                'cache_stats': stats,
-                'timestamp': datetime.now().isoformat()
-            })
     
-    def _resolve_storage_state_path(self):
-        """Resolve storage state path with environment variable priority.
-        
-        Priority order:
-        1. BOSS_STORAGE_STATE_JSON: Direct JSON string from environment
-        2. BOSS_STORAGE_STATE_FILE: File path from environment
-        3. settings.STORAGE_STATE: Default configuration
-        
-        Returns:
-            str: Path to the storage state file
-        """
-        env_json = os.environ.get("BOSS_STORAGE_STATE_JSON")
-        if env_json:
-            os.makedirs(os.path.dirname(settings.STORAGE_STATE), exist_ok=True)
-            # 验证JSON
-            _ = json.loads(env_json)
-            with open(settings.STORAGE_STATE, "w", encoding="utf-8") as f:
-                f.write(env_json)
-            logger.info("已从环境变量写入登录状态(JSON)")
-            return settings.STORAGE_STATE
-        
-        env_path = os.environ.get("BOSS_STORAGE_STATE_FILE")
-        if env_path and os.path.exists(env_path):
-            return env_path
-        return settings.STORAGE_STATE
-    
-    def _get_user_data_dir(self):
-        """Get the path to the user data directory.
-        
-        Returns:
-            str: Path to the temporary user data directory for browser session
-        """
-        # Use a temporary directory to store browser session data
-        # This will persist across service restarts but be cleaned up on system reboot
-        return os.path.join(tempfile.gettempdir(), "bosszhipin_playwright_user_data")
-        
 
     def _ensure_page(self):
         """Get the prefered page from the context.
@@ -951,7 +214,7 @@ class BossService:
         and navigates to the chat page.
         """
         logger.info("正在启动持久化浏览器会话...")
-        user_data_dir = self._get_user_data_dir()
+        user_data_dir = os.path.join(tempfile.gettempdir(), "bosszhipin_playwright_user_data")
         logger.info(f"使用用户数据目录: {user_data_dir}")
 
         if not getattr(self, 'playwright', None):
@@ -968,19 +231,6 @@ class BossService:
         logger.info("持久化浏览器会话启动成功！")
         
             
-    def _load_saved_login_state(self):
-        """Load saved login state from storage.
-        
-        Checks for existing login state file and validates cookies
-        to determine if user was previously logged in.
-        """
-        if os.path.exists(settings.STORAGE_STATE):
-            with open(settings.STORAGE_STATE, 'r') as f:
-                storage_state = json.load(f)
-            
-            if storage_state.get('cookies'):
-                logger.info("发现已保存的登录状态")
-
     def save_login_state(self):
         """Save current login state to storage.
         
@@ -1000,42 +250,6 @@ class BossService:
         self.is_logged_in = True
         logger.info("用户登录状态已确认并保存")
         return True
-    
-    def check_login_status(self):
-        """Check current login status.
-        
-        Navigates to the chat page and analyzes page content to determine
-        if the user is logged in. Handles various login states including
-        slider verification and login redirects.
-        
-        Returns:
-            bool: True if user is logged in, False otherwise
-        """
-        self._ensure_browser_session()
-        self.page.goto(settings.BASE_URL.rstrip('/') + "/web/chat/index", wait_until="domcontentloaded", timeout=5000)
-        self.page.wait_for_load_state("networkidle", timeout=5000)
-            
-        page_text = self.page.locator("body").inner_text()
-        current_url = self.page.url
-        if "/web/user/safe/verify-slider" in current_url:
-            logger.warning("检测到滑块验证页面，请在浏览器中完成验证...")
-            start = time.time()
-            while time.time() - start < 300:
-                self.page.wait_for_timeout(1000)
-                current_url = self.page.url
-                if "/web/user/safe/verify-slider" not in current_url:
-                    break
-            
-            if ("登录" in page_text and ("立即登录" in page_text or "登录/注册" in page_text)) or "login" in current_url.lower():
-                logger.warning("检测到需要登录")
-                return False
-            
-            if any(keyword in page_text for keyword in ["消息", "沟通", "聊天", "候选人", "简历"]):
-                logger.info("登录状态正常")
-                return True
-            
-            logger.warning("登录状态不明确")
-            return False
     
     
     
@@ -1233,29 +447,615 @@ class BossService:
         logger.info(f"在单独的线程中执行关闭(keep_browser={keep_browser})...")
         self._graceful_shutdown()
 
-    def _handle_signal(self, signum, frame):
-        """Handle system signals for graceful shutdown.
+#------------------------------------------------------------------------------------------------
+#                   API Routes
+#------------------------------------------------------------------------------------------------
+    def setup_routes(self):
+        """设置API路由
         
-        Args:
-            signum: Signal number
-            frame: Current stack frame
+        Configures all FastAPI routes and endpoints for the Boss直聘 service.
+        Includes endpoints for candidates, messages, resumes, and other operations.
         """
-        logger.info(f"收到信号: {signum}")
-        # Run shutdown in a separate thread to avoid greenlet/asyncio conflicts
-        keep_browser = (signum == signal.SIGTERM)
-        shutdown_thread = threading.Thread(target=self._shutdown_thread, args=(keep_browser,))
-        shutdown_thread.start()
+        
 
-    def run(self, host='127.0.0.1', port=5001):
-        """Run the service using uvicorn (called externally).
+        @self.app.get('/status')
+        def get_status():
+            """Get service status and login state.
+            
+            Returns:
+                Service status including login state and notification count
+            """
+            self._ensure_browser_session()
+            chat_stats = get_chat_stats_action(self.page)
+            return {
+                'status': 'running',
+                'logged_in': self.is_logged_in,
+                'timestamp': datetime.now().isoformat(),
+                'new_message_count': chat_stats.get('new_message_count', 0), 
+                'new_greet_count': chat_stats.get('new_greet_count', 0)
+            }
         
-        Args:
-            host (str): Host address to bind to
-            port (int): Port number to bind to
-        """
-        import uvicorn
-        logger.info("启动Boss直聘后台服务(FastAPI)...")
-        uvicorn.run("boss_service:app", host=host, port=port, reload=True, log_level="info")
+        
+        @self.app.post('/login')
+        def login():
+            """Check login status.
+            
+            Returns:
+                Login status and success message
+            """
+            self._ensure_browser_session()
+            return self.is_logged_in
+        
+        
+        
+        @self.app.get('/chat/dialogs')
+        def get_messages(limit: int = Query(10, ge=1, le=100)):
+            """Get list of chat dialogs/messages.
+            
+            Args:
+                limit (int): Maximum number of messages to return (1-100)
+                
+            Returns:
+                List of messages with count and timestamp
+            """
+            self._ensure_browser_session()
+
+            messages = get_chat_list_action(self.page, limit)
+            return messages
+
+        @self.app.get('/recommend/candidates')
+        def get_recommended_candidates(limit: int = Query(20, ge=1, le=100)):
+            """Get list of recommended candidates.
+            
+            Args:
+                limit (int): Maximum number of candidates to return (1-100)
+                
+            Returns:
+                List of recommended candidates with success status
+            """
+            self._ensure_browser_session()
+            result = list_recommended_candidates_action(self.page, limit=limit)
+
+            candidates = result.get('candidates', [])
+            return candidates
+
+        @self.app.get('/recommend/candidate/{index}/resume')
+        def view_recommended_candidate_resume(index: int):
+            """View resume of a recommended candidate by index.
+            
+            Args:
+                index (int): Index of the candidate in the recommended list
+                
+            Returns:
+                Candidate resume information
+            """
+            self._ensure_browser_session()
+            result = view_recommend_candidate_resume_action(self.page, index)
+            return result
+
+        @self.app.post('/recommend/candidate/{index}/greet')
+        def greet_recommended_candidate(index: int, payload: dict | None = Body(default=None)):
+            """Send greeting message to recommended candidate by index."""
+            self._ensure_browser_session()
+            message = (payload or {}).get('message') or DEFAULT_GREET_MESSAGE
+            result = greet_recommend_candidate_action(self.page, index, message)
+            return result
+        
+        @self.app.post('/chat/generate-greeting-message')
+        def generate_greeting_message(
+            candidate_name: str = Body(None, embed=True),
+            candidate_title: str = Body(None, embed=True),
+            candidate_summary: str = Body(None, embed=True),
+            candidate_resume: str = Body(..., embed=True),
+            job_info: dict = Body(..., embed=True),
+        ):
+            """
+            Generate a personalized AI-powered greeting message for a recommended candidate.
+
+            This endpoint receives candidate and job information as named parameters, invokes the AI assistant to generate
+            a professional and friendly greeting message tailored to the candidate and job context,
+            and returns the generated message.
+
+            Args:
+                index (int): Index of the candidate in the recommended list.
+                candidate_name (str, optional): Name of the candidate.
+                candidate_title (str, optional): Current job title of the candidate.
+                candidate_summary (str, optional): Brief summary of candidate's background.
+                candidate_resume (str): Full resume text of the candidate.
+                job_info (dict): Job information containing title, company_description, target_profile.
+
+            Returns:
+                {
+                    'success': bool,           # Whether greeting was generated successfully
+                    'greeting': str,           # The generated greeting message
+                    'timestamp': str,          # ISO timestamp of response
+                    'error': str (optional)    # Error message if generation failed
+                }
+            """
+            # Generate greeting using AI
+            greeting = self.assistant_actions.generate_greeting_message(
+                candidate_name=candidate_name,
+                candidate_title=candidate_title,
+                candidate_summary=candidate_summary,
+                candidate_resume=candidate_resume,
+                job_info=job_info,
+            )
+            
+            return greeting
+
+        @self.app.post('/recommend/select-job')
+        def select_recommend_job(job_title: str = Body(..., embed=True)):
+            """Select current job from dropdown menu.
+            
+            Args:
+                payload: Dictionary containing 'job_title' key
+                
+            Returns:
+                Selection result with success status and details
+            """
+            self._ensure_browser_session()
+            frame = _prepare_recommendation_page(self.page)
+            result = select_recommend_job_action(frame, job_title)
+            return result
+            
+
+        '''
+        Automation Scheduler Endpoints
+        '''
+        @self.app.get('/automation/scheduler/status')
+        def scheduler_status():
+            return assistant_actions.get_scheduler_status()
+
+        @self.app.post('/automation/scheduler/start')
+        def scheduler_start(payload: dict | None = Body(default=None)):
+            success, details = assistant_actions.start_scheduler(payload or {})
+            status = assistant_actions.get_scheduler_status()
+            status.update({'success': success, 'details': details})
+            return status
+
+        @self.app.post('/automation/scheduler/stop')
+        def scheduler_stop():
+            success, details = assistant_actions.stop_scheduler()
+            status = assistant_actions.get_scheduler_status()
+            status.update({'success': success, 'details': details})
+            return status
+
+        '''
+        Chat Endpoints
+        '''
+        @self.app.get('/chat/stats')
+        def get_chat_stats():
+            result = get_chat_stats_action(self.page)
+            return result
+
+
+        @self.app.post('/chat/{chat_id}/greet')
+        def greet_candidate(chat_id: str, message: str | None = Body(default=None)):
+            """Send a greeting message to a candidate.
+            
+            Args:
+                chat_id (str): ID of the chat/conversation
+                message (str, optional): Custom greeting message. Defaults to standard greeting.
+                
+            Returns:
+                Success status and message
+            """
+            result = self.send_greeting(chat_id, message)
+            return result
+        
+
+        @self.app.post('/chat/{chat_id}/send')
+        def send_message_api(chat_id: str, message: str = Body(..., embed=True)):
+            """Send a text message to a specific conversation.
+            
+            Args:
+                chat_id (str): ID of the chat/conversation
+                message (str): Message content to send
+                
+            Returns:
+                Success status and details
+            """
+            self._ensure_browser_session()
+
+            result = send_message_action(self.page, chat_id, message)
+            return result
+
+        @self.app.get('/chat/{chat_id}/messages')
+        def get_message_history(chat_id: str):
+            """Get chat history for a specific conversation.
+            
+            Args:
+                chat_id (str): ID of the chat/conversation
+                
+            Returns:
+                Chat history with message count
+            """
+            self._ensure_browser_session()
+
+            history = get_chat_history_action(self.page, chat_id)
+            return history
+
+
+        @self.app.post('/chat/select-job')
+        def select_chat_job(job_title: str = Body(..., embed=True)):
+            """Select job for a specific conversation.
+            
+            Args:
+                job_title (str): Title of the job to select
+                
+            Returns:
+                Selection result with success status and details
+            """
+            self._ensure_browser_session()
+            result = select_chat_job_action(self.page, job_title)
+            return result
+
+        '''
+        Resume Endpoints
+        '''
+        @self.app.post('/resume/request')
+        def request_resume_api(chat_id: str = Body(..., embed=True)):
+            """Request resume from a candidate.
+            
+            Args:
+                chat_id (str): ID of the chat/conversation
+                
+            Returns:
+                Success status and details
+            """
+            self._ensure_browser_session()
+
+            result = request_resume_action(self.page, chat_id)
+            return result
+
+
+        @self.app.post('/resume/view_full')
+        def view_full_resume(chat_id: str = Body(..., embed=True)):
+            """View candidate's attached resume.
+            
+            Args:
+                chat_id (str): ID of the chat/conversation
+                
+            Returns:
+                Resume viewing result
+            """
+            self._ensure_browser_session()
+
+            result = view_full_resume_action(self.page, chat_id)
+            return result
+
+        @self.app.post('/resume/check_full')
+        def check_full_resume(chat_id: str = Body(..., embed=True)):
+            """Check if full resume is available without retrieving content."""
+            self._ensure_browser_session()
+            result = check_full_resume_available(self.page, chat_id)
+            if result is None:
+                return False
+            return result.get('success', False)
+
+        @self.app.post('/resume/online')
+        def view_online_resume_api(chat_id: str = Body(..., embed=True)):
+            """View online resume and return canvas image base64 data.
+            
+            Opens the conversation and views the online resume, capturing
+            canvas content and returning base64 encoded image data.
+            
+            Args:
+                chat_id (str): ID of the chat/conversation
+                
+            Returns:
+                Resume data including text, HTML, images, and metadata
+            """
+            # 会话与登录
+            self._ensure_browser_session()
+
+            result = view_online_resume_action(self.page, chat_id)
+            return result
+
+        @self.app.post('/resume/accept')
+        def accept_resume_api(chat_id: str = Body(..., embed=True)):
+            """Accept a candidate by clicking "接受" button.
+            
+            Args:
+                chat_id (str): ID of the chat/conversation
+                
+            Returns:
+                Success status and details
+            """
+            self._ensure_browser_session()
+            
+            result = accept_resume_action(self.page, chat_id)
+            return result
+
+        '''
+        Candidate Endpoints
+        '''
+
+        @self.app.post('/candidate/discard')
+        def discard_candidate_api(chat_id: str = Body(..., embed=True)):
+            """Discard a candidate by clicking "不合适" button.
+            
+            Args:
+                chat_id (str): ID of the chat/conversation
+                
+            Returns:
+                Success status and details
+            """
+            self._ensure_browser_session()
+
+            result = discard_candidate_action(self.page, chat_id)
+            return result
+
+        
+        '''
+        Assistant Actions Endpoints
+        '''
+        @self.app.post('/assistant/analyze-candidate')
+        def analyze_candidate_api(payload: dict = Body(...)):
+            """Analyze candidate using assistant actions.
+            
+            Args:
+                payload: Dictionary containing candidate_id and context information
+                
+            Returns:
+                Analysis results with scoring
+            """
+            
+            
+            result = self.assistant_actions.analyze_candidate(
+                job_info = payload.get('job_info', {}),
+                candidate_resume = payload.get('candidate_resume', ''),
+                candidate_summary = payload.get('candidate_summary', ''),
+                chat_history = payload.get('chat_history', {})
+            )
+            return result
+
+        @self.app.post('/assistant/generate-followup')
+        def generate_followup_api(payload: dict = Body(...)):
+            """Generate followup message using assistant actions.
+            
+            Args:
+                payload: Dictionary containing chat_id, prompt, and context
+                
+            Returns:
+                Generated followup message
+            """
+            chat_id = payload.get('chat_id')
+            prompt = payload.get('prompt', '')
+            context = payload.get('context', {})
+            result = self.assistant_actions.generate_followup_message(chat_id, prompt=prompt, context=context)
+            return result
+
+        @self.app.post('/assistant/upsert-candidate')
+        def upsert_candidate_api(
+            candidate_id: Optional[str] = Body(None),
+            chat_id: Optional[str] = Body(None),
+            name: Optional[str] = Body(None),
+            job_applied: Optional[str] = Body(None),
+            last_message: Optional[str] = Body(None),
+            resume_text: Optional[str] = Body(None),
+            scores: Optional[Dict[str, Any]] = Body(None),
+            metadata_extra: Optional[Dict[str, Any]] = Body(None),
+        ):
+            """Upsert candidate information using assistant actions.
+            
+            Args:
+                candidate_id: Candidate ID (alternative to chat_id)
+                chat_id: Chat ID (alternative to candidate_id)
+                name: Candidate name
+                job_applied: Job position applied for
+                last_message: Last message from candidate
+                resume_text: Resume text content
+                scores: Scoring results
+                metadata_extra: Additional metadata
+                
+            Returns:
+                Success status
+            """
+            # Use candidate_id or chat_id
+            final_candidate_id = candidate_id or chat_id
+            if not final_candidate_id:
+                return False
+            
+            success = self.assistant_actions.upsert_candidate(
+                candidate_id=final_candidate_id,
+                name=name,
+                job_applied=job_applied,
+                last_message=last_message,
+                resume_text=resume_text,
+                scores=scores,
+                metadata_extra=metadata_extra,
+            )
+            
+            return success
+
+        @self.app.post('/assistant/retrieve-answers')
+        def retrieve_answers_api(payload: dict = Body(...)):
+            """Retrieve relevant answers using assistant actions.
+            
+            Args:
+                payload: Dictionary containing query
+                
+            Returns:
+                Retrieved answers
+            """
+            query = payload.get('query', '')
+            results = self.assistant_actions.retrieve_relevant_answers(query)
+            return results
+
+        @self.app.get('/assistant/list-entries')
+        def list_entries_api(limit: int = Query(100, ge=1, le=1000)):
+            """List QA entries using assistant actions.
+            
+            Args:
+                limit: Maximum number of entries to return
+                
+            Returns:
+                List of entries
+            """
+            entries = self.assistant_actions.list_entries(limit=limit)
+            return entries
+
+        @self.app.post('/assistant/record-qa')
+        def record_qa_api(payload: dict = Body(...)):
+            """Record QA entry using assistant actions.
+            
+            Args:
+                payload: Dictionary containing QA information
+                
+            Returns:
+                Success status
+            """
+            result = self.assistant_actions.record_qa(**payload)
+            return True
+
+        @self.app.post('/assistant/delete-entry')
+        def delete_entry_api(payload: dict = Body(...)):
+            """Delete QA entry using assistant actions.
+            
+            Args:
+                payload: Dictionary containing entry ID
+                
+            Returns:
+                Success status
+            """
+            entry_id = payload.get('entry_id')
+            result = self.assistant_actions.delete_entry(entry_id)
+            return result
+
+        @self.app.get('/assistant/generate-id')
+        def generate_id_api():
+            """Generate unique ID using assistant actions.
+            
+            Returns:
+                Generated ID
+            """
+            qa_id = self.assistant_actions.generate_id()
+            return qa_id
+
+        # OpenAI Assistant Management Endpoints
+        @self.app.get('/assistant/list')
+        def list_assistants_api():
+            """List OpenAI assistants.
+            """
+            assistants = assistant_actions.get_assistants()
+            return [assistant.model_dump() for assistant in assistants.data]
+
+        @self.app.post('/assistant/create')
+        def create_assistant_api(payload: dict = Body(...)):
+            """Create OpenAI assistant.
+            
+            Args:
+                payload: Dictionary containing assistant information
+                
+            Returns:
+                JSONResponse: Created assistant
+            """
+            assistant = self.assistant_actions.client.beta.assistants.create(**payload)
+            return assistant.model_dump()
+
+        @self.app.post('/assistant/update/{assistant_id}')
+        def update_assistant_api(assistant_id: str, payload: dict = Body(...)):
+            """Update OpenAI assistant.
+            
+            Args:
+                assistant_id: Assistant ID
+                payload: Dictionary containing update information
+                
+            Returns:
+                JSONResponse: Updated assistant
+            """
+
+            assistant = self.assistant_actions.client.beta.assistants.update(
+                assistant_id=assistant_id,
+                **payload
+            )
+            self.assistant_actions.get_assistants.cache_clear()
+            return assistant.model_dump()
+
+
+        @self.app.delete('/assistant/delete/{assistant_id}')
+        def delete_assistant_api(assistant_id: str):
+            """Delete OpenAI assistant.
+            
+            Args:
+                assistant_id: Assistant ID
+                
+            Returns:
+                JSONResponse: Deletion result
+            """
+            self.assistant_actions.client.beta.assistants.delete(assistant_id=assistant_id)
+            self.assistant_actions.get_assistants.cache_clear()
+            return True
+        '''
+        System Endpoints
+        '''
+        @self.app.post('/restart')
+        def soft_restart():
+            """Soft restart the API service while keeping browser session.
+            
+            Returns:
+                Success status and message
+            """
+            self.soft_restart()
+            return True
+        
+        @self.app.get('/debug/page')
+        def debug_page():
+            """Debug endpoint - get current page content.
+            
+            Returns:
+                Page information including URL, title, content, and metadata
+            """
+            self._ensure_browser_session()
+            
+            # 等待页面完全渲染（事件驱动）
+            self.page.locator("body").wait_for(state="visible", timeout=5000)
+            self.page.wait_for_load_state("networkidle", timeout=5000)
+            
+            if not self.page or self.page.is_closed():
+                return False
+            
+            # 获取页面信息
+            full_content = self.page.content()
+            # 截取前5000个字符，避免返回过长的HTML
+            readable_content = full_content[:5000] + "..." if len(full_content) > 5000 else full_content
+            
+            page_info = {
+                'url': self.page.url,
+                'title': self.page.title(),
+                'content': readable_content,
+                'content_length': len(full_content),
+                'screenshot': None,
+                'cookies': [],
+                'local_storage': {},
+                'session_storage': {}
+            }
+            
+            return page_info
+        
+        @self.app.get('/debug/cache')
+        def get_cache_stats():
+            """Get event cache statistics.
+            
+            Returns:
+                Cache statistics and performance metrics
+            """
+            stats = self.event_manager.get_cache_stats()
+            return stats
+    
+
+
+    # def run(self, host='127.0.0.1', port=5001):
+    #     """Run the service using uvicorn (called externally).
+        
+    #     Args:
+    #         host (str): Host address to bind to
+    #         port (int): Port number to bind to
+    #     """
+    #     import uvicorn
+    #     logger.info("启动Boss直聘后台服务(FastAPI)...")
+    #     uvicorn.run("boss_service:app", host=host, port=port, reload=True, log_level="info")
 
 service = BossService()
 app = service.app

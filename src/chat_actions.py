@@ -20,7 +20,7 @@ PDF_VIEWER_SELECTOR = "div.pdfViewer"
 
 CHAT_TAB_SELECTOR = "div.chat-label-item"
 
-def _prepare_chat_page(page, tab: Optional[str], wait_timeout: int = 5000) -> tuple[Optional[Locator], Optional[Dict[str, Any]]]:
+def _prepare_chat_page(page, tab: Optional[str] = None, wait_timeout: int = 5000) -> tuple[Optional[Locator], Optional[Dict[str, Any]]]:
     close_overlay_dialogs(page)
     # If current URL is not the chat page, click the chat menu to navigate
     if not settings.CHAT_URL in page.url:
@@ -65,7 +65,6 @@ def _go_to_chat_dialog(page, chat_id: str, wait_timeout: int = 5000) -> tuple[Op
 
     return target
 
-
 def select_chat_job_action(page, job_title: str) -> Dict[str, Any]:
     """Select job for a specific conversation."""
     _prepare_chat_page(page)
@@ -96,7 +95,6 @@ def select_chat_job_action(page, job_title: str) -> Dict[str, Any]:
     else:
         return { 'success': False, 'details': '未找到职位', 'selected_job': current_selected_job, 'available_jobs': all_job_titles }
 
-
 def get_chat_stats_action(page) -> Dict[str, Any]:
     """Get chat stats for the given chat_id"""
     _prepare_chat_page(page)
@@ -109,7 +107,6 @@ def get_chat_stats_action(page) -> Dict[str, Any]:
     # Convert new_greet_count like "新招呼(41)" to integer 41
     new_greet_count = int(re.findall(r"\d+", new_greet_count)[0])
     return { 'success': True, 'new_message_count': new_message_count, 'new_greet_count': new_greet_count }
-
 
 def request_resume_action(page, chat_id: str) -> Dict[str, Any]:
     """Send a resume request in the open chat panel for the given chat_id"""
@@ -127,7 +124,6 @@ def request_resume_action(page, chat_id: str) -> Dict[str, Any]:
     if is_disabled:
         return { 'success': True, 'already_sent': True, 'details': '简历请求已发送（按钮已禁用）' }
 
-
     # Click the resume request button
     btn.click()
     # Confirm
@@ -138,21 +134,11 @@ def request_resume_action(page, chat_id: str) -> Dict[str, Any]:
     confirm.click()
 
     # Verify
-    try:
-        page.wait_for_function(
-            "() => (document.body && document.body.innerText && document.body.innerText.includes('简历请求已发送'))",
-            timeout=5000
-        )
-        return { 'success': True, 'already_sent': False, 'details': '简历请求已发送' }
-    except Exception:
-        try:
-            is_disabled = btn.evaluate("el => el.classList.contains('disabled') || el.disabled || el.getAttribute('disabled') !== null")
-            if is_disabled:
-                return { 'success': True, 'already_sent': False, 'details': '简历请求已发送' }
-        except Exception:
-            pass
-        return { 'success': False, 'already_sent': False, 'details': '未检测到发送成功提示' }
-
+    page.wait_for_function(
+        "() => (document.body && document.body.innerText && document.body.innerText.includes('简历请求已发送'))",
+        timeout=5000
+    )
+    return { 'success': True, 'already_sent': False, 'details': '简历请求已发送' }
 
 def send_message_action(page, chat_id: str, message: str) -> Dict[str, Any]:
     """Send a text message in the open chat panel for the given chat_id"""
@@ -166,29 +152,20 @@ def send_message_action(page, chat_id: str, message: str) -> Dict[str, Any]:
     if not input_field.count():
         return { 'success': False, 'details': '未找到消息输入框' }
     
-    try:
-        input_field.wait_for(state="visible", timeout=3000)
-    except Exception:
-        return { 'success': False, 'details': '消息输入框未显示' }
+    input_field.wait_for(state="visible", timeout=3000)
 
     # Clear existing content and type the message
-    try:
-        input_field.click()
-        input_field.fill("")  # Clear existing content
-        input_field.type(message)
-    except Exception as e:
-        return { 'success': False, 'details': f'输入消息失败: {e}' }
+    input_field.click()
+    input_field.fill("")  # Clear existing content
+    input_field.type(message)
 
     # Find and click the send button
     send_button = page.locator("div.submit:has-text('发送')").first
     if not send_button.count():
         return { 'success': False, 'details': '未找到发送按钮' }
     
-    try:
-        send_button.wait_for(state="visible", timeout=3000)
-        send_button.click()
-    except Exception as e:
-        return { 'success': False, 'details': f'点击发送按钮失败: {e}' }
+    send_button.wait_for(state="visible", timeout=3000)
+    send_button.click()
 
     # Wait a moment for the message to be sent
     page.wait_for_timeout(1000)
@@ -198,7 +175,6 @@ def send_message_action(page, chat_id: str, message: str) -> Dict[str, Any]:
     if not remaining:
         return { 'success': True, 'details': '消息发送成功' }
     return { 'success': False, 'details': '消息可能未发送成功，输入框仍有内容' }
-
 
 def check_full_resume_available(page, chat_id: str, internal: bool = False) -> Optional[Dict[str, Any]]:
     """检查简历按钮是否启用"""
@@ -249,23 +225,20 @@ def view_full_resume_action(page, chat_id: str) -> Dict[str, Any]:
         iframe_handle = page.wait_for_selector(RESUME_IFRAME_SELECTOR, timeout=8000)
         frame = iframe_handle.content_frame()
         frame.wait_for_selector(PDF_VIEWER_SELECTOR, timeout=5000)
+
+        content = extract_pdf_viewer_text(frame)
     except Exception as e:
         close_overlay_dialogs(page)
         return { 'success': False, 'details': '简历查看器未出现', 'error': str(e) }
-
-    try:
-        content = extract_pdf_viewer_text(frame)
     finally:
         close_overlay_dialogs(page)
-    
+
     return {
         'success': True,
         'details': '简历查看器已打开',
         'content': content.get('text', ''),
         'pages': content.get('pages', []),
     }
-
-
 
 def discard_candidate_action(page, chat_id: str) -> Dict[str, Any]:
     """丢弃候选人 - 点击"不合适"按钮"""
@@ -278,13 +251,10 @@ def discard_candidate_action(page, chat_id: str) -> Dict[str, Any]:
     not_fit_button = page.locator("div.not-fit-wrap").first
     # not_fit_button = page.get_by_text('不合适').first
     
-    try:
-        not_fit_button.wait_for(state="visible", timeout=3000)
-        not_fit_button.hover()
-        time.sleep(2)
-        not_fit_button.click()
-    except Exception as e:
-        return { 'success': False, 'details': f'点击"不合适"按钮失败: {e}' }
+    not_fit_button.wait_for(state="visible", timeout=3000)
+    not_fit_button.hover()
+    time.sleep(2)
+    not_fit_button.click()
 
     # 等待确认对话框
     dialog = _go_to_chat_dialog(page, chat_id)
@@ -292,8 +262,6 @@ def discard_candidate_action(page, chat_id: str) -> Dict[str, Any]:
         return { 'success': True, 'details': f'确认已丢弃' }
     else:
         return { 'success': False, 'details': f'确认丢弃失败: 未删除对话' }
-
-
 
 def get_chat_list_action(page, limit: int = 10):
     """获取消息列表"""
@@ -316,7 +284,6 @@ def get_chat_list_action(page, limit: int = 10):
     logger.info(f"成功获取 {len(messages)} 条消息")
     return messages
 
-
 def get_chat_history_action(page, chat_id: str) -> List[Dict[str, Any]]:
     """读取右侧聊天历史，返回结构化消息列表"""
     _prepare_chat_page(page)
@@ -333,60 +300,59 @@ def get_chat_history_action(page, chat_id: str) -> List[Dict[str, Any]]:
     3. div.item-system: system message
     4. div.item-friend > div.text: candidate message
     '''
+    import dateutil.parser as parser
+    from datetime import date
+
     messages = page.locator("div.conversation-message >> div.message-item").all()
-    last_timestamp = None
+    last_timestamp:str = None #%Y-%m-%d %H:%M:%S
     history = []
     for message in messages:
         type, message_str, status = None, None, None
-        try:
-            timestamp_entry = message.locator("div.message-time")
-            if timestamp_entry.count():
-                timestamp = timestamp_entry.inner_text(timeout=100)
-            else:
-                timestamp = ''
-            # Convert timestamp to full datetime: if only time, prepend today's date
-            import dateutil.parser as parser
-            from datetime import date
-
-            ts = timestamp.strip()
+        # timestamp
+        timestamp_entry = message.locator("div.message-time")
+        if timestamp_entry.count():
+            timestamp = timestamp_entry.inner_text(timeout=100)
             # Try to detect if it's only time (e.g., "14:23" or "14:23:01")
-            if len(ts) <= 8 and ':' in ts and not any(c in ts for c in ('年', '月', '日', '-', '/')):
-                # Only time, prepend today's date
-                today_str = date.today().strftime("%Y-%m-%d")
-                timestamp = f"{today_str} {ts}"
+            if len(timestamp) <= 8 and not any(c in timestamp for c in ('年', '月', '日', '-', '/')):
+                if last_timestamp:
+                    today_str = last_timestamp.split(' ')[0]
+                else:
+                    today_str = date.today().strftime("%Y-%m-%d")
+                timestamp = f"{today_str} {timestamp}"
             dt = parser.parse(timestamp)
             timestamp = dt.strftime("%Y-%m-%d %H:%M:%S")
             last_timestamp = timestamp
-        except Exception:
+        else:
             timestamp = last_timestamp
-        try:
-            message_str_entry = message.locator("div.item-resume, div.item-system")
-            if message_str_entry.count():
-                message_str = message_str_entry.inner_text(timeout=100)
-            else:
-                message_str = ''
-            type = 'system'
-        except Exception:
-            pass
-        try:
-            message_str_entry = message.locator("div.item-myself >> span")
-            if message_str_entry.count():
-                message_str = message_str_entry.inner_text(timeout=100)
-                status = message_str_entry.locator('i.status').inner_text(timeout=100)
-            else:
-                message_str, status = '', None
-            type = 'recruiter'
-        except Exception:
-            pass
-        try:
-            message_str_entry = message.locator("div.item-friend")
-            if message_str_entry.count():
-                message_str = message_str_entry.inner_text(timeout=100)
-            else:
-                message_str = ''
-            type = 'candidate'
-        except Exception:
-            pass
+        
+        # resume item / system message
+        message_str_entry = message.locator("div.item-resume, div.item-system")
+        if message_str_entry.count():
+            message_str = message.inner_text(timeout=100)
+        else:
+            message_str = ''
+        type = 'system'
+
+        pass
+
+        message_str_entry = message.locator("div.item-myself >> span")
+        if message_str_entry.count():
+            message_str = message_str_entry.inner_text(timeout=100)
+            status = message.locator('i.status').inner_text(timeout=100)
+        else:
+            message_str, status = '', None
+        type = 'recruiter'
+
+        pass
+
+        message_str_entry = message.locator("div.item-friend")
+        if message_str_entry.count():
+            message_str = message_str_entry.inner_text(timeout=100)
+        else:
+            message_str = ''
+        type = 'candidate'
+
+        pass
         if message_str:
             history.append({
                 'type': type,
@@ -397,7 +363,6 @@ def get_chat_history_action(page, chat_id: str) -> List[Dict[str, Any]]:
 
     logger.info(f"chat_id: {chat_id}, messages: {history}")
     return history
-
 
 def accept_resume_action(page, chat_id: str) -> Dict[str, Any]:
     """Accept a candidate by clicking the accept button.
@@ -423,19 +388,17 @@ def accept_resume_action(page, chat_id: str) -> Dict[str, Any]:
     ]
     
     for selector in accept_selectors:
-        try:
+
             if page.locator(selector).first.is_visible(timeout=2000):
                 page.locator(selector).first.click(timeout=2000)
                 logger.info(f"Successfully clicked accept button")
                 return {'success': True, 'details': '候选人已接受'}
-        except Exception:
+
             continue
     
     logger.warning("No accept button found")
     return {'success': False, 'details': '未找到接受按钮'}
         
-
-
 def view_online_resume_action(page, chat_id: str) -> Dict[str, Any]:
     """点击会话 -> 点击"在线简历" -> 使用多级回退链条输出文本
     view_online_resume_action(page, chat_id)
@@ -487,6 +450,3 @@ def view_online_resume_action(page, chat_id: str) -> Dict[str, Any]:
 
     result.update({ 'name': candidate_name, 'chat_id': chat_id })
     return result
-
-
-

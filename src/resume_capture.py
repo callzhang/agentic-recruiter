@@ -367,8 +367,8 @@ def _setup_wasm_route(context):
 
     try:
         context.unroute(glob_pattern)
-            except Exception:
-                pass
+    except Exception:
+        pass
     context.route(glob_pattern, _route_resume)
 
 
@@ -452,8 +452,8 @@ def _open_online_resume(page, chat_id: str, logger=None) -> Dict[str, Any]:
     # Click online resume button
     try:
         btn = page.locator("a.resume-btn-online").first
-            btn.wait_for(state="visible", timeout=5000)
-            btn.click()
+        btn.wait_for(state="visible", timeout=5000)
+        btn.click()
     except Exception as e:
         return { 'success': False, 'details': f'点击在线简历失败: {e}' }
 
@@ -493,7 +493,7 @@ def _get_resume_handle(page, timeout_ms=10000, logger=None) -> Dict[str, Any]:
     Raises:
         Exception: If neither the overlay nor the iframe is found within the timeout.
     """
-        t0 = time.time()
+    t0 = time.time()
     tag = None
     from .ui_utils import IFRAME_OVERLAY_SELECTOR, RESUME_OVERLAY_SELECTOR
     iframe = page.locator(IFRAME_OVERLAY_SELECTOR)
@@ -1234,9 +1234,9 @@ def collect_resume_debug_info(page, logger=None) -> Dict[str, Any]:
 
 def _try_canvas_text_hooks(frame, logger=None) -> Dict[str, Any]:
     """Try canvas text hooks method."""
-        hooked = _install_canvas_text_hooks(frame, logger)
-        if hooked:
-            rebuilt = _rebuild_text_from_logs(frame, logger)
+    hooked = _install_canvas_text_hooks(frame, logger)
+    if hooked:
+        rebuilt = _rebuild_text_from_logs(frame, logger)
     if rebuilt and (rebuilt.get('text') or rebuilt.get('html')):
                 return {
                     'success': True,
@@ -1249,15 +1249,15 @@ def _try_canvas_text_hooks(frame, logger=None) -> Dict[str, Any]:
 
 def _try_clipboard_hooks(frame, logger=None) -> Dict[str, Any]:
     """Try clipboard hooks method."""
-        _install_clipboard_hooks(frame, logger)
-        _try_trigger_copy_buttons(frame, logger)
-        clip_text = _read_clipboard_logs(frame, logger)
-        if clip_text:
-            return {
-                'success': True,
-                'text': clip_text,
-    'method': '剪贴板拦截'
-    }
+    _install_clipboard_hooks(frame, logger)
+    _try_trigger_copy_buttons(frame, logger)
+    clip_text = _read_clipboard_logs(frame, logger)
+    if clip_text:
+        return {
+            'success': True,
+            'text': clip_text,
+            'method': '剪贴板拦截'
+        }
     return {'success': False, 'error': '剪贴板拦截失败', 'method': '剪贴板拦截'}
 
 
@@ -1336,7 +1336,7 @@ def extract_pdf_viewer_text(frame: 'Frame') -> Dict[str, Any]:
 
     try:
         frame.locator("div.textLayer").first.wait_for(state="visible", timeout=5000)
-            except Exception:
+    except Exception:
         pass
 
     def _collect() -> Any:

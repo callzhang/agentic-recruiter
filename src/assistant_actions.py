@@ -3,34 +3,38 @@ from __future__ import annotations
 
 import logging
 import os
+import time
+from datetime import datetime
 from functools import lru_cache
 from typing import Any, Dict, Iterable, List, Optional
 from uuid import uuid4
 
-try:
-    from openai import OpenAI
-except ImportError:  # pragma: no cover - optional dependency
-    OpenAI = None  # type: ignore
-
+from openai import OpenAI
+OPENAI_DEFAULT_MODEL = 'gpt-4o-mini'
 from tenacity import retry, stop_after_attempt, wait_exponential
-
 from .candidate_store import CandidateStore, candidate_store
 from .scheduler import BRDWorkScheduler
 from .config import settings
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_GREETING = "您好，我们是一家AI科技公司，对您的背景十分感兴趣，希望能进一步沟通。"
-OPENAI_DEFAULT_MODEL = os.getenv("BOSSZP_GPT_MODEL", "gpt-4o-mini")
+# Constants
+MAX_CONTEXT_CHARS = 4000  # Maximum characters for context truncation
+
+def load_openai_key() -> str | None:
+    """Load OpenAI API key from settings."""
+    return settings.OPENAI_API_KEY
+
 
 
 class AssistantActions:
     """Handles AI-powered assistant actions with optional Zilliz storage."""
+
     
     def __init__(self, store: CandidateStore | None = None) -> None:
         self.store = store or candidate_store
         self.enabled = bool(self.store and getattr(self.store, "enabled", False))
-        api_key = self._load_openai_key()
+        api_key = load_openai_key()
         if OpenAI and api_key:
             self.client = OpenAI(api_key=api_key)
         else:
@@ -42,9 +46,13 @@ class AssistantActions:
         self.scheduler_lock = threading.Lock()
         self.scheduler_config: dict[str, Any] = {}
     
-    def _load_openai_key(self) -> Optional[str]:
-        """Load OpenAI API key from settings."""
-        return settings.OPENAI_API_KEY if settings.OPENAI_API_KEY else None
+        
+    @lru_cache(maxsize=1)
+    def get_assistants(self) -> List[Dict[str, Any]]:
+        """Get all assistants."""
+        api_key = load_openai_key()
+        client = OpenAI(api_key=api_key)
+        return client.beta.assistants.list()
 
     # Embeddings ----------------------------------------------------
     @lru_cache(maxsize=1000)
@@ -53,213 +61,337 @@ class AssistantActions:
         """Generate embedding for text."""
         if not self.enabled or not self.client:
             return None
-        try:
-            response = self.client.embeddings.create(
-                model="text-embedding-3-small", 
-                input=text
-            )
-            return response.data[0].embedding
-        except Exception as exc:
-            logger.warning("Embedding generation failed: %s", exc)
-            raise
+        response = self.client.embeddings.create(
+            model="text-embedding-3-small", 
+            input=text
+        )
+        return response.data[0].embedding
 
     def get_embedding(self, text: str) -> Optional[List[float]]:
-        """Public method to get embeddings."""
+        """Public method to get embeddings.
+        
+        Used by: upsert_candidate, record_qa
+        """
         return self._embed(text)
 
-    # Retrieval -----------------------------------------------------
-    def retrieve_relevant_answers(
-        self, 
-        query: str, 
-        top_k: Optional[int] = None,
-        similarity_threshold: Optional[float] = None
-    ) -> List[Dict[str, Any]]:
-        """Retrieve relevant QA entries for a query."""
-        if not self.enabled:
-            return []
-        vector = self._embed(query)
-        if not vector:
-            return []
-        return self.store.search(vector, top_k, similarity_threshold)
+
 
     # AI Generation with Threads API ------------------------------
     def generate_message(
-        self, 
+        self,
+        *,
+        chat_id: str,
         prompt: str,
+        chat_history: List[Dict[str, Any]],
+        assistant_id: Optional[str] = None,
+        job_info: Optional[Dict[str, Any]] = None,
+        candidate_summary: Optional[str] = None,
+        candidate_resume: Optional[str] = None,
+        analysis: Optional[Dict[str, Any]] = None,
         thread_id: Optional[str] = None,
-        context: Optional[Dict[str, Any]] = None
     ) -> tuple[str, str]:
-        """
-        Generate a message using OpenAI Threads API for continuous conversation.
+        """Generate a message using the Threads API with history synchronisation.
         
-        Args:
-            prompt: The user's request/context for message generation
-            thread_id: Existing thread ID to continue conversation, or None to create new
-            context: Additional context (resume, job description, etc.)
-            
-        Returns:
-            tuple[str, str]: (generated_message, thread_id)
+        Used by: generate_followup_message (internal)
         """
-        if not self.client:
-            return "感谢您的关注，期待进一步沟通。", ""
-        
-        try:
-            # Create or get thread
-            if thread_id:
-                # Continue existing conversation
-                thread = None  # We'll use existing thread_id
+
+        record = self.get_candidate_record(chat_id)
+        existing_metadata: Dict[str, Any] = dict(record.get("metadata") or {}) if record else {}
+        thread_id = thread_id or existing_metadata.get("thread_id")
+
+        if not thread_id:
+            thread_metadata = {"chat_id": chat_id}
+            if assistant_id:
+                thread_metadata["assistant_id"] = assistant_id
+            thread = self.client.beta.threads.create(metadata=thread_metadata)
+            thread_id = thread.id
+
+        thread_messages = self._list_thread_messages(thread_id)
+        history_messages = self._normalise_history(chat_history)
+        if history_messages:
+            thread_messages = self._sync_thread_with_history(thread_id, thread_messages, history_messages)
+
+        if analysis:
+            analysis_text = self._format_analysis_message(analysis)
+            thread_messages = self._append_if_missing(thread_id, thread_messages, "assistant", analysis_text)
+
+        if candidate_summary:
+            thread_messages = self._append_if_missing(thread_id, thread_messages, "user", candidate_summary)
+
+        instructions = self._build_run_instructions(
+            prompt=prompt,
+            job_info=job_info,
+            analysis=analysis,
+            candidate_summary=candidate_summary,
+            candidate_resume=candidate_resume,
+        )
+
+        run = self.client.beta.threads.runs.create(
+            thread_id=thread_id,
+            assistant_id=assistant_id,
+            instructions=instructions,
+        )
+
+        if not self._wait_for_run_completion(thread_id, run.id):
+            logger.error("Run failed or timed out for chat %s", chat_id)
+            return "抱歉，消息生成失败，请稍后重试。", thread_id
+
+        generated_message = self._extract_latest_assistant_message(thread_id).strip()
+        if not generated_message:
+            generated_message = "消息生成成功，但内容为空。"
+
+        if self.store and getattr(self.store, "enabled", False):
+            metadata_to_store = dict(existing_metadata)
+            metadata_to_store["thread_id"] = thread_id
+            if assistant_id:
+                metadata_to_store["assistant_id"] = assistant_id
+            if record:
+                self.store.update_candidate_metadata(chat_id, metadata_to_store)
             else:
-                # Create new thread with initial context
-                thread = self.client.beta.threads.create()
-                thread_id = thread.id
-                
-                # Add system context as first message if creating new thread
-                if context:
-                    context_message = self._build_context_message(context)
-                    if context_message:
-                        self.client.beta.threads.messages.create(
-                            thread_id=thread_id,
-                            role="user",
-                            content=context_message
-                        )
-            
-            # Add user's current request
+                self.upsert_candidate(candidate_id=chat_id, metadata=metadata_to_store)
+
+        return generated_message, thread_id
+
+
+    def _list_thread_messages(self, thread_id: str) -> List[Dict[str, str]]:
+        """List all messages in a thread, paginated."""
+        messages: List[Dict[str, str]] = []
+        after: Optional[str] = None
+
+        while True:
+            response = self.client.beta.threads.messages.list(
+                thread_id=thread_id,
+                order="asc",
+                limit=100,
+                after=after,
+            )
+            for item in response.data:
+                text_blocks = [
+                    block.text.value
+                    for block in getattr(item, "content", [])
+                    if getattr(block, "type", None) == "text"
+                ]
+                content = "\n".join(text_blocks).strip()
+                messages.append({"id": item.id, "role": item.role, "content": content})
+            if not getattr(response, "has_more", False):
+                break
+            if response.data:
+                after = response.data[-1].id
+            else:
+                break
+
+        return messages
+
+    def _normalise_history(self, chat_history: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+        """Convert chat history to thread message format."""
+        role_map = {"candidate": "user", "recruiter": "assistant"}
+        normalised: List[Dict[str, str]] = []
+        for entry in chat_history or []:
+            role = role_map.get(entry.get("type"))
+            message = (entry.get("message") or "").strip()
+            if not role or not message:
+                continue
+            normalised.append({"role": role, "content": message})
+        return normalised
+
+    def _sync_thread_with_history(
+        self,
+        thread_id: str,
+        thread_messages: List[Dict[str, str]],
+        history_messages: List[Dict[str, str]],
+    ) -> List[Dict[str, str]]:
+        """Sync thread messages with chat history, adding missing messages."""
+        comparable_thread = [
+            (msg["role"], msg["content"])
+            for msg in thread_messages
+            if msg.get("role") in {"assistant", "user"}
+        ]
+
+        last_common = -1
+        idx_thread = len(comparable_thread) - 1
+        for idx_history in range(len(history_messages) - 1, -1, -1):
+            history_msg = history_messages[idx_history]
+            while idx_thread >= 0:
+                thread_role, thread_content = comparable_thread[idx_thread]
+                if (
+                    thread_role == history_msg["role"]
+                    and thread_content == history_msg["content"]
+                ):
+                    last_common = idx_history
+                    idx_thread -= 1
+                    break
+                idx_thread -= 1
+            if last_common != -1:
+                break
+
+        pending = history_messages[last_common + 1 :]
+        for message in pending:
             self.client.beta.threads.messages.create(
                 thread_id=thread_id,
-                role="user",
-                content=prompt
+                role=message["role"],
+                content=message["content"],
             )
-            
-            # Run with assistant
-            run = self.client.beta.threads.runs.create(
-                thread_id=thread_id,
-                assistant_id=self._get_or_create_assistant(),
-            )
-            
-            # Wait for completion
-            import time
-            max_wait = 30  # 30 seconds timeout
-            elapsed = 0
-            while elapsed < max_wait:
-                run_status = self.client.beta.threads.runs.retrieve(
-                    thread_id=thread_id,
-                    run_id=run.id
-                )
-                
-                if run_status.status == "completed":
-                    break
-                elif run_status.status in {"failed", "cancelled", "expired"}:
-                    logger.error(f"Run failed with status: {run_status.status}")
-                    return "抱歉，消息生成失败，请稍后重试。", thread_id
-                
-                time.sleep(1)
-                elapsed += 1
-            
-            if elapsed >= max_wait:
-                logger.error("Run timed out")
-                return "消息生成超时，请稍后重试。", thread_id
-            
-            # Get the latest assistant message
-            messages = self.client.beta.threads.messages.list(
-                thread_id=thread_id,
-                order="desc",
-                limit=1
-            )
-            
-            if messages.data and messages.data[0].role == "assistant":
-                content_blocks = []
-                for content in messages.data[0].content:
-                    if hasattr(content, "text") and hasattr(content.text, "value"):
-                        content_blocks.append(content.text.value)
-                
-                generated_message = "\n".join(content_blocks) if content_blocks else "消息生成成功，但内容为空。"
-                return generated_message, thread_id
-            
-            return "未能获取生成的消息。", thread_id
-            
-        except Exception as exc:
-            logger.error(f"Message generation failed: {exc}")
-            return "抱歉，消息生成失败，请稍后重试。", thread_id or ""
-    
-    def _build_context_message(self, context: Dict[str, Any]) -> str:
-        """Build initial context message for new thread."""
-        parts = []
-        
-        if context.get("company_description"):
-            parts.append(f"【公司介绍】\n{context['company_description']}")
-        
-        if context.get("job_description"):
-            parts.append(f"【岗位描述】\n{context['job_description']}")
-        
-        if context.get("target_profile"):
-            parts.append(f"【理想人选】\n{context['target_profile']}")
-        
-        if context.get("candidate_resume"):
-            parts.append(f"【候选人简历】\n{context['candidate_resume']}")
-        
-        if context.get("chat_history"):
-            parts.append(f"【历史对话】\n{context['chat_history']}")
-        
-        if parts:
-            return "以下是背景信息，请在后续对话中参考：\n\n" + "\n\n".join(parts)
-        
-        return ""
-    
-    def _get_or_create_assistant(self) -> str:
-        """Get or create a persistent assistant for recruitment conversations."""
-        # Check if we have a cached assistant ID
-        if hasattr(self, "_assistant_id") and self._assistant_id:
-            return self._assistant_id
-        
-        # Create new assistant
-        assistant = self.client.beta.assistants.create(
-            name="招聘助理",
-            instructions=(
-                "你是一个专业的招聘顾问助理。你的职责是：\n"
-                "1. 根据候选人背景和公司需求，生成专业、真诚的招聘消息\n"
-                "2. 对于首次联系，生成友好的打招呼消息，突出公司亮点\n"
-                "3. 对于跟进消息，基于之前的对话历史，生成个性化的跟进内容\n"
-                "4. 保持专业、简洁、真诚的沟通风格\n"
-                "5. 突出候选人与岗位的匹配点\n\n"
-                "请始终使用中文回复，消息长度控制在100-200字。"
-            ),
-            model=OPENAI_DEFAULT_MODEL,
-        )
-        
-        self._assistant_id = assistant.id
-        return self._assistant_id
-    
-    def generate_followup_message(
-        self, 
-        candidate_id: str, 
-        prompt: str, 
-        context: Dict[str, Any]
-    ) -> str:
-        """
-        Generate followup message (backward compatibility).
-        
-        Returns only the message. Use generate_message() for thread_id.
-        """
-        # Try to get thread_id from candidate record
-        record = self.get_candidate_record(candidate_id)
-        thread_id = record.get("metadata", {}).get("thread_id") if record else None
-        
-        message, new_thread_id = self.generate_message(
-            prompt=prompt or "请生成一条跟进消息。",
-            thread_id=thread_id,
-            context=context
-        )
-        
-        # Update candidate record with thread_id if it's new
-        if new_thread_id and not thread_id:
-            self.upsert_candidate(
-                candidate_id=candidate_id,
-                metadata_extra={"thread_id": new_thread_id}
-            )
-        
-        return message
-    
+            thread_messages.append({"role": message["role"], "content": message["content"]})
 
+        return thread_messages
+
+    def _append_if_missing(
+        self,
+        thread_id: str,
+        thread_messages: List[Dict[str, str]],
+        role: str,
+        content: Optional[str],
+    ) -> List[Dict[str, str]]:
+        """Add message to thread if not already present."""
+        text = (content or "").strip()
+        if not text:
+            return thread_messages
+        for message in thread_messages:
+            if message.get("role") == role and message.get("content") == text:
+                return thread_messages
+        self.client.beta.threads.messages.create(thread_id=thread_id, role=role, content=text)
+        thread_messages.append({"role": role, "content": text})
+        return thread_messages
+
+    def _format_analysis_message(self, analysis: Dict[str, Any]) -> str:
+        """Format candidate analysis into readable message."""
+        if not isinstance(analysis, dict):
+            return str(analysis)
+        key_map = {
+            "skill": "技能匹配度",
+            "startup_fit": "创业契合度",
+            "willingness": "加入意愿",
+            "overall": "综合评分",
+        }
+        lines: List[str] = []
+        for key in ("skill", "startup_fit", "willingness", "overall"):
+            value = analysis.get(key)
+            if value is not None:
+                lines.append(f"{key_map[key]}: {value}")
+        summary = analysis.get("summary")
+        if summary:
+            lines.append(f"总结: {summary}")
+        if not lines:
+            return ""
+        return "内部评估:\n" + "\n".join(lines)
+
+    def _build_run_instructions(
+        self,
+        *,
+        prompt: str,
+        job_info: Optional[Dict[str, Any]],
+        analysis: Optional[Dict[str, Any]],
+        candidate_summary: Optional[str],
+        candidate_resume: Optional[str],
+    ) -> str:
+        """Build comprehensive instructions for AI assistant run."""
+        parts = [
+            "你是公司的人才招聘负责人，请以专业真诚的语气，用中文撰写下一条发送给候选人的消息。",
+            f"【当前任务】\n{(prompt or '请为候选人撰写跟进消息。').strip()}",
+        ]
+
+        if job_info:
+            parts.append(f"【岗位信息】\n{self._format_job_info(job_info)}")
+
+        if analysis:
+            analysis_text = self._format_analysis_message(analysis)
+            if analysis_text:
+                parts.append(analysis_text)
+
+        if candidate_summary:
+            parts.append(f"【候选人概要】\n{candidate_summary.strip()}")
+
+        resume_segment = self._truncate_text(candidate_resume)
+        if resume_segment:
+            parts.append(f"【候选人简历片段】\n{resume_segment}")
+
+        return "\n\n".join(part for part in parts if part)
+
+    def _format_job_info(self, job_info: Dict[str, Any]) -> str:
+        """Format job information into readable text."""
+        if isinstance(job_info, dict):
+            lines = []
+            for key, value in job_info.items():
+                if not value:
+                    continue
+                lines.append(f"{key}: {value}")
+            return "\n".join(lines)
+        return str(job_info)
+
+    def _truncate_text(self, text: Optional[str]) -> str:
+        """Truncate text to maximum context length."""
+        content = (text or "").strip()
+        if not content:
+            return ""
+        if len(content) <= MAX_CONTEXT_CHARS:
+            return content
+        return content[:MAX_CONTEXT_CHARS] + "..."
+
+    def _wait_for_run_completion(self, thread_id: str, run_id: str, timeout: int = 60) -> bool:
+        """Wait for AI assistant run to complete with timeout."""
+        start = time.time()
+        while time.time() - start < timeout:
+            run_status = self.client.beta.threads.runs.retrieve(thread_id=thread_id, run_id=run_id)
+            status = getattr(run_status, "status", "")
+            if status == "completed":
+                return True
+            if status in {"failed", "cancelled", "expired"}:
+                logger.error("Run %s stopped with status %s", run_id, status)
+                return False
+            time.sleep(1)
+        logger.error("Run %s timed out", run_id)
+        return False
+
+    def _extract_latest_assistant_message(self, thread_id: str) -> str:
+        """Extract the latest assistant message from thread."""
+        response = self.client.beta.threads.messages.list(
+            thread_id=thread_id,
+            order="desc",
+            limit=10,
+        )
+        for message in response.data:
+            if message.role != "assistant":
+                continue
+            text_blocks = [
+                block.text.value
+                for block in getattr(message, "content", [])
+                if getattr(block, "type", None) == "text"
+            ]
+            content = "\n".join(text_blocks).strip()
+            if content:
+                return content
+        return ""
+
+
+    def generate_followup_message(
+        self,
+        chat_id: str,
+        prompt: str,
+        *,
+        chat_history: List[Dict[str, Any]],
+        job_info: Optional[Dict[str, Any]] = None,
+        assistant_id: Optional[str] = None,
+        candidate_summary: Optional[str] = None,
+        candidate_resume: Optional[str] = None,
+        analysis: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """Compatibility wrapper around generate_message for follow-up flows.
+        
+        Used by: boss_service.py (followup message endpoint)
+        """
+        message, _ = self.generate_message(
+            chat_id=chat_id,
+            prompt=prompt or "请生成一条跟进消息。",
+            chat_history=chat_history,
+            assistant_id=assistant_id,
+            job_info=job_info,
+            candidate_summary=candidate_summary,
+            candidate_resume=candidate_resume,
+            analysis=analysis,
+        )
+        return message
+
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
     def generate_greeting_message(
         self,
         candidate_name: str = None,
@@ -268,8 +400,9 @@ class AssistantActions:
         candidate_resume: str = None,
         job_info: dict = None
     ) -> str:
-        """
-        Generate AI-powered greeting message for a specific candidate.
+        """Generate AI-powered greeting message for a specific candidate.
+        
+        Used by: boss_service.py (greeting endpoint), src/scheduler.py (automation)
         
         Args:
             candidate_name: Name of the candidate (optional)
@@ -282,54 +415,38 @@ class AssistantActions:
             str: Generated greeting message
         """
         if not self.client:
-            return DEFAULT_GREETING
+            return ""
         
-        # Build candidate info section with available data
-        candidate_sections = []
-        if candidate_name:
-            candidate_sections.append(f"姓名：{candidate_name}")
-        if candidate_title:
-            candidate_sections.append(f"当前职位：{candidate_title}")
-        if candidate_summary:
-            candidate_sections.append(f"背景简介：{candidate_summary}")
-        if candidate_resume:
-            candidate_sections.append(f"完整简历：{candidate_resume}")
-        
-        candidate_info = "\n".join(candidate_sections) if candidate_sections else "候选人信息：暂无详细信息"
-        
-
-        prompt = f"""请为以下候选人生成一条专业的打招呼消息：
-
-【候选人信息】
-{candidate_info}
-
-【招聘信息】
-{job_info}
-你是公司的人才招聘负责人，请根据候选人信息和招聘信息，生成一条专业的打招呼消息。
-请生成一条：
+        summary_clean = (candidate_summary or "").replace("\n", "")
+        prompt = f"""你是公司的人才招聘负责人，请根据候选人信息和招聘信息，生成一条专业的打招呼消息。
 1. 专业且真诚的打招呼消息
 2. 突出公司与岗位的亮点
 3. 体现对候选人背景的认可
-4. 长度控制在100-200字
+4. 长度控制在50-100字
 5. 使用中文，语气友好专业
-
-直接输出可以直接发送给候选人的消息，不要包含其他说明文字，也不要包含模板类的话术。
+6. 直接输出可以直接发送给候选人的消息，不要包含其他说明文字
+7. 不要包含placeholder、占位符，例如“[公司名]“
+------
+【候选人信息】
+姓名：{candidate_name}
+当前职位：{candidate_title}
+背景简介：{summary_clean}
+完整简历：
+{candidate_resume}
+------
+【招聘信息】
+{job_info}
 """
 
-        try:
-            response = self.client.chat.completions.create(
-                model=OPENAI_DEFAULT_MODEL,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.7,
-                max_tokens=300
-            )
-            
-            message = response.choices[0].message.content if response.choices else ""
-            return message.strip() if message else DEFAULT_GREETING
-            
-        except Exception as exc:
-            logger.error(f"Greeting generation failed: {exc}")
-            return DEFAULT_GREETING
+        response = self.client.chat.completions.create(
+            model=OPENAI_DEFAULT_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+            max_tokens=300
+        )
+        
+        message = response.choices[0].message.content if response.choices else ""
+        return message.strip() 
 
     def analyze_candidate(
         self, 
@@ -338,18 +455,20 @@ class AssistantActions:
         chat_history: dict,
         candidate_summary: str = None,
     ) -> Optional[Dict[str, Any]]:
-        """Analyze candidate and return scoring results."""
+        """Analyze candidate and return scoring results.
+        
+        Used by: boss_service.py (analysis endpoint), src/scheduler.py (automation), pages/6_推荐牛人.py (UI)
+        """
         if not self.client:
             raise SystemError("OpenAI client not available for candidate analysis")
         
         prompt = f"""请基于以下信息对候选人做出量化评估。
-
 【岗位描述】
 {job_info}
 
 【候选人材料】
-{candidate_resume}
 {candidate_summary}
+{candidate_resume}
 
 【近期对话】
 {chat_history}
@@ -363,130 +482,96 @@ class AssistantActions:
   "summary": "..."
 }}
 """
-        try:
-            response = self.client.chat.completions.create(
-                model=OPENAI_DEFAULT_MODEL,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            text = response.choices[0].message.content if response.choices else ""
-            data = self._parse_json_from_text(text)
-            if not data:
-                logger.error("无法解析评分结果")
-            return data
-        except Exception as exc:
-            logger.error(f"调用 OpenAI 失败: {exc}")
-            return None
+        response = self.client.chat.completions.create(
+            model=OPENAI_DEFAULT_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = response.choices[0].message.content if response.choices else ""
+        data = self._parse_json_from_text(text)
+        if not data:
+            logger.error("无法解析评分结果")
+        return data
 
     def _parse_json_from_text(self, text: str) -> Optional[Dict[str, Any]]:
-        """Parse JSON from text content."""
-        try:
-            import json
-            start = text.find('{')
-            end = text.rfind('}')
-            if start != -1 and end != -1:
-                return json.loads(text[start:end + 1])
-        except Exception:
-            pass
+        """Parse JSON from text content, handling mixed content."""
+        import json
+        start = text.find('{')
+        end = text.rfind('}')
+        if start != -1 and end != -1:
+            return json.loads(text[start:end + 1])
         return None
 
     # Candidate Management --------------------------------------
     def get_candidate_record(self, candidate_id: str) -> Optional[Dict[str, Any]]:
-        """Retrieve candidate record from store."""
-        if not self.enabled or not self.store:
+        """Retrieve candidate record by chat identifier from the store.
+        
+        Used by: generate_message (internal)
+        """
+        if not candidate_id or not self.enabled or not self.store:
             return None
-        try:
-            return self.store.get_candidate_profile(candidate_id)
-        except AttributeError:
-            logger.warning("Candidate store missing get_candidate_profile implementation")
-            return None
+        return self.store.get_candidate_by_id(candidate_id)
 
     def upsert_candidate(
         self,
         candidate_id: str,
-        *,
         name: Optional[str] = None,
         job_applied: Optional[str] = None,
         last_message: Optional[str] = None,
         resume_text: Optional[str] = None,
         scores: Optional[Dict[str, Any]] = None,
-        metadata_extra: Optional[Dict[str, Any]] = None,
+        metadata: Optional[Dict[str, Any]] = {},
     ) -> bool:
-        """Upsert candidate information to the store."""
+        """Upsert candidate information to the store.
+        
+        Used by: boss_service.py (upsert endpoint), src/scheduler.py (automation), generate_message (internal)
+        """
         if not self.enabled or not self.store:
             logger.warning("Store not available, cannot upsert candidate")
             return False
 
-        metadata_extra = metadata_extra or {}
-        chat_id = metadata_extra.get("chat_id")
-        status = metadata_extra.get("status", "pending")
-        metadata: Dict[str, Any] = {k: v for k, v in metadata_extra.items() if k not in {"chat_id", "status"}}
-        if scores:
-            metadata.setdefault("scores_raw", scores)
+        embedding = self.get_embedding(resume_text)
 
-        embedding: Optional[Iterable[float]] = None
-        if resume_text:
-            embedding = self.get_embedding(resume_text)
+        return self.store.upsert_candidate(
+            candidate_id=candidate_id,
+            name=name,
+            job_applied=job_applied,
+            last_message=last_message,
+            resume_text=resume_text,
+            scores=scores,
+            metadata=metadata,
+            resume_vector=embedding,
+        )
 
-        try:
-            return self.store.upsert_candidate_profile(
-                candidate_id=candidate_id,
-                chat_id=chat_id,
-                name=name,
-                job_applied=job_applied,
-                status=status,
-                overall_score=scores.get("overall") if scores else None,
-                score_detail=scores,
-                last_message=last_message,
-                embedding=embedding,
-                metadata=metadata,
-            )
-        except AttributeError:
-            logger.warning("Candidate store missing upsert_candidate_profile implementation")
-            return False
+# QA Persistence ---------------------------------------------------
+    def retrieve_relevant_answers(
+        self, 
+        query: str, 
+        top_k: Optional[int] = None,
+        similarity_threshold: Optional[float] = None
+    ) -> List[Dict[str, Any]]:
+        """Retrieve relevant QA entries for a query.
+        
+        Used by: boss_service.py (QA search endpoint)
+        """
+        if not self.enabled:
+            return []
+        vector = self._embed(query)
+        if not vector:
+            return []
+        return self.store.search(vector, top_k, similarity_threshold)
 
-    def record_candidate_action(
-        self,
-        *,
-        candidate_id: str,
-        action_type: str,
-        summary: str,
-        chat_id: Optional[str] = None,
-        score: Optional[float] = None,
-        metadata: Optional[Dict[str, Any]] = None,
-        embedding_source: Optional[str] = None,
-    ) -> bool:
-        """Persist a candidate action log into the store."""
-        if not self.enabled or not self.store:
-            return False
-
-        vector: Optional[Iterable[float]] = None
-        if embedding_source:
-            vector = self.get_embedding(embedding_source)
-
-        try:
-            return self.store.log_candidate_action(
-                candidate_id=candidate_id,
-                chat_id=chat_id,
-                action_type=action_type,
-                score=score,
-                summary=summary,
-                embedding=vector,
-                metadata=metadata,
-            )
-        except AttributeError:
-            logger.warning("Candidate store missing log_candidate_action implementation")
-            return False
-
-    # QA Persistence ---------------------------------------------------
     def record_qa(
         self, 
-        *, 
+        *,
         qa_id: str | None = None, 
         question: str, 
         answer: str,
         keywords: Optional[List[str]] = None
     ) -> str | None:
-        """Record a QA entry in the store."""
+        """Record a QA entry in the store.
+        
+        Used by: boss_service.py (QA endpoint), pages/7_问答库.py (UI)
+        """
         if not self.enabled:
             return None
         text = f"问题: {question}\n回答: {answer}"
@@ -505,83 +590,82 @@ class AssistantActions:
         return qa_id
 
     def list_entries(self, limit: int = 200, offset: int = 0) -> List[Dict[str, Any]]:
-        """List QA entries from store."""
+        """List QA entries from store.
+        
+        Used by: boss_service.py (list endpoint), pages/7_问答库.py (UI)
+        """
         if not self.enabled:
             return []
-        # Simplified - would query Zilliz in full version
+        # TODO: - would query Zilliz in full version
         return []
 
     def delete_entry(self, resume_id: str) -> bool:
-        """Delete a QA entry from store."""
+        """Delete a QA entry from store.
+        
+        Used by: boss_service.py (delete endpoint), pages/7_问答库.py (UI)
+        """
         if not self.enabled:
             return False
-        # Simplified - would delete from Zilliz in full version
+        # TODO - would delete from Zilliz in full version
         return False
 
     @staticmethod
     def generate_id() -> str:
-        """Generate a unique ID."""
+        """Generate a unique ID.
+        
+        Used by: boss_service.py (ID generation endpoint), pages/7_问答库.py (UI), record_qa (internal)
+        """
         return uuid4().hex
 
     # Scheduler Management -----------------------------------------
     def get_scheduler_status(self) -> Dict[str, Any]:
-        """Get scheduler status and configuration."""
+        """Get scheduler status and configuration.
+        
+        Used by: boss_service.py (status endpoints)
+        """
         with self.scheduler_lock:
-            running = self.scheduler is not None
-            config = dict(self.scheduler_config) if running else {}
-        return {
-            'running': running,
-            'config': config,
-        }
+            status = {
+                'running': self.scheduler is not None,
+                'config': dict(self.scheduler_config) if self.scheduler is not None else {}
+            }
+            if self.scheduler is not None and hasattr(self.scheduler, 'get_status'):
+                status.update(self.scheduler.get_status())
+            return status
 
     def start_scheduler(self, payload: Dict[str, Any]) -> tuple[bool, str]:
-        """Start the automation scheduler."""
+        """Start the automation scheduler.
+        
+        Used by: boss_service.py (start endpoint)
+        """
         with self.scheduler_lock:
             if self.scheduler:
                 return False, '调度器已运行'
             
-            try:
-                """Build scheduler options from payload."""
-                job_payload = payload.get('job') if isinstance(payload.get('job'), dict) else {}
-                recommend_limit = payload.get('check_recommend_candidates_limit') or 20
+            """Build scheduler options from payload."""
 
-                options: Dict[str, Any] = {
-                    'job': job_payload,
-                    'recommend_limit': recommend_limit,
-                    'enable_recommend': bool(payload.get('check_recommend_candidates', True)),
-                    'enable_inbound': bool(payload.get('check_new_chats')),
-                    'enable_followup': bool(payload.get('check_followups')),
-                    'assistant': self,
-                }
-                try:
-                    options['recommend_limit'] = int(options['recommend_limit'])
-                except (TypeError, ValueError):
-                    options['recommend_limit'] = 20
-                webhook = payload.get('dingtalk_webhook') or settings.DINGTALK_URL
-                if webhook:
-                    options['dingtalk_webhook'] = webhook
+            options: Dict[str, Any] = {
+                'job': payload.get('job'),
+                'recommend_limit': payload.get('check_recommend_candidates_limit') or 20,
+                'enable_recommend': bool(payload.get('check_recommend_candidates', True)),
+                'overall_threshold': payload.get('match_threshold') or 9.0,
+                'enable_chat_processing': bool(payload.get('check_new_chats')),
+                'enable_followup': bool(payload.get('check_followups')),
+                'assistant': self,
+                'base_url': settings.BOSS_SERVICE_BASE_URL,  # Pass API base URL instead of page
+            }
 
-                scheduler = BRDWorkScheduler(**options)
-                scheduler.start()
-                self.scheduler = scheduler
-                config_copy: Dict[str, Any] = {}
-                for key, value in options.items():
-                    if key == 'assistant':
-                        continue
-                    if key == 'job' and isinstance(value, dict):
-                        config_copy[key] = dict(value)
-                    else:
-                        config_copy[key] = value
-                self.scheduler_config = config_copy
-                return True, '调度器已启动'
-            except Exception as exc:
-                logger.error(f"启动调度器失败: {exc}")
-                self.scheduler = None
-                self.scheduler_config = {}
-                return False, f'启动调度器失败: {exc}'
+            scheduler = BRDWorkScheduler(**options)
+            scheduler.start()
+            self.scheduler = scheduler
+            options.pop('assistant')
+            self.scheduler_config = options
+            return True, '调度器已启动'
 
     def stop_scheduler(self) -> tuple[bool, str]:
-        """Stop the automation scheduler."""
+        """Stop the automation scheduler.
+        
+        Used by: boss_service.py (stop endpoint)
+        """
         with self.scheduler_lock:
             if not self.scheduler:
                 return False, '调度器未运行'
@@ -589,49 +673,14 @@ class AssistantActions:
             self.scheduler = None
             self.scheduler_config = {}
         
-        try:
-            # Add timeout for scheduler stop
-            import threading
-            import time
-            
-            def stop_with_timeout():
-                scheduler.stop()
-            
-            stop_thread = threading.Thread(target=stop_with_timeout)
-            stop_thread.daemon = True  # Allow thread to be killed if main process exits
-            stop_thread.start()
-            stop_thread.join(timeout=5)  # 5-second timeout
-            
-            if stop_thread.is_alive():
-                logger.warning("调度器停止超时，强制继续...")
-                return False, '调度器停止超时'
-            
-            return True, '已停止调度器'
-        except Exception as exc:
-            logger.error(f"停止调度器失败: {exc}")
-            return False, f'停止调度器失败: {exc}'
+        # Stop scheduler directly - it has its own timeout handling
+        scheduler.stop()
+        return True, '已停止调度器'
 
 
-    @staticmethod
-    def _coerce_int(value: Any, default: int) -> int:
-        """Coerce value to int with default fallback."""
-        try:
-            return int(value)
-        except (TypeError, ValueError):
-            return default
-
-    @staticmethod
-    def _coerce_float(value: Any, default: Optional[float]) -> Optional[float]:
-        """Coerce value to float with default fallback."""
-        try:
-            if value is None:
-                return default
-            return float(value)
-        except (TypeError, ValueError):
-            return default
 
 
 # Global instance
 assistant_actions = AssistantActions()
 
-__all__ = ["assistant_actions", "AssistantActions", "DEFAULT_GREETING"]
+__all__ = ["assistant_actions", "AssistantActions", "get_assistants"]

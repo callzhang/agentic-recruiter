@@ -22,8 +22,7 @@ def _fetch_recommended_candidate(limit: int) -> List[Dict[str, Any]]:
     if not ok:
         st.error(f"获取推荐牛人失败: {payload}")
         raise ValueError(f"获取推荐牛人失败: {payload}")
-    candidates = payload.get("candidates") or []
-    return candidates
+    return payload if isinstance(payload, list) else []
 
 
 def _render_response(ok: bool, payload: Any) -> None:
@@ -110,15 +109,13 @@ def main() -> None:
                         json=context
                     )
                 
-                if ok and payload.get("success"):
+                if ok:
                     # Store analysis results in session state
-                    analysis_result = payload.get("analysis")
-                    st.session_state.setdefault(SessionKeys.ANALYSIS_RESULTS, {})[selected_index] = analysis_result
+                    st.session_state.setdefault(SessionKeys.ANALYSIS_RESULTS, {})[selected_index] = payload
                     st.success("AI分析完成！")
                     st.rerun()  # Refresh to show the analysis results
                 else:
-                    error = payload.get("error") if isinstance(payload, dict) else str(payload)
-                    st.error(f"AI分析失败: {error}")
+                    st.error(f"AI分析失败: {payload}")
         
         with col2:
             if st.form_submit_button("发送打招呼"):

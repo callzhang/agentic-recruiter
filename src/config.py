@@ -43,41 +43,37 @@ class Settings(BaseModel):
         # Load from secrets.yaml if it exists
         secrets_file = Path(secrets_path)
         if secrets_file.exists():
-            try:
-                with open(secrets_file, "r", encoding="utf-8") as f:
-                    secrets = yaml.safe_load(f) or {}
-                
-                # Map secrets.yaml structure to environment variables
-                if "zilliz" in secrets:
-                    zilliz = secrets["zilliz"]
-                    settings_data.update({
-                        "ZILLIZ_ENDPOINT": zilliz.get("endpoint", ""),
-                        "ZILLIZ_USER": zilliz.get("user", ""),
-                        "ZILLIZ_PASSWORD": zilliz.get("password", ""),
-                        "ZILLIZ_COLLECTION_NAME": zilliz.get("collection_name", "CN_recruitment"),
-                        "ZILLIZ_EMBEDDING_MODEL": zilliz.get("embedding_model", "text-embedding-3-small"),
-                        "ZILLIZ_EMBEDDING_DIM": zilliz.get("embedding_dim", 1536),
-                        "ZILLIZ_SIMILARITY_TOP_K": zilliz.get("similarity_top_k", 5),
-                        "ZILLIZ_ENABLE_CACHE": zilliz.get("enable_cache", False),
-                    })
-                
-                if "openai" in secrets:
-                    openai = secrets["openai"]
-                    settings_data.update({
-                        "OPENAI_API_KEY": openai.get("api_key", ""),
-                        "OPENAI_NAME": openai.get("name", "CN_recruiting_bot"),
-                    })
-                
-                if "dingtalk" in secrets:
-                    dingtalk = secrets["dingtalk"]
-                    settings_data.update({
-                        "DINGTALK_URL": dingtalk.get("url", ""),
-                        "DINGTALK_SECRET": dingtalk.get("secret", ""),
-                    })
+            with open(secrets_file, "r", encoding="utf-8") as f:
+                secrets = yaml.safe_load(f) or {}
+            
+            # Map secrets.yaml structure to environment variables
+            if "zilliz" in secrets:
+                zilliz = secrets["zilliz"]
+                settings_data.update({
+                    "ZILLIZ_ENDPOINT": zilliz.get("endpoint", ""),
+                    "ZILLIZ_USER": zilliz.get("user", ""),
+                    "ZILLIZ_PASSWORD": zilliz.get("password", ""),
+                    "ZILLIZ_COLLECTION_NAME": zilliz.get("collection_name", "CN_recruitment"),
+                    "ZILLIZ_EMBEDDING_MODEL": zilliz.get("embedding_model", "text-embedding-3-small"),
+                    "ZILLIZ_EMBEDDING_DIM": zilliz.get("embedding_dim", 1536),
+                    "ZILLIZ_SIMILARITY_TOP_K": zilliz.get("similarity_top_k", 5),
+                    "ZILLIZ_ENABLE_CACHE": zilliz.get("enable_cache", False),
+                })
+            
+            if "openai" in secrets:
+                openai = secrets["openai"]
+                settings_data.update({
+                    "OPENAI_API_KEY": openai.get("api_key", ""),
+                    "OPENAI_NAME": openai.get("name", "CN_recruiting_bot"),
+                })
+            
+            if "dingtalk" in secrets:
+                dingtalk = secrets["dingtalk"]
+                settings_data.update({
+                    "DINGTALK_URL": dingtalk.get("url", ""),
+                    "DINGTALK_SECRET": dingtalk.get("secret", ""),
+                })
                     
-            except Exception as e:
-                print(f"Warning: Failed to load secrets from {secrets_path}: {e}")
-        
         # Create settings instance with loaded data
         return cls(**settings_data)
     
