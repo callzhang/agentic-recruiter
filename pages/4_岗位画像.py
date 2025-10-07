@@ -158,7 +158,7 @@ def _edit_role(role: Dict[str, Any], idx: int) -> None:
 
 
 def main() -> None:
-    st.title("岗位画像")
+    st.title("岗位画像", help="岗位画像用于描述招聘岗位的背景、职责、要求、概述、理想人选画像等信息。")
     ensure_state()
     sidebar_controls(include_config_path=True)
 

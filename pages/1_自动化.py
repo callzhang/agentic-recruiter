@@ -11,7 +11,9 @@ from streamlit_shared import (
     load_jobs,
 )
 
-
+'''
+The automation
+'''
 def main() -> None:
     st.title("Automation Scheduler")
     ensure_state()
