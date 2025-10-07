@@ -5,7 +5,7 @@ from pathlib import Path
 import time
 import streamlit as st
 from openai import OpenAI
-from streamlit_shared import ensure_state, sidebar_controls, SessionKeys
+from streamlit_shared import ensure_state, sidebar_controls, SessionKeys, load_assistants
 # Use API calls instead of direct imports
 from streamlit_shared import call_api
 
@@ -64,6 +64,8 @@ def confirm_delete_dialog(assistant_name: str, assistant_id: str):
             if not ok:
                 st.error(f"删除失败: {response}")
                 return
+            # Clear assistant cache after successful deletion
+            load_assistants.clear()
             st.success(f"助手 '{assistant_name}' 已删除")
             time.sleep(1)
             st.rerun()
@@ -77,12 +79,11 @@ def main() -> None:
     ensure_state()
     sidebar_controls(include_config_path=False)
 
-    # Get assistants via API
-    ok, response = call_api("GET", "/assistant/list")
-    if not ok:
-        st.error(f"获取助手列表失败: {response}")
+    # Get assistants via cached function
+    assistants = load_assistants()
+    if not assistants:
+        st.error("无法加载助手列表")
         return
-    assistants = response if isinstance(response, list) else []
     new_assistant_label = "创建新的助手"
 
     idx = st.session_state.get(SessionKeys.SELECTED_ASSISTANT_ID, 0)  
@@ -97,16 +98,18 @@ def main() -> None:
         selected_assistant = None
     else:
         selected_assistant = [a for a in assistants if a['id'] == idx][0]
-    name = st.text_input("名称", value=selected_assistant['name'] if selected_assistant else "新助手")
+    name = st.subheader(selected_assistant['name'] if selected_assistant else "新助手", help="左侧选择助理")
     # Get current model and find its index, default to gpt-4o-mini if not in list
     current_model = selected_assistant['model'] if selected_assistant else "gpt-4o-mini"
     model_index = model_options.index(current_model) if current_model in model_options else 0
     model = st.selectbox("模型", options=model_options, index=model_index)
     description = st.text_area("描述", value=selected_assistant['description'] if selected_assistant else "")
+    
+    st.subheader("💬 沟通设置")
     instructions = st.text_area("指令", value=selected_assistant['instructions'] if selected_assistant else default_assistant_instructions, height=600)
     
     # Metadata editor for existing assistant
-    st.subheader("元数据 (Metadata), 可用于保存一些额外信息, 不用于AI模型运行")
+    st.subheader("元数据 (Metadata)", help="可用于保存一些额外信息, 不用于AI模型运行")
     existing_metadata = selected_assistant['metadata'] if selected_assistant else {}
     metadata_df = st.data_editor(
         dict_to_dataframe(existing_metadata),
@@ -123,7 +126,6 @@ def main() -> None:
     
     # Communication Settings Section
     st.divider()
-    st.subheader("💬 沟通设置")
     
     # Get existing templates from metadata
     greeting_templates = metadata_dict.get("greeting_templates", "")
@@ -153,6 +155,8 @@ def main() -> None:
                     if not ok:
                         st.error(f"更新失败: {response}")
                         return
+                    # Clear assistant cache after successful update
+                    load_assistants.clear()
                     st.success("助手已更新")
                     time.sleep(1)
                     st.rerun()
@@ -176,6 +180,8 @@ def main() -> None:
                 if not ok:
                     st.error(f"创建失败: {response}")
                     return
+                # Clear assistant cache after successful creation
+                load_assistants.clear()
                 st.success("助手已创建")
                 time.sleep(1)
                 st.rerun()

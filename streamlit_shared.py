@@ -100,12 +100,21 @@ def load_jobs() -> List[Dict[str, Any]]:
     path = get_config_path()
     return load_jobs_from_path(path)
 
+@st.cache_data(ttl=300, show_spinner="加载助手列表中...")
+def load_assistants() -> List[Dict[str, Any]]:
+    """Load assistants with caching."""
+    ok, response = call_api("GET", "/assistant/list")
+    if ok and isinstance(response, list):
+        return response
+    return []
+
 
 def get_selected_job(job_index: int = 0) -> Dict[str, Any]:
     """Get selected job by index with caching."""
     jobs = load_jobs()
     if not jobs or job_index >= len(jobs):
-        return {}
+        load_jobs.clear()
+        return get_selected_job(job_index)
     return jobs[job_index]
 
 
@@ -132,10 +141,9 @@ def sidebar_controls(*, include_config_path: bool = False, include_job_selector:
         load_jobs.clear()
 
     if include_assistant_selector:
-        # Get assistants via API
-        ok, response = call_api("GET", "/assistant/list")
-        if ok and isinstance(response, list):
-            assistants = response
+        # Get assistants via cached function
+        assistants = load_assistants()
+        if assistants:
             id_name_map = {assistant["id"]: assistant["name"] for assistant in assistants}
             selected_assistant = st.sidebar.selectbox(
                 "当前助手",
@@ -222,7 +230,6 @@ def refresh_config() -> None:
     """Refresh configuration cache."""
     load_config.clear()
 
-@st.spinner("正在请求 API...")
 def call_api(method: str, path: str, **kwargs) -> Tuple[bool, Any]:
     """Make HTTP request to boss_service API.
     
@@ -232,7 +239,8 @@ def call_api(method: str, path: str, **kwargs) -> Tuple[bool, Any]:
     """
     url = DEFAULT_BASE_URL.rstrip("/") + path
     try:
-        response = requests.request(method.upper(), url, timeout=30, **kwargs)
+        with st.spinner(f"正在请求 API: {path} ..."):
+            response = requests.request(method.upper(), url, timeout=30, **kwargs)
         response.raise_for_status()
         content_type = response.headers.get("content-type", "")
         return True, response.json()
