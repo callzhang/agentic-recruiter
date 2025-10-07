@@ -1,55 +1,44 @@
 #!/usr/bin/env python3
-"""
-Boss直聘后台服务（FastAPI版） - 保持登录状态，提供API接口
-"""
-from ast import pattern
-import re
-from playwright.sync_api import sync_playwright, expect
-import sys
-import os
-import time
-import json
-import threading
-import hashlib
-from datetime import datetime
-from fastapi import FastAPI, Query, Request, Body
-from fastapi.concurrency import run_in_threadpool
-from contextlib import asynccontextmanager
-import signal
-import tempfile # Import tempfile
-import logging # Import logging
-import shutil # Import shutil
+"""Async FastAPI service that automates Boss直聘 via Playwright."""
 
+from __future__ import annotations
+
+import asyncio
+import os
+import tempfile
+from contextlib import asynccontextmanager
+from datetime import datetime
+from typing import Any, Dict, List, Optional
+
+from fastapi import Body, FastAPI, Query, Request
+from fastapi.concurrency import run_in_threadpool
+from playwright.async_api import Browser, BrowserContext, Page, Playwright, TimeoutError as PlaywrightTimeoutError, async_playwright
+
+from src.assistant_actions import assistant_actions
+from src.candidate_store import candidate_store
 from src.config import settings
-from src.ui_utils import ensure_on_chat_page, find_chat_item
+from src.global_logger import get_logger
 from src.chat_actions import (
-    request_resume_action,
-    send_message_action,
-    view_full_resume_action,
-    discard_candidate_action,
-    get_chat_list_action,
-    get_chat_history_action,
-    select_chat_job_action,
-    view_online_resume_action,
     accept_resume_action,
     check_full_resume_available,
+    discard_candidate_action,
+    get_chat_history_action,
+    get_chat_list_action,
     get_chat_stats_action,
+    request_resume_action,
+    select_chat_job_action,
+    send_message_action,
+    view_full_resume_action,
+    view_online_resume_action,
 )
 from src.recommendation_actions import (
-    list_recommended_candidates_action,
-    view_recommend_candidate_resume_action,
-    greet_recommend_candidate_action,
-    select_recommend_job_action,
     _prepare_recommendation_page,
+    greet_recommend_candidate_action,
+    list_recommended_candidates_action,
+    select_recommend_job_action,
+    view_recommend_candidate_resume_action,
 )
-from src.global_logger import get_logger
-from src.candidate_store import candidate_store
-from src.assistant_actions import assistant_actions
-from typing import Any, Dict, List, Optional, Callable, Tuple, Union
-from functools import wraps
 
-
-# Get global logger once at module level
 logger = get_logger()
 
 DEFAULT_GREET_MESSAGE = (
@@ -58,776 +47,320 @@ DEFAULT_GREET_MESSAGE = (
     "也是经过华为严选的唯一产品级AI数据合作伙伴。您对我们岗位有没有兴趣？"
 )
 
-class BossService:
-    _instance = None
 
-    def __new__(cls, *args, **kwargs):
-        if cls._instance is None:
-            cls._instance = super(BossService, cls).__new__(cls)
-        return cls._instance
+class BossServiceAsync:
+    """Async Playwright driver exposed as FastAPI service."""
 
-    # Logging is now handled by src/global_logger.py and get_logger().
-    # No need for a custom _setup_logging; use get_logger() at module level.
+    def __init__(self) -> None:
+        self.app = FastAPI(lifespan=self.lifespan)
+        self.playwright: Optional[Playwright] = None
+        self.browser: Optional[Browser] = None
+        self.context: Optional[BrowserContext] = None
+        self.page: Optional[Page] = None
+        self.is_logged_in = False
+        self.browser_lock = asyncio.Lock()
+        self.startup_complete = asyncio.Event()
+        self.candidate_store = candidate_store
+        self.assistant_actions = assistant_actions
+        self.event_manager = None  # Placeholder for legacy debug endpoint
+        self.setup_routes()
 
-
-    def __init__(self):
-        if not hasattr(self, 'initialized'):
-            # Logging is handled by global_logger, no setup needed
-            self.app = FastAPI(lifespan=self.lifespan)
-            self.playwright = None
-            self.context = None # The primary browser object
-            self.page = None
-            self.is_logged_in = False
-            self.shutdown_requested = False
-            self.startup_complete = threading.Event() # Event to signal startup completion
-            self.browser_lock = threading.Lock()  # Critical: protect Playwright resources from concurrent access
-            self.candidate_store = candidate_store
-            if getattr(self.candidate_store, "enabled", False):
-                logger.info("QA store initialised and connected to Zilliz")
-            else:
-                logger.info("QA store disabled or not configured")
-            self.assistant_actions = assistant_actions
-            
-            self.initialized = True
-            self.setup_routes()
-    
-    # Service Methods ----------------------------------------------------------
-    
-    def _with_browser_lock(self, func: Callable, *args, **kwargs):
-        """Execute a function with browser lock protection.
-        
-        Ensures thread-safe access to Playwright resources (page, context, playwright).
-        Critical for preventing race conditions when multiple concurrent requests
-        access the same browser session.
-        
-        Args:
-            func: The function to execute
-            *args: Positional arguments for the function
-            **kwargs: Keyword arguments for the function
-            
-        Returns:
-            The return value of the function
-            
-        Raises:
-            Any exception raised by the function
-        """
-        with self.browser_lock:
-            return func(*args, **kwargs)
-    
-    def _service_base_url(self) -> str:
-        return os.environ.get('BOSS_SERVICE_BASE_URL', 'http://127.0.0.1:5001')
-
-
-    def _startup_sync(self):
-        """Synchronous startup tasks executed in a thread pool.
-
-        Initializes Playwright, starts the browser, and sets up the service.
-        This method is called during FastAPI startup to prepare the service
-        for handling requests.
-        """
-        try:
-            logger.info("正在初始化Playwright...")
-            self.playwright = sync_playwright().start()
-            logger.info("Playwright初始化成功。")
-            self.start_browser()
-            # Do NOT call ensure_login here. Let it be called lazily.
-        except Exception as e:
-            logger.error(f"同步启动任务失败: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
-        finally:
-            self.startup_complete.set() # Signal that startup is finished
-
-    def _shutdown_sync(self):
-        """Synchronous shutdown tasks executed in a thread pool.
-        
-        Performs graceful shutdown of the service, including cleanup of
-        Playwright resources and browser contexts.
-        """
-        logger.info("开始同步关闭任务...")
-        
-        # Add timeout to prevent hanging
-        import signal
-        
-        def timeout_handler(signum, frame):
-            logger.warning("关闭任务超时，强制退出...")
-            raise TimeoutError("Shutdown timeout")
-        
-        # Set 10-second timeout for shutdown
-        old_handler = signal.signal(signal.SIGALRM, timeout_handler)
-        signal.alarm(10) # That sets a timer to deliver SIGALRM in 10 seconds. If your shutdown code hangs longer than that, the OS will “ring the bell,” calling timeout_handler, which raises a TimeoutError.
-        
-        try:
-            self._graceful_shutdown()
-            assistant_actions.stop_scheduler()
-            logger.info("同步关闭任务完成。")
-        except TimeoutError:
-            logger.error("关闭任务超时，强制退出")
-        except Exception as e:
-            logger.error(f"关闭任务出错: {e}")
-        finally:
-            # Restore signal handler and cancel alarm
-            signal.alarm(0)
-            signal.signal(signal.SIGALRM, old_handler)
-
+    # ------------------------------------------------------------------
+    # Lifecycle management
+    # ------------------------------------------------------------------
     @asynccontextmanager
     async def lifespan(self, app: FastAPI):
-        """FastAPI lifespan context manager.
-        
-        Handles startup and shutdown events for the FastAPI application.
-        Ensures proper initialization and cleanup of browser resources.
-        
-        Args:
-            app (FastAPI): The FastAPI application instance
-        """
-        # Startup logic
-        logger.info("FastAPI lifespan: Startup event triggered.")
-        await run_in_threadpool(self._startup_sync)
-        
-        yield
-        # Shutdown logic
-        logger.info("FastAPI lifespan: Shutdown event triggered.")
-        await run_in_threadpool(self._shutdown_sync)
+        await self._startup_async()
+        try:
+            yield
+        finally:
+            await self._shutdown_async()
 
-    
+    async def _startup_async(self) -> None:
+        if self.playwright:
+            return
+        logger.info("正在初始化 Playwright (async)...")
+        self.playwright = await async_playwright().start()
+        await self.start_browser()
+        self.startup_complete.set()
+        logger.info("Playwright 初始化完成。")
 
-    def _ensure_page(self):
-        """Get the prefered page from the context.
-        
-        Returns:
-            Page: The prefered page
-        """
-        visible_pages = [page for page in self.context.pages if not page.is_closed() and page.evaluate("document.visibilityState") and page.url.startswith(settings.BASE_URL)]
-        target_pages = [settings.CHAT_URL, settings.RECOMMEND_URL]
-        prefered_pages = [page for page in visible_pages if page.url in target_pages]
-        page = prefered_pages[0] if prefered_pages else self.context.new_page()
-        if settings.BASE_URL not in page.url:
-            logger.info("导航到聊天页面...")
-            self.page.goto(settings.CHAT_URL, wait_until="domcontentloaded", timeout=3000)
-        return page
-
-    def start_browser(self):
-        """Launch a persistent browser context with recovery.
-        
-        Connects to an external Chrome instance via CDP and sets up
-        the browser context for automation. Configures event listeners
-        and navigates to the chat page.
-        """
-        logger.info("正在启动持久化浏览器会话...")
+    async def start_browser(self) -> None:
+        if not self.playwright:
+            raise RuntimeError("Playwright 未初始化")
         user_data_dir = os.path.join(tempfile.gettempdir(), "bosszhipin_playwright_user_data")
-        logger.info(f"使用用户数据目录: {user_data_dir}")
+        os.makedirs(user_data_dir, exist_ok=True)
+        logger.info("连接 Chrome CDP: %s", settings.CDP_URL)
+        self.browser = await self.playwright.chromium.connect_over_cdp(settings.CDP_URL)
+        self.context = self.browser.contexts[0] if self.browser.contexts else await self.browser.new_context()
+        self.page = await self._ensure_page()
+        logger.info("持久化浏览器会话已建立。")
 
-        if not getattr(self, 'playwright', None):
-            logger.info("Playwright尚未初始化，正在启动...")
-            self.playwright = sync_playwright().start()
-
-        logger.info(f"尝试通过CDP连接浏览器: {settings.CDP_URL}")
-        browser = self.playwright.chromium.connect_over_cdp(settings.CDP_URL)
-        self.context = browser.contexts[0] if browser.contexts else browser.new_context()
-
-        ''' get prefered page '''
-        self.page = self._ensure_page()
-
-        logger.info("持久化浏览器会话启动成功！")
-        
-            
-    def save_login_state(self):
-        """Save current login state to storage.
-        
-        Persists browser context state including cookies and session data
-        to enable login persistence across service restarts.
-        
-        Returns:
-            bool: True if login state was saved successfully
-        """
-        os.makedirs(os.path.dirname(settings.STORAGE_STATE), exist_ok=True)
-        
-        context = self.page.context
-        context.storage_state(path=settings.STORAGE_STATE)
-        
-        logger.info(f"登录状态已保存到: {settings.STORAGE_STATE}")
-        
-        self.is_logged_in = True
-        logger.info("用户登录状态已确认并保存")
-        return True
-    
-    
-    
-    def _graceful_shutdown(self):
-        """Gracefully shut down Playwright resources.
-        
-        Performs cleanup of browser contexts and Playwright instances.
-        For CDP-attached browsers, only detaches listeners without closing
-        the shared browser context.
-        """
-        logger.info("执行优雅关闭...")
-        
-        # Force release browser lock to prevent deadlock
+    async def _shutdown_async(self) -> None:
+        logger.info("正在关闭 Playwright...")
         try:
-            if hasattr(self, 'browser_lock') and self.browser_lock.locked():
-                logger.warning("强制释放浏览器锁...")
-                # Try to acquire and release the lock
-                if self.browser_lock.acquire(blocking=False):
-                    self.browser_lock.release()
-                else:
-                    logger.warning("无法获取浏览器锁，可能存在死锁")
-        except Exception as e:
-            logger.warning(f"释放浏览器锁时出错: {e}")
-        
-        # Clean up Playwright resources with timeout
+            if self.context:
+                await self.context.storage_state(path=settings.STORAGE_STATE)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("保存 storage_state 失败: %s", exc)
         try:
-            if hasattr(self, 'context') and self.context:
-                logger.info("清理浏览器上下文...")
-                # Don't close context for CDP-attached browsers
-                pass
-        except Exception as e:
-            logger.warning(f"清理浏览器上下文时出错: {e}")
-        
-        try:
-            if hasattr(self, 'playwright') and self.playwright:
-                logger.info("停止Playwright...")
-                self.playwright.stop()
-                logger.info("Playwright已停止。")
-        except Exception as e:
-            logger.warning(f"停止Playwright时出错: {e}")
-        
-        # Clear references
+            if self.browser:
+                await self.browser.close()
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("关闭浏览器失败（忽略）: %s", exc)
+        if self.playwright:
+            await self.playwright.stop()
+        self.browser = None
         self.context = None
         self.page = None
         self.playwright = None
-        logger.info("Playwright资源已清理")
-    
-
-    def _ensure_browser_session(self, max_wait_time=600):
-        """Ensure browser session and login status.
-        
-        Verifies that browser context and page are available, and that
-        the user is logged in. Handles session recovery and login verification
-        with configurable timeout.
-        
-        Thread-safe: Uses browser_lock to prevent concurrent access to Playwright
-        resources from multiple FastAPI request handlers.
-        
-        Args:
-            max_wait_time (int): Maximum time to wait for login (seconds)
-            
-        Raises:
-            Exception: If login timeout is exceeded
-        """
-        with self.browser_lock:
-            return self._ensure_browser_session_locked(max_wait_time)
-    
-    def _ensure_browser_session_locked(self, max_wait_time=600):
-        """Internal implementation of _ensure_browser_session, called with lock held.
-        
-        DO NOT call this method directly - always use _ensure_browser_session() instead.
-        """
-        if not self.context:
-            logger.warning("浏览器Context不存在，将重新启动。")
-            self.start_browser()
-            return
-
-        # Check if we need to sync with browser's active page
-        if not self.page or \
-        self.page.is_closed() or \
-        self.page.url not in [settings.CHAT_URL, settings.RECOMMEND_URL] or \
-        self.page.evaluate("document.visibilityState") == "hidden":
-            # Page doesn't exist, find or create one
-            self.page = self._ensure_page()
-
-        # Check if page is still valid without causing errors
+        self.is_logged_in = False
+        logger.info("Playwright 已停止。")
         try:
-            _ = self.page.title()
-        except Exception as e:
-            # Check for greenlet errors which indicate thread corruption
-            error_str = str(e).lower()
-            if 'greenlet' in error_str or 'thread' in error_str:
-                logger.error(f"Greenlet/thread error detected, clearing context: {e}")
-                # For greenlet errors, simply clear the context and let next request restart
-                try:
-                    if hasattr(self, 'playwright') and self.playwright:
-                        try:
-                            self.playwright.stop()
-                        except:
-                            pass  # Already stopped or corrupted
-                        self.playwright = None
-                    self.page = None
-                    self.context = None
-                except:
-                    pass
-                # Raise error immediately - next request will see context=None and restart
-                raise RuntimeError("Browser session corrupted, please retry in a moment")
-            
-            # For other errors, try to recreate just the page
-            logger.warning(f"Page context lost ({type(e).__name__}), recreating page...")
-            try:
-                self.page = self.context.new_page()
-                self.page.goto(settings.CHAT_URL, wait_until="domcontentloaded", timeout=10000)
-                self.page.wait_for_load_state("networkidle", timeout=5000)
-            except Exception as e2:
-                logger.error(f"Failed to recreate page: {e2}")
-                # If page recreation also fails, restart entire browser
-                self.start_browser()
-                return
+            await run_in_threadpool(self.assistant_actions.stop_scheduler)
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------
+    # Browser/session helpers
+    # ------------------------------------------------------------------
+    async def _ensure_page(self) -> Page:
+        if not self.context:
+            raise RuntimeError("浏览器上下文不存在")
+        target_pages = {settings.CHAT_URL, settings.RECOMMEND_URL}
+        candidate: Optional[Page] = None
+        for existing in self.context.pages:
+            if existing.is_closed():
+                continue
+            if existing.url in target_pages or existing.url.startswith(settings.BASE_URL):
+                candidate = existing
+                break
+        if not candidate:
+            candidate = await self.context.new_page()
+        if settings.BASE_URL not in candidate.url:
+            await candidate.goto(settings.CHAT_URL, wait_until="domcontentloaded", timeout=20000)
+        return candidate
+
+    async def save_login_state(self) -> None:
+        if not self.context:
+            return
+        os.makedirs(os.path.dirname(settings.STORAGE_STATE), exist_ok=True)
+        await self.context.storage_state(path=settings.STORAGE_STATE)
+        logger.info("登录状态已保存: %s", settings.STORAGE_STATE)
+        self.is_logged_in = True
+
+    async def _ensure_browser_session(self, max_wait_time: int = 600) -> Page:
+        async with self.browser_lock:
+            return await self._ensure_browser_session_locked(max_wait_time)
+
+    async def _ensure_browser_session_locked(self, max_wait_time: int = 600) -> Page:
+        if not self.playwright:
+            await self._startup_async()
+        if not self.context or not self.browser:
+            await self.start_browser()
+        if not self.page or self.page.is_closed():
+            self.page = await self._ensure_page()
+
+        page = self.page
+        try:
+            await page.wait_for_load_state("domcontentloaded", timeout=15000)
+        except Exception:
+            pass
 
         if not self.is_logged_in:
-            logger.info("正在检查登录状态...")
-            
-            if settings.BASE_URL in self.page.url and "加载中" not in self.page.content():
-                page_text = self.page.locator("body").inner_text()
-                login_indicators = ["消息", "聊天", "对话", "沟通", "候选人", "简历", "打招呼"]
-                if any(indicator in page_text for indicator in login_indicators):
-                    self.is_logged_in = True
-                    self.save_login_state()
-                    logger.info("已在聊天页面，登录状态确认。")
-                    return
-                
-                conversation_elements = self.page.locator("xpath=//li[contains(@class, 'conversation') or contains(@class, 'chat') or contains(@class, 'item')]")
-                if conversation_elements.count() > 0:
-                    self.is_logged_in = True
-                    self.save_login_state()
-                    logger.info("检测到对话列表，登录状态确认。")
-                    return
-            
-            self.page.wait_for_load_state("networkidle", timeout=5000)
-            current_url = self.page.url
-            
-            if settings.LOGIN_URL in current_url or "web/user" in current_url or "login" in current_url.lower() or "bticket" in current_url:
-                logger.warning("检测到登录页面，请手动完成登录...")
-                logger.info("等待用户登录，最多等待10分钟...")
-                
-                start_time = time.time()
-                while time.time() - start_time < max_wait_time:
-                    current_url = self.page.url
-                    page_text = self.page.locator("body").inner_text()
-                    
-                    if (settings.CHAT_URL in current_url or 
-                        any(keyword in page_text for keyword in ["消息", "沟通", "聊天", "候选人", "简历"])):
-                        logger.info("检测到用户已登录！")
-                        break
-                    
-                    if "登录" in page_text and ("立即登录" in page_text or "登录/注册" in page_text):
-                        logger.info("请在浏览器中完成登录...")
-                    
-                    elapsed = time.time() - start_time
-                    remaining = max_wait_time - elapsed
-                    minutes = int(remaining // 60)
-                    seconds = int(remaining % 60)
-                    print(f"\r⏰ 等待登录中... 剩余时间: {minutes:02d}:{seconds:02d}", end="", flush=True)
-                    
-                    time.sleep(3)
-                
-                print("\r" + " " * 50 + "\r", end="", flush=True)
-                
-                if not self.is_logged_in:
-                    raise Exception("等待登录超时，请手动登录后重试")
-            else:
-                logger.info("等待聊天页面加载...")
-                self.page.wait_for_url(
-                    settings.BASE_URL,
-                    timeout=6000, # 10 minutes
-                )
-            
-            self.page.wait_for_function(
-                "() => !document.body.innerText.includes('加载中，请稍候')",
-                timeout=30000
-            )
-            self.is_logged_in = True
-            self.save_login_state()
-            logger.info("登录成功并已在聊天页面。")
+            await self._verify_login(page, max_wait_time=max_wait_time)
+        return page
 
-
-    
-    def _shutdown_thread(self, keep_browser=False):
-        """Run graceful shutdown in a separate thread to avoid blocking.
-        
-        Args:
-            keep_browser (bool): Whether to keep browser session alive
-        """
-        logger.info(f"在单独的线程中执行关闭(keep_browser={keep_browser})...")
-        self._graceful_shutdown()
-
-#------------------------------------------------------------------------------------------------
-#                   API Routes
-#------------------------------------------------------------------------------------------------
-    def setup_routes(self):
-        """设置API路由
-        
-        Configures all FastAPI routes and endpoints for the Boss直聘 service.
-        Includes endpoints for candidates, messages, resumes, and other operations.
-        """
-        
-
-        @self.app.get('/status')
-        def get_status():
-            """Get service status and login state.
-            
-            Returns:
-                Service status including login state and notification count
-            """
-            self._ensure_browser_session()
-            chat_stats = get_chat_stats_action(self.page)
-            return {
-                'status': 'running',
-                'logged_in': self.is_logged_in,
-                'timestamp': datetime.now().isoformat(),
-                'new_message_count': chat_stats.get('new_message_count', 0), 
-                'new_greet_count': chat_stats.get('new_greet_count', 0)
-            }
-        
-        
-        @self.app.post('/login')
-        def login():
-            """Check login status.
-            
-            Returns:
-                Login status and success message
-            """
-            self._ensure_browser_session()
-            return self.is_logged_in
-        
-        
-        
-        @self.app.get('/chat/dialogs')
-        def get_messages(limit: int = Query(10, ge=1, le=100)):
-            """Get list of chat dialogs/messages.
-            
-            Args:
-                limit (int): Maximum number of messages to return (1-100)
-                
-            Returns:
-                List of messages with count and timestamp
-            """
-            self._ensure_browser_session()
-
-            messages = get_chat_list_action(self.page, limit)
-            return messages
-
-        @self.app.get('/recommend/candidates')
-        def get_recommended_candidates(limit: int = Query(20, ge=1, le=100)):
-            """Get list of recommended candidates.
-            
-            Args:
-                limit (int): Maximum number of candidates to return (1-100)
-                
-            Returns:
-                List of recommended candidates with success status
-            """
-            self._ensure_browser_session()
-            result = list_recommended_candidates_action(self.page, limit=limit)
-
-            candidates = result.get('candidates', [])
-            return candidates
-
-        @self.app.get('/recommend/candidate/{index}/resume')
-        def view_recommended_candidate_resume(index: int):
-            """View resume of a recommended candidate by index.
-            
-            Args:
-                index (int): Index of the candidate in the recommended list
-                
-            Returns:
-                Candidate resume information
-            """
-            self._ensure_browser_session()
-            result = view_recommend_candidate_resume_action(self.page, index)
-            return result
-
-        @self.app.post('/recommend/candidate/{index}/greet')
-        def greet_recommended_candidate(index: int, payload: dict | None = Body(default=None)):
-            """Send greeting message to recommended candidate by index."""
-            self._ensure_browser_session()
-            message = (payload or {}).get('message') or DEFAULT_GREET_MESSAGE
-            result = greet_recommend_candidate_action(self.page, index, message)
-            return result
-        
-        @self.app.post('/chat/generate-greeting-message')
-        def generate_greeting_message(
-            candidate_name: str = Body(None, embed=True),
-            candidate_title: str = Body(None, embed=True),
-            candidate_summary: str = Body(None, embed=True),
-            candidate_resume: str = Body(..., embed=True),
-            job_info: dict = Body(..., embed=True),
-        ):
-            """
-            Generate a personalized AI-powered greeting message for a recommended candidate.
-
-            This endpoint receives candidate and job information as named parameters, invokes the AI assistant to generate
-            a professional and friendly greeting message tailored to the candidate and job context,
-            and returns the generated message.
-
-            Args:
-                index (int): Index of the candidate in the recommended list.
-                candidate_name (str, optional): Name of the candidate.
-                candidate_title (str, optional): Current job title of the candidate.
-                candidate_summary (str, optional): Brief summary of candidate's background.
-                candidate_resume (str): Full resume text of the candidate.
-                job_info (dict): Job information containing title, company_description, target_profile.
-
-            Returns:
-                {
-                    'success': bool,           # Whether greeting was generated successfully
-                    'greeting': str,           # The generated greeting message
-                    'timestamp': str,          # ISO timestamp of response
-                    'error': str (optional)    # Error message if generation failed
-                }
-            """
-            # Generate greeting using AI
-            greeting = self.assistant_actions.generate_greeting_message(
-                candidate_name=candidate_name,
-                candidate_title=candidate_title,
-                candidate_summary=candidate_summary,
-                candidate_resume=candidate_resume,
-                job_info=job_info,
-            )
-            
-            return greeting
-
-        @self.app.post('/recommend/select-job')
-        def select_recommend_job(job_title: str = Body(..., embed=True)):
-            """Select current job from dropdown menu.
-            
-            Args:
-                payload: Dictionary containing 'job_title' key
-                
-            Returns:
-                Selection result with success status and details
-            """
-            self._ensure_browser_session()
-            frame = _prepare_recommendation_page(self.page)
-            result = select_recommend_job_action(frame, job_title)
-            return result
-            
-
-        '''
-        Automation Scheduler Endpoints
-        '''
-        @self.app.get('/automation/scheduler/status')
-        def scheduler_status():
-            return assistant_actions.get_scheduler_status()
-
-        @self.app.post('/automation/scheduler/start')
-        def scheduler_start(payload: dict | None = Body(default=None)):
-            success, details = assistant_actions.start_scheduler(payload or {})
-            status = assistant_actions.get_scheduler_status()
-            status.update({'success': success, 'details': details})
-            return status
-
-        @self.app.post('/automation/scheduler/stop')
-        def scheduler_stop():
-            success, details = assistant_actions.stop_scheduler()
-            status = assistant_actions.get_scheduler_status()
-            status.update({'success': success, 'details': details})
-            return status
-
-        '''
-        Chat Endpoints
-        '''
-        @self.app.get('/chat/stats')
-        def get_chat_stats():
-            result = get_chat_stats_action(self.page)
-            return result
-
-
-        @self.app.post('/chat/{chat_id}/greet')
-        def greet_candidate(chat_id: str, message: str | None = Body(default=None)):
-            """Send a greeting message to a candidate.
-            
-            Args:
-                chat_id (str): ID of the chat/conversation
-                message (str, optional): Custom greeting message. Defaults to standard greeting.
-                
-            Returns:
-                Success status and message
-            """
-            result = self.send_greeting(chat_id, message)
-            return result
-        
-
-        @self.app.post('/chat/{chat_id}/send')
-        def send_message_api(chat_id: str, message: str = Body(..., embed=True)):
-            """Send a text message to a specific conversation.
-            
-            Args:
-                chat_id (str): ID of the chat/conversation
-                message (str): Message content to send
-                
-            Returns:
-                Success status and details
-            """
-            self._ensure_browser_session()
-
-            result = send_message_action(self.page, chat_id, message)
-            return result
-
-        @self.app.get('/chat/{chat_id}/messages')
-        def get_message_history(chat_id: str):
-            """Get chat history for a specific conversation.
-            
-            Args:
-                chat_id (str): ID of the chat/conversation
-                
-            Returns:
-                Chat history with message count
-            """
-            self._ensure_browser_session()
-
-            history = get_chat_history_action(self.page, chat_id)
-            return history
-
-
-        @self.app.post('/chat/select-job')
-        def select_chat_job(job_title: str = Body(..., embed=True)):
-            """Select job for a specific conversation.
-            
-            Args:
-                job_title (str): Title of the job to select
-                
-            Returns:
-                Selection result with success status and details
-            """
-            self._ensure_browser_session()
-            result = select_chat_job_action(self.page, job_title)
-            return result
-
-        '''
-        Resume Endpoints
-        '''
-        @self.app.post('/resume/request')
-        def request_resume_api(chat_id: str = Body(..., embed=True)):
-            """Request resume from a candidate.
-            
-            Args:
-                chat_id (str): ID of the chat/conversation
-                
-            Returns:
-                Success status and details
-            """
-            self._ensure_browser_session()
-
-            result = request_resume_action(self.page, chat_id)
-            return result
-
-
-        @self.app.post('/resume/view_full')
-        def view_full_resume(chat_id: str = Body(..., embed=True)):
-            """View candidate's attached resume.
-            
-            Args:
-                chat_id (str): ID of the chat/conversation
-                
-            Returns:
-                Resume viewing result
-            """
-            self._ensure_browser_session()
-
-            result = view_full_resume_action(self.page, chat_id)
-            return result
-
-        @self.app.post('/resume/check_full')
-        def check_full_resume(chat_id: str = Body(..., embed=True)):
-            """Check if full resume is available without retrieving content."""
-            self._ensure_browser_session()
-            result = check_full_resume_available(self.page, chat_id)
-            if result is None:
+    async def _verify_login(self, page: Page, max_wait_time: int = 600) -> None:
+        async def _page_contains_keywords() -> bool:
+            try:
+                body_text = await page.inner_text("body")
+                keywords = ["消息", "聊天", "对话", "候选人", "简历", "打招呼"]
+                return any(keyword in body_text for keyword in keywords)
+            except Exception:
                 return False
-            return result.get('success', False)
 
-        @self.app.post('/resume/online')
-        def view_online_resume_api(chat_id: str = Body(..., embed=True)):
-            """View online resume and return canvas image base64 data.
-            
-            Opens the conversation and views the online resume, capturing
-            canvas content and returning base64 encoded image data.
-            
-            Args:
-                chat_id (str): ID of the chat/conversation
-                
-            Returns:
-                Resume data including text, HTML, images, and metadata
-            """
-            # 会话与登录
-            self._ensure_browser_session()
+        try:
+            if await _page_contains_keywords():
+                await self.save_login_state()
+                return
+        except Exception:
+            pass
 
-            result = view_online_resume_action(self.page, chat_id)
-            return result
+        start = asyncio.get_event_loop().time()
+        while asyncio.get_event_loop().time() - start < max_wait_time:
+            current_url = page.url
+            if settings.CHAT_URL in current_url and await _page_contains_keywords():
+                await self.save_login_state()
+                logger.info("检测到登录成功。")
+                return
+            if any(token in current_url.lower() for token in ("login", "web/user", "bticket")):
+                logger.info("等待用户在浏览器中完成登录...")
+            await asyncio.sleep(3)
+        raise TimeoutError("等待登录超时，请在浏览器中完成登录后重试")
 
-        @self.app.post('/resume/accept')
-        def accept_resume_api(chat_id: str = Body(..., embed=True)):
-            """Accept a candidate by clicking "接受" button.
-            
-            Args:
-                chat_id (str): ID of the chat/conversation
-                
-            Returns:
-                Success status and details
-            """
-            self._ensure_browser_session()
-            
-            result = accept_resume_action(self.page, chat_id)
-            return result
+    async def soft_restart(self) -> None:
+        async with self.browser_lock:
+            await self._shutdown_async()
+            await self._startup_async()
 
-        '''
-        Candidate Endpoints
-        '''
+    # ------------------------------------------------------------------
+    # FastAPI routes
+    # ------------------------------------------------------------------
+    def setup_routes(self) -> None:
+        @self.app.get("/status")
+        async def get_status():
+            page = await self._ensure_browser_session()
+            stats = await get_chat_stats_action(page)
+            return {
+                "status": "running",
+                "logged_in": self.is_logged_in,
+                "timestamp": datetime.now().isoformat(),
+                "new_message_count": stats.get("new_message_count", 0),
+                "new_greet_count": stats.get("new_greet_count", 0),
+            }
 
-        @self.app.post('/candidate/discard')
-        def discard_candidate_api(chat_id: str = Body(..., embed=True)):
-            """Discard a candidate by clicking "不合适" button.
-            
-            Args:
-                chat_id (str): ID of the chat/conversation
-                
-            Returns:
-                Success status and details
-            """
-            self._ensure_browser_session()
+        @self.app.post("/login")
+        async def login():
+            await self._ensure_browser_session()
+            return self.is_logged_in
 
-            result = discard_candidate_action(self.page, chat_id)
-            return result
+        @self.app.get("/chat/dialogs")
+        async def get_messages(limit: int = Query(10, ge=1, le=100)):
+            page = await self._ensure_browser_session()
+            return await get_chat_list_action(page, limit)
 
-        
-        '''
-        Assistant Actions Endpoints
-        '''
-        @self.app.post('/assistant/analyze-candidate')
-        def analyze_candidate_api(payload: dict = Body(...)):
-            """Analyze candidate using assistant actions.
-            
-            Args:
-                payload: Dictionary containing candidate_id and context information
-                
-            Returns:
-                Analysis results with scoring
-            """
-            
-            
-            result = self.assistant_actions.analyze_candidate(
-                job_info = payload.get('job_info', {}),
-                candidate_resume = payload.get('candidate_resume', ''),
-                candidate_summary = payload.get('candidate_summary', ''),
-                chat_history = payload.get('chat_history', {})
+        @self.app.get("/chat/{chat_id}/messages")
+        async def get_message_history(chat_id: str):
+            page = await self._ensure_browser_session()
+            return await get_chat_history_action(page, chat_id)
+
+        @self.app.post("/chat/send")
+        async def send_message_api(chat_id: str = Body(..., embed=True), message: str = Body(..., embed=True)):
+            page = await self._ensure_browser_session()
+            return await send_message_action(page, chat_id, message)
+
+        @self.app.post("/chat/greet")
+        async def greet_candidate(chat_id: str = Body(..., embed=True), message: Optional[str] = Body(None, embed=True)):
+            page = await self._ensure_browser_session()
+            payload = await send_message_action(page, chat_id, (message or DEFAULT_GREET_MESSAGE).strip())
+            return payload
+
+        @self.app.post("/chat/select-job")
+        async def select_chat_job(job_title: str = Body(..., embed=True)):
+            page = await self._ensure_browser_session()
+            return await select_chat_job_action(page, job_title)
+
+        @self.app.get("/chat/stats")
+        async def get_chat_stats():
+            page = await self._ensure_browser_session()
+            return await get_chat_stats_action(page)
+
+        @self.app.post("/resume/request")
+        async def request_resume_api(chat_id: str = Body(..., embed=True)):
+            page = await self._ensure_browser_session()
+            return await request_resume_action(page, chat_id)
+
+        @self.app.post("/resume/view_full")
+        async def view_full_resume(chat_id: str = Body(..., embed=True)):
+            page = await self._ensure_browser_session()
+            return await view_full_resume_action(page, chat_id)
+
+        @self.app.post("/resume/check_full")
+        async def check_full_resume(chat_id: str = Body(..., embed=True)):
+            page = await self._ensure_browser_session()
+            result = await check_full_resume_available(page, chat_id)
+            if isinstance(result, dict):
+                return result.get("success", False)
+            return bool(result)
+
+        @self.app.post("/resume/online")
+        async def view_online_resume_api(chat_id: str = Body(..., embed=True)):
+            page = await self._ensure_browser_session()
+            return await view_online_resume_action(page, chat_id)
+
+        @self.app.post("/resume/accept")
+        async def accept_resume_api(chat_id: str = Body(..., embed=True)):
+            page = await self._ensure_browser_session()
+            return await accept_resume_action(page, chat_id)
+
+        @self.app.post("/candidate/discard")
+        async def discard_candidate_api(chat_id: str = Body(..., embed=True)):
+            page = await self._ensure_browser_session()
+            return await discard_candidate_action(page, chat_id)
+
+        @self.app.get("/recommend/candidates")
+        async def get_recommended_candidates(limit: int = Query(20, ge=1, le=100)):
+            page = await self._ensure_browser_session()
+            result = await list_recommended_candidates_action(page, limit=limit)
+            return result.get("candidates", [])
+
+        @self.app.get("/recommend/candidate/{index}/resume")
+        async def view_recommended_candidate_resume(index: int):
+            page = await self._ensure_browser_session()
+            return await view_recommend_candidate_resume_action(page, index)
+
+        @self.app.post("/recommend/candidate/{index}/greet")
+        async def greet_recommended_candidate(index: int, payload: Optional[dict] = Body(default=None)):
+            page = await self._ensure_browser_session()
+            message = (payload or {}).get("message") or DEFAULT_GREET_MESSAGE
+            return await greet_recommend_candidate_action(page, index, message)
+
+        @self.app.post("/recommend/select-job")
+        async def select_recommend_job(job_title: str = Body(..., embed=True)):
+            page = await self._ensure_browser_session()
+            frame = await _prepare_recommendation_page(page)
+            return await select_recommend_job_action(frame, job_title)
+
+        # Scheduler
+        @self.app.get("/automation/scheduler/status")
+        async def scheduler_status():
+            return await run_in_threadpool(self.assistant_actions.get_scheduler_status)
+
+        @self.app.post("/automation/scheduler/start")
+        async def scheduler_start(payload: Optional[dict] = Body(default=None)):
+            success, details = await run_in_threadpool(self.assistant_actions.start_scheduler, payload or {})
+            status = await run_in_threadpool(self.assistant_actions.get_scheduler_status)
+            status.update({"success": success, "details": details})
+            return status
+
+        @self.app.post("/automation/scheduler/stop")
+        async def scheduler_stop():
+            success, details = await run_in_threadpool(self.assistant_actions.stop_scheduler)
+            return {"success": success, "details": details}
+
+        # Assistant QA endpoints
+        @self.app.post("/assistant/analyze-candidate")
+        async def analyze_candidate_api(payload: dict = Body(...)):
+            return await run_in_threadpool(self.assistant_actions.analyze_candidate, **payload)
+
+        @self.app.post("/assistant/generate-followup")
+        async def generate_followup_api(
+            chat_id: str = Body(..., embed=True),
+            prompt: str = Body(..., embed=True),
+            chat_history: List[Dict[str, Any]] = Body(default_factory=list, embed=True),
+            assistant_id: Optional[str] = Body(None, embed=True),
+            candidate_resume: str = Body(..., embed=True),
+            candidate_summary: Optional[str] = Body(None, embed=True),
+            job_info: dict = Body(..., embed=True),
+            analysis: dict = Body(..., embed=True),
+            purpose: str = Body("chat", embed=True),
+        ):
+            return await run_in_threadpool(
+                self.assistant_actions.generate_message,
+                prompt,
+                chat_history,
+                job_info,
+                assistant_id=assistant_id,
+                chat_id=chat_id,
+                candidate_resume=candidate_resume,
+                candidate_summary=candidate_summary,
+                analysis=analysis,
+                purpose=purpose,
             )
-            return result
 
-        @self.app.post('/assistant/generate-followup')
-        def generate_followup_api(payload: dict = Body(...)):
-            """Generate followup message using assistant actions.
-            
-            Args:
-                payload: Dictionary containing chat_id, prompt, and context
-                
-            Returns:
-                Generated followup message
-            """
-            chat_id = payload.get('chat_id')
-            prompt = payload.get('prompt', '')
-            context = payload.get('context', {})
-            result = self.assistant_actions.generate_followup_message(chat_id, prompt=prompt, context=context)
-            return result
-
-        @self.app.post('/assistant/upsert-candidate')
-        def upsert_candidate_api(
+        @self.app.post("/assistant/upsert-candidate")
+        async def upsert_candidate_api(
             candidate_id: Optional[str] = Body(None),
             chat_id: Optional[str] = Body(None),
             name: Optional[str] = Body(None),
@@ -837,27 +370,11 @@ class BossService:
             scores: Optional[Dict[str, Any]] = Body(None),
             metadata_extra: Optional[Dict[str, Any]] = Body(None),
         ):
-            """Upsert candidate information using assistant actions.
-            
-            Args:
-                candidate_id: Candidate ID (alternative to chat_id)
-                chat_id: Chat ID (alternative to candidate_id)
-                name: Candidate name
-                job_applied: Job position applied for
-                last_message: Last message from candidate
-                resume_text: Resume text content
-                scores: Scoring results
-                metadata_extra: Additional metadata
-                
-            Returns:
-                Success status
-            """
-            # Use candidate_id or chat_id
             final_candidate_id = candidate_id or chat_id
             if not final_candidate_id:
-                return False
-            
-            success = self.assistant_actions.upsert_candidate(
+                return {"success": False, "details": "缺少候选人标识"}
+            success = await run_in_threadpool(
+                self.assistant_actions.upsert_candidate,
                 candidate_id=final_candidate_id,
                 name=name,
                 job_applied=job_applied,
@@ -866,205 +383,96 @@ class BossService:
                 scores=scores,
                 metadata_extra=metadata_extra,
             )
-            
-            return success
+            return {"success": success}
 
-        @self.app.post('/assistant/retrieve-answers')
-        def retrieve_answers_api(payload: dict = Body(...)):
-            """Retrieve relevant answers using assistant actions.
-            
-            Args:
-                payload: Dictionary containing query
-                
-            Returns:
-                Retrieved answers
-            """
-            query = payload.get('query', '')
-            results = self.assistant_actions.retrieve_relevant_answers(query)
-            return results
+        @self.app.post("/assistant/retrieve-answers")
+        async def retrieve_answers_api(payload: dict = Body(...)):
+            query = payload.get("query", "")
+            return await run_in_threadpool(self.assistant_actions.retrieve_relevant_answers, query)
 
-        @self.app.get('/assistant/list-entries')
-        def list_entries_api(limit: int = Query(100, ge=1, le=1000)):
-            """List QA entries using assistant actions.
-            
-            Args:
-                limit: Maximum number of entries to return
-                
-            Returns:
-                List of entries
-            """
-            entries = self.assistant_actions.list_entries(limit=limit)
-            return entries
+        @self.app.get("/assistant/list-entries")
+        async def list_entries_api(limit: int = Query(100, ge=1, le=1000)):
+            return await run_in_threadpool(self.assistant_actions.list_entries, limit)
 
-        @self.app.post('/assistant/record-qa')
-        def record_qa_api(payload: dict = Body(...)):
-            """Record QA entry using assistant actions.
-            
-            Args:
-                payload: Dictionary containing QA information
-                
-            Returns:
-                Success status
-            """
-            result = self.assistant_actions.record_qa(**payload)
+        @self.app.post("/assistant/record-qa")
+        async def record_qa_api(payload: dict = Body(...)):
+            await run_in_threadpool(self.assistant_actions.record_qa, **payload)
             return True
 
-        @self.app.post('/assistant/delete-entry')
-        def delete_entry_api(payload: dict = Body(...)):
-            """Delete QA entry using assistant actions.
-            
-            Args:
-                payload: Dictionary containing entry ID
-                
-            Returns:
-                Success status
-            """
-            entry_id = payload.get('entry_id')
-            result = self.assistant_actions.delete_entry(entry_id)
-            return result
+        @self.app.post("/assistant/delete-entry")
+        async def delete_entry_api(payload: dict = Body(...)):
+            entry_id = payload.get("entry_id")
+            return await run_in_threadpool(self.assistant_actions.delete_entry, entry_id)
 
-        @self.app.get('/assistant/generate-id')
-        def generate_id_api():
-            """Generate unique ID using assistant actions.
-            
-            Returns:
-                Generated ID
-            """
-            qa_id = self.assistant_actions.generate_id()
-            return qa_id
+        @self.app.get("/assistant/generate-id")
+        async def generate_id_api():
+            return await run_in_threadpool(self.assistant_actions.generate_id)
 
-        # OpenAI Assistant Management Endpoints
-        @self.app.get('/assistant/list')
-        def list_assistants_api():
-            """List OpenAI assistants.
-            """
-            assistants = assistant_actions.get_assistants()
+        @self.app.get("/assistant/list")
+        async def list_assistants_api():
+            assistants = await run_in_threadpool(self.assistant_actions.get_assistants)
             return [assistant.model_dump() for assistant in assistants.data]
 
-        @self.app.post('/assistant/create')
-        def create_assistant_api(payload: dict = Body(...)):
-            """Create OpenAI assistant.
-            
-            Args:
-                payload: Dictionary containing assistant information
-                
-            Returns:
-                JSONResponse: Created assistant
-            """
-            assistant = self.assistant_actions.client.beta.assistants.create(**payload)
+        @self.app.post("/assistant/create")
+        async def create_assistant_api(payload: dict = Body(...)):
+            assistant = await run_in_threadpool(
+                self.assistant_actions.client.beta.assistants.create,
+                **payload,
+            )
             return assistant.model_dump()
 
-        @self.app.post('/assistant/update/{assistant_id}')
-        def update_assistant_api(assistant_id: str, payload: dict = Body(...)):
-            """Update OpenAI assistant.
-            
-            Args:
-                assistant_id: Assistant ID
-                payload: Dictionary containing update information
-                
-            Returns:
-                JSONResponse: Updated assistant
-            """
-
-            assistant = self.assistant_actions.client.beta.assistants.update(
-                assistant_id=assistant_id,
-                **payload
+        @self.app.post("/assistant/update/{assistant_id}")
+        async def update_assistant_api(assistant_id: str, payload: dict = Body(...)):
+            assistant = await run_in_threadpool(
+                self.assistant_actions.client.beta.assistants.update,
+                assistant_id,
+                **payload,
             )
             self.assistant_actions.get_assistants.cache_clear()
             return assistant.model_dump()
 
-
-        @self.app.delete('/assistant/delete/{assistant_id}')
-        def delete_assistant_api(assistant_id: str):
-            """Delete OpenAI assistant.
-            
-            Args:
-                assistant_id: Assistant ID
-                
-            Returns:
-                JSONResponse: Deletion result
-            """
-            self.assistant_actions.client.beta.assistants.delete(assistant_id=assistant_id)
+        @self.app.delete("/assistant/delete/{assistant_id}")
+        async def delete_assistant_api(assistant_id: str):
+            await run_in_threadpool(self.assistant_actions.client.beta.assistants.delete, assistant_id)
             self.assistant_actions.get_assistants.cache_clear()
             return True
-        '''
-        System Endpoints
-        '''
-        @self.app.post('/restart')
-        def soft_restart():
-            """Soft restart the API service while keeping browser session.
-            
-            Returns:
-                Success status and message
-            """
-            self.soft_restart()
+
+        # System / debug endpoints
+        @self.app.post("/restart")
+        async def soft_restart_endpoint():
+            await self.soft_restart()
             return True
-        
-        @self.app.get('/debug/page')
-        def debug_page():
-            """Debug endpoint - get current page content.
-            
-            Returns:
-                Page information including URL, title, content, and metadata
-            """
-            self._ensure_browser_session()
-            
-            # 等待页面完全渲染（事件驱动）
-            self.page.locator("body").wait_for(state="visible", timeout=5000)
-            self.page.wait_for_load_state("networkidle", timeout=5000)
-            
-            if not self.page or self.page.is_closed():
-                return False
-            
-            # 获取页面信息
-            full_content = self.page.content()
-            # 截取前5000个字符，避免返回过长的HTML
-            readable_content = full_content[:5000] + "..." if len(full_content) > 5000 else full_content
-            
-            page_info = {
-                'url': self.page.url,
-                'title': self.page.title(),
-                'content': readable_content,
-                'content_length': len(full_content),
-                'screenshot': None,
-                'cookies': [],
-                'local_storage': {},
-                'session_storage': {}
+
+        @self.app.get("/debug/page")
+        async def debug_page():
+            page = await self._ensure_browser_session()
+            await page.locator("body").first.wait_for(state="visible", timeout=5000)
+            await page.wait_for_load_state("networkidle", timeout=5000)
+            content = await page.content()
+            readable = content[:5000] + "..." if len(content) > 5000 else content
+            return {
+                "url": page.url,
+                "title": await page.title(),
+                "content": readable,
+                "content_length": len(content),
             }
-            
-            return page_info
-        
-        @self.app.get('/debug/cache')
-        def get_cache_stats():
-            """Get event cache statistics.
-            
-            Returns:
-                Cache statistics and performance metrics
-            """
-            stats = self.event_manager.get_cache_stats()
-            return stats
-    
+
+        @self.app.get("/debug/cache")
+        async def get_cache_stats():
+            if self.event_manager and hasattr(self.event_manager, "get_cache_stats"):
+                return self.event_manager.get_cache_stats()
+            return {}
+
+        @self.app.middleware("http")
+        async def ensure_startup(request: Request, call_next):
+            await self.startup_complete.wait()
+            return await call_next(request)
 
 
-    # def run(self, host='127.0.0.1', port=5001):
-    #     """Run the service using uvicorn (called externally).
-        
-    #     Args:
-    #         host (str): Host address to bind to
-    #         port (int): Port number to bind to
-    #     """
-    #     import uvicorn
-    #     logger.info("启动Boss直聘后台服务(FastAPI)...")
-    #     uvicorn.run("boss_service:app", host=host, port=port, reload=True, log_level="info")
-
-service = BossService()
+service = BossServiceAsync()
 app = service.app
 
 if __name__ == "__main__":
-    # host = os.environ.get("BOSS_SERVICE_HOST", "127.0.0.1")
-    # try:
-    #     port = int(os.environ.get("BOSS_SERVICE_PORT", "5001"))
-    # except Exception:
-    #     port = 5001
-    # service.run(host=host, port=port)
-    print('不应该从这里启动服务，请运行start_service.py')
+    import uvicorn
+
+    uvicorn.run("boss_service:app", host="0.0.0.0", port=5001, reload=False)
