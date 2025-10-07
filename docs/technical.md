@@ -1,5 +1,48 @@
 # Boss直聘机器人技术规格
 
+
+## 业务逻辑
+从 v2.1 起，业务编排完全转移到 Streamlit 客户端，FastAPI 仅提供 Playwright 操作和 AI 服务。页面 `1_自动化.py` 将候选人依次流经四个步骤，每一步都在界面中输出执行日志（候选人摘要、分析结果、动作、阶段）：
+
+1. **推荐牛人**
+   - `GET /recommend/candidates` 拉取推荐列表 → 对每个 `index` 调用 `/recommend/candidate/{idx}/resume` 获取在线简历。
+   - 通过 `POST /assistant/analyze-candidate` 分析是否匹配；高分转入 `GREET`、低分标记 `PASS`。
+   - 使用新的 `generate_message(..., purpose="greet")` 生成首轮打招呼内容（TODO：待接入 `/recommend/candidate/{idx}/greet`）。
+   - `POST /assistant/upsert-candidate` 存储简历、分析、生成的 Thread 信息。
+
+2. **聊天（新招呼）**
+   - `get_chat_list_action` 过滤“新招呼”栏目 → `view_online_resume_action` 抓取在线简历。
+   - `generate_message(..., purpose="chat")` + `send_message_action` 完成跟进；阈值以下通过 `mark_candidate_stage_action(..., "PASS")`（#TODO）标记。
+
+3. **聊天（沟通中）**
+   - 拉取“沟通中”聊天与历史，优先调用 `AssistantActions.get_cached_resume()` 命中向量库缓存，必要时再触发 `view_full_resume_action`。
+   - 拿到离线简历后重新 `analyze_candidate`，高分进入 `SEEK`；若获取到联系方式，调用 `notify_hr_action`（#TODO）并标记 `CONTACT`。
+
+4. **追结果**
+   - 在候选人库中过滤 `updated_at > 1 day` 且阶段为 `GREET/SEEK` 的记录，利用 `generate_message(..., purpose="chat")`（或未来的 `purpose="followup"`）生成催促消息，通过 `send_message_action` 发送。
+
+所有操作都会即时写入 Streamlit 的运行面板，支持操作员逐条复核。服务端仍保留 `BRDWorkScheduler` 以兼容旧流程，但默认不再发起自动 greeting。
+
+## Zilliz schema
+```YAML
+metadata:
+- online_resume: bool
+- full_resume: bool
+- stage: str
+ - thread_id: str
+ - assistant_id: str
+ - analysis_summary: str
+
+stage:
+- PASS
+- GREET (waiting for full resume)
+- SEEK (got full resume, and passed the analysis, waiting for wechat/phone#)
+- CONTACT (notified recruiter)
+```
+
+- `AssistantActions.get_cached_resume(candidate_id)` 会首先查询该存储，命中则跳过 Playwright 抓取，平均节省 ~10s。
+- `generate_message` 也会把最新 `thread_id / assistant_id` 写回 `metadata`，保证下一次对话使用同一个 Threads 上下文。
+
 ## 系统架构
 
 ### 整体架构

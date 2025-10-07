@@ -242,3 +242,8 @@ bosszhipin_bot/
 5. 优化简历捕获成功率
 6. 添加Web界面管理
 7. 支持多招聘平台集成
+
+## 进行中的重点事项
+- 🔄 计划将 `boss_service.py` 迁移到 Playwright 异步 API，缓解 `greenlet.error` 并提升并发稳定性。
+- 📄 迁移阶段任务详见仓库根目录 `async_migration_tasks.md`，涵盖设计原则、函数清单、测试方案与发布节奏。
+- 🛠️ 相关模块 (`src/chat_actions.py`, `src/recommendation_actions.py`, `src/boss_utils.py`) 将提供异步版本并逐步替换当前同步实现。
