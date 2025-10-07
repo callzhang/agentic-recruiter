@@ -1,63 +1,79 @@
-"""
-Shared chat utilities for navigation and element discovery.
-These helpers are side-effect free (except for Playwright interactions)
-and do not depend on BossService internals.
-"""
+"""Async Playwright helpers shared across chat and recommendation flows."""
 
 from __future__ import annotations
-from typing import Any, Optional
+
+from typing import Optional
+
+from playwright.async_api import Page
+
 from .global_logger import get_logger
+
 logger = get_logger()
 
-# used to detect resume overlay
+# selectors reused across modules
 IFRAME_OVERLAY_SELECTOR = "iframe[src*='c-resume'], iframe[name='recommendFrame']"
 RESUME_OVERLAY_SELECTOR = "div.boss-popup__wrapper"
 CLOSE_BTN = "div.boss-popup__close"
 
 
-def ensure_on_chat_page(page, settings, logger=lambda msg, level: None, timeout_ms: int = 6000) -> bool:
-    """Ensure we are on the chat page; navigate if necessary. Returns True if ok."""
-    if settings.CHAT_URL not in getattr(page, 'url', ''):
-        page.goto(settings.CHAT_URL, wait_until="domcontentloaded", timeout=timeout_ms)
-        page.wait_for_load_state("networkidle", timeout=5000)
-        return True
+async def ensure_on_chat_page(page: Page, settings, logger=logger, timeout_ms: int = 6000) -> bool:
+    """Navigate to the chat page when current URL is off target."""
+    if settings.CHAT_URL not in getattr(page, "url", ""):
+        await page.goto(settings.CHAT_URL, wait_until="domcontentloaded", timeout=timeout_ms)
+        await page.wait_for_load_state("networkidle", timeout=5000)
     return True
 
 
-def find_chat_item(page, chat_id: str):
-    """Return a locator to the chat list item for chat_id, or None if not found."""
+async def find_chat_item(page: Page, chat_id: str):
+    """Return a locator to the chat item for ``chat_id`` if present."""
     precise = page.locator(
         f"div.geek-item[id='{chat_id}'], div.geek-item[data-id='{chat_id}'], "
         f"[role='listitem'][id='{chat_id}'], [role='listitem'][data-id='{chat_id}']"
     ).first
-    if precise and precise.count() > 0:
+    if await precise.count() > 0:
         return precise
 
-    # Fallback scan
-    for sel in ["div.geek-item", "[role='listitem']"]:
-        items = page.locator(sel).all()
-        for it in items:
-            did = it.get_attribute('data-id') or it.get_attribute('id')
-            if did and chat_id and did == chat_id:
-                return it
+    for selector in ("div.geek-item", "[role='listitem']"):
+        items = page.locator(selector)
+        count = await items.count()
+        for index in range(count):
+            item = items.nth(index)
+            data_id = await item.get_attribute("data-id")
+            item_id = await item.get_attribute("id") if data_id is None else None
+            resolved = data_id or item_id
+            if resolved and resolved == chat_id:
+                return item
     return None
 
 
-def close_overlay_dialogs(page, timeout_ms: int = 1000) -> bool:
-    """Close any overlay dialogs that might be blocking the page."""
+async def close_overlay_dialogs(page: Page, timeout_ms: int = 1000) -> bool:
+    """Attempt to close blocking overlays on the current page."""
+    btn = page.locator(CLOSE_BTN)
     try:
-        # Try closing directly
-        btn = page.locator(CLOSE_BTN)
-        btn.click(timeout=timeout_ms)
-        return True
+        if await btn.count() > 0:
+            await btn.click(timeout=timeout_ms)
+            return True
     except Exception:
-        try:
-            # Try closing inside iframe
-            overlay = page.wait_for_selector(IFRAME_OVERLAY_SELECTOR, timeout=timeout_ms)
-            if iframe := overlay.content_frame():
-                btn = iframe.locator(CLOSE_BTN)
-                btn.click(timeout=timeout_ms)
-                return True
-            return False
-        except Exception:
-            return False
+        pass
+
+    try:
+        overlay = await page.wait_for_selector(IFRAME_OVERLAY_SELECTOR, timeout=timeout_ms)
+    except Exception:
+        return False
+
+    try:
+        frame = await overlay.content_frame()
+    except Exception:
+        frame = None
+
+    if frame is None:
+        return False
+
+    try:
+        iframe_btn = frame.locator(CLOSE_BTN)
+        if await iframe_btn.count() > 0:
+            await iframe_btn.click(timeout=timeout_ms)
+            return True
+    except Exception:
+        return False
+    return False
