@@ -5,55 +5,55 @@ from pathlib import Path
 from typing import Optional, Dict, Any
 
 class Settings(BaseModel):
-    # Boss Zhipin URLs
-    BASE_URL: str = os.getenv("BASE_URL", "https://www.zhipin.com/")
-    CHAT_URL: str = os.getenv("CHAT_URL", "https://www.zhipin.com/web/chat/index")
-    RECOMMEND_URL: str = os.getenv("RECOMMEND_URL", "https://www.zhipin.com/web/chat/recommend")
-    LOGIN_URL: str = os.getenv("LOGIN_URL", "https://www.zhipin.com/web/user")
-    STORAGE_STATE: str = os.getenv("STORAGE_STATE", "data/state.json")
-    CDP_URL: str = os.getenv("CDP_URL", "http://127.0.0.1:9222")
+    # Boss Zhipin URLs (from jobs.yaml)
+    BASE_URL: str = "https://www.zhipin.com/"
+    CHAT_URL: str = "https://www.zhipin.com/web/chat/index"
+    RECOMMEND_URL: str = "https://www.zhipin.com/web/chat/recommend"
+    LOGIN_URL: str = "https://www.zhipin.com/web/user"
+    STORAGE_STATE: str = "data/state.json"
+    CDP_URL: str = "http://127.0.0.1:9222"
     
-    # Zilliz Configuration
-    ZILLIZ_ENDPOINT: str = os.getenv("ZILLIZ_ENDPOINT", "")
-    ZILLIZ_USER: str = os.getenv("ZILLIZ_USER", "")
-    ZILLIZ_PASSWORD: str = os.getenv("ZILLIZ_PASSWORD", "")
-    ZILLIZ_COLLECTION_NAME: str = os.getenv("ZILLIZ_COLLECTION_NAME", "CN_recruitment")
-    ZILLIZ_EMBEDDING_MODEL: str = os.getenv("ZILLIZ_EMBEDDING_MODEL", "text-embedding-3-small")
-    ZILLIZ_EMBEDDING_DIM: int = int(os.getenv("ZILLIZ_EMBEDDING_DIM", "1536"))
-    ZILLIZ_SIMILARITY_TOP_K: int = int(os.getenv("ZILLIZ_SIMILARITY_TOP_K", "5"))
-    ZILLIZ_ENABLE_CACHE: bool = os.getenv("ZILLIZ_ENABLE_CACHE", "false").lower() == "true"
+    # Zilliz Configuration (from secrets.yaml - sensitive data)
+    ZILLIZ_ENDPOINT: str = ""
+    ZILLIZ_USER: str = ""
+    ZILLIZ_PASSWORD: str = ""
+    ZILLIZ_COLLECTION_NAME: str = "CN_candidates"
+    ZILLIZ_EMBEDDING_MODEL: str = "text-embedding-3-small"
+    ZILLIZ_EMBEDDING_DIM: int = 1536
+    ZILLIZ_SIMILARITY_TOP_K: int = 5
+    ZILLIZ_ENABLE_CACHE: bool = False
     
-    # OpenAI Configuration
-    OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
-    OPENAI_NAME: str = os.getenv("OPENAI_NAME", "CN_recruiting_bot")
+    # OpenAI Configuration (from secrets.yaml - sensitive data)
+    OPENAI_API_KEY: str = ""
+    OPENAI_NAME: str = "CN_recruiting_bot"
     
-    # DingTalk Configuration
-    DINGTALK_URL: str = os.getenv("DINGTALK_URL", "")
-    DINGTALK_SECRET: str = os.getenv("DINGTALK_SECRET", "")
+    # DingTalk Configuration (from secrets.yaml - sensitive data)
+    DINGTALK_URL: str = ""
+    DINGTALK_SECRET: str = ""
     
-    # Service Configuration
-    BOSS_SERVICE_BASE_URL: str = os.getenv("BOSS_SERVICE_BASE_URL", "http://127.0.0.1:5001")
-    BOSS_CRITERIA_PATH: str = os.getenv("BOSS_CRITERIA_PATH", "config/jobs.yaml")
+    # Service Configuration (from jobs.yaml)
+    BOSS_SERVICE_BASE_URL: str = "http://127.0.0.1:5001"
+    BOSS_CRITERIA_PATH: str = "config/jobs.yaml"
     
     @classmethod
-    def load_from_secrets(cls, secrets_path: str = "config/secrets.yaml") -> "Settings":
-        """Load settings from secrets.yaml file."""
+    def load_from_config(cls, secrets_path: str = "config/secrets.yaml", jobs_path: str = "config/jobs.yaml") -> "Settings":
+        """Load settings from secrets.yaml and jobs.yaml files."""
         settings_data = {}
         
-        # Load from secrets.yaml if it exists
+        # Load from secrets.yaml if it exists (sensitive data)
         secrets_file = Path(secrets_path)
         if secrets_file.exists():
             with open(secrets_file, "r", encoding="utf-8") as f:
                 secrets = yaml.safe_load(f) or {}
             
-            # Map secrets.yaml structure to environment variables
+            # Map secrets.yaml structure to settings
             if "zilliz" in secrets:
                 zilliz = secrets["zilliz"]
                 settings_data.update({
                     "ZILLIZ_ENDPOINT": zilliz.get("endpoint", ""),
                     "ZILLIZ_USER": zilliz.get("user", ""),
                     "ZILLIZ_PASSWORD": zilliz.get("password", ""),
-                    "ZILLIZ_COLLECTION_NAME": zilliz.get("collection_name", "CN_recruitment"),
+                    "ZILLIZ_COLLECTION_NAME": zilliz.get("collection_name", "CN_candidates"),
                     "ZILLIZ_EMBEDDING_MODEL": zilliz.get("embedding_model", "text-embedding-3-small"),
                     "ZILLIZ_EMBEDDING_DIM": zilliz.get("embedding_dim", 1536),
                     "ZILLIZ_SIMILARITY_TOP_K": zilliz.get("similarity_top_k", 5),
@@ -73,13 +73,30 @@ class Settings(BaseModel):
                     "DINGTALK_URL": dingtalk.get("url", ""),
                     "DINGTALK_SECRET": dingtalk.get("secret", ""),
                 })
+        
+        # Load from jobs.yaml if it exists (configuration data)
+        jobs_file = Path(jobs_path)
+        if jobs_file.exists():
+            with open(jobs_file, "r", encoding="utf-8") as f:
+                jobs = yaml.safe_load(f) or {}
+            
+            # Map jobs.yaml structure to settings
+            if "config" in jobs:
+                config = jobs["config"]
+                settings_data.update({
+                    "BASE_URL": config.get("base_url", "https://www.zhipin.com/"),
+                    "CHAT_URL": config.get("chat_url", "https://www.zhipin.com/web/chat/index"),
+                    "RECOMMEND_URL": config.get("recommend_url", "https://www.zhipin.com/web/chat/recommend"),
+                    "LOGIN_URL": config.get("login_url", "https://www.zhipin.com/web/user"),
+                    "STORAGE_STATE": config.get("storage_state", "data/state.json"),
+                    "CDP_URL": config.get("cdp_url", "http://127.0.0.1:9222"),
+                    "BOSS_SERVICE_BASE_URL": config.get("boss_service_base_url", "http://127.0.0.1:5001"),
+                    "BOSS_CRITERIA_PATH": config.get("boss_criteria_path", "config/jobs.yaml"),
+                })
                     
         # Create settings instance with loaded data
         return cls(**settings_data)
     
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert settings to dictionary."""
-        return self.dict()
     
     def get_zilliz_config(self) -> Dict[str, Any]:
         """Get Zilliz configuration as dictionary."""
@@ -108,6 +125,6 @@ class Settings(BaseModel):
             "secret": self.DINGTALK_SECRET,
         }
 
-# Load settings from secrets.yaml
-settings = Settings.load_from_secrets()
+# Load settings from secrets.yaml and jobs.yaml
+settings = Settings.load_from_config()
 
