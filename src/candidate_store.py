@@ -78,6 +78,7 @@ class CandidateStore:
     def _ensure_candidate_collection(self, name: str) -> Collection:
         if not utility.has_collection(name):
             logger.error("Creating candidate collection %s", name)
+            raise ValueError(f"Candidate collection {name} does not exist")
             dim = self.embedding_dim if self.embedding_dim else DEFAULT_DIMENSION
             fields = [
                 FieldSchema(name="candidate_id", dtype=DataType.VARCHAR, max_length=64, is_primary=True),
@@ -110,7 +111,7 @@ class CandidateStore:
     def upsert_candidate(
         self,
         *,
-        candidate_id: str,
+        chat_id: str,
         name: Optional[str] = None,
         job_applied: Optional[str] = None,
         last_message: Optional[str] = None,
@@ -125,7 +126,7 @@ class CandidateStore:
         
         # Prepare data as dictionary for upsert
         data = {
-            "candidate_id": candidate_id,
+            "candidate_id": chat_id,
             "resume_vector": self._normalise_vector(resume_vector) if resume_vector else [],
             "name": name or "",
             "job_applied": job_applied or "",
@@ -136,28 +137,23 @@ class CandidateStore:
             "updated_at": datetime.now().isoformat(),
         }
 
-        if candidate_id:        
+        if chat_id:        
             # Use upsert for atomic insert/update
             self.collection.upsert([data], partial=True)
             self.collection.flush()
             return True
         else:
             '''use semantic search to find the most similar candidate'''
-            results = self.search_candidates(data["resume_vector"])
-            if results:
-                data['candidate_id'] = results[0]['entity']['candidate_id']
+            candidate = self.search_candidates(data["resume_vector"])
+            if candidate:
+                data['candidate_id'] = candidate['entity']['candidate_id']
                 self.collection.upsert([data], partial=True)
                 self.collection.flush()
                 return True
             else:
                 return False
 
-    def search_candidates(
-        self,
-        vector: List[float],
-        top_k: Optional[int] = 1,
-        similarity_threshold: Optional[float] = 0.9
-    ) -> List[Dict[str, Any]]:
+    def search_candidates(self, vector: List[float], top_k: Optional[int] = 1, similarity_threshold: Optional[float] = 0.9) -> List[Dict[str, Any]]:
         """Search for similar candidates by resume vector."""
         if not self.enabled or not self.collection:
             return []
@@ -183,7 +179,10 @@ class CandidateStore:
                     "entity": hit.entity,
                 }
             )
-        return hits
+        if hits:
+            return hits[0]
+        else:
+            return None
 
     def get_candidate_by_id(self, candidate_id: str) -> Optional[Dict[str, Any]]:
         """Retrieve a single candidate record by its primary key."""

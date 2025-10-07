@@ -1,259 +1,192 @@
-"""Recommendation page actions for Boss Zhipin automation."""
+"""Async recommendation page actions for Boss Zhipin automation."""
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
-import time
+import asyncio
+from typing import Any, Dict, List
+
+from playwright.async_api import Frame, Locator, Page
+
 from src.config import settings
-from playwright.sync_api import Locator
-
-from .resume_capture import (
-    collect_resume_debug_info,
-    CANVAS_TEXT_HOOK_SCRIPT,
-)
-from .ui_utils import close_overlay_dialogs, IFRAME_OVERLAY_SELECTOR, RESUME_OVERLAY_SELECTOR
 from .global_logger import get_logger
+from .resume_capture_async import (
+    _create_error_result,
+    _get_resume_handle,
+    _install_parent_message_listener,
+    _process_resume_entry,
+    _setup_wasm_route,
+    collect_resume_debug_info,
+)
+from .boss_utils import IFRAME_OVERLAY_SELECTOR, close_overlay_dialogs
 
-# Get logger once at module level
 logger = get_logger()
 
 CANDIDATE_CARD_SELECTOR = "div.candidate-card-wrap"
+JOB_POPOVER_SELECTOR = "div.ui-dropmenu"
+JOB_SELECTOR = "div.ui-dropmenu >> ul.job-list > li"
 
-def _prepare_recommendation_page(page, *, wait_timeout: int = 8000) -> tuple[Optional[Locator], Optional[Dict[str, Any]]]:
-    """Ensure the recommendation panel is opened and ready."""
-    close_overlay_dialogs(page)
-    # Click the recommendation menu
-    if not settings.RECOMMEND_URL in page.url:
-        menu_chat = page.locator('dl.menu-recommend')
-        menu_chat.click(timeout=1000)
-    
-        # wait for chat box
-        # page.wait_for_selector('div.chat-box', timeout=wait_timeout)
-        # logger.info("已导航到聊天页面")
 
-    # Wait for the iframe to appear and get its frame
-    iframe = page.wait_for_selector(IFRAME_OVERLAY_SELECTOR, timeout=wait_timeout)
-    
-    if frame := iframe.content_frame():
-        frame.wait_for_selector(CANDIDATE_CARD_SELECTOR, timeout=wait_timeout)
-        logger.info("已导航到推荐页面")
-    else:
-        page.wait_for_selector(CANDIDATE_CARD_SELECTOR, timeout=wait_timeout)
+async def _prepare_recommendation_page(page: Page, *, wait_timeout: int = 8000) -> Frame:
+    await close_overlay_dialogs(page)
+    if settings.RECOMMEND_URL not in page.url:
+        menu_chat = page.locator("dl.menu-recommend").first
+        await menu_chat.click(timeout=1000)
+
+    iframe = await page.wait_for_selector(IFRAME_OVERLAY_SELECTOR, timeout=wait_timeout)
+    frame = await iframe.content_frame()
+    if not frame:
+        raise RuntimeError("推荐页面 iframe 未找到")
+    await frame.wait_for_selector(CANDIDATE_CARD_SELECTOR, timeout=wait_timeout)
+    logger.info("已导航到推荐页面")
     return frame
 
-def select_recommend_job_action(frame, job_title: str) -> Dict[str, Any]:
-    """选择当前职位从下拉菜单中。
-    
-    select_current_job_action(page, job_title)
-    ├── 1. LOCATE JOB DROPDOWN PHASE
-    │   ├── frame.locator('div.ui-dropmenu >> ul.job-list > li')
-    │   └── 遍历所有li元素查找包含job_title的文本
-    │
-    ├── 2. SELECTION PHASE
-    │   ├── 找到匹配的li元素
-    │   └── li.click() 点击选择
-    │
-    └── 3. VERIFICATION PHASE
-        ├── 等待页面变化
-        └── 检查 div.ui-dropmenu -> div.ui-dropmenu-label 的文本
-    """
-    # 获取所有职位选项
-    t0 = time.time()
-    JOB_POPOVER_SELECTOR = 'div.ui-dropmenu'
-    JOB_SELECTOR = 'div.ui-dropmenu >> ul.job-list > li'
-    job_options = frame.locator(JOB_SELECTOR).all()
-    
-    if not job_options:
-        return {'success': False, 'details': '未找到职位下拉菜单'}
-    
-    # 查找包含指定职位标题的选项
-    selected_option, idx = None, -1
-    dropdown_label = frame.locator(JOB_POPOVER_SELECTOR)
-    current_selected_job = dropdown_label.inner_text(timeout=300)
-    available_jobs = [option.inner_text(timeout=100).strip() for option in job_options]
-    current_job_matched = job_title in current_selected_job
-    if current_job_matched:
-        # 已经选中，无需点击
-        return {
-            'success': True,
-            'details': f'已选中职位: {job_title}',
-            'selected_job': job_title,
-            'available_jobs': available_jobs
-        }
-    for i, job in enumerate(available_jobs):
-        if job_title in job:
-            selected_option = job_options[i]
-            idx = i
+
+async def select_recommend_job_action(frame: Frame, job_title: str) -> Dict[str, Any]:
+    job_options = frame.locator(JOB_SELECTOR)
+    count = await job_options.count()
+    if count == 0:
+        return {"success": False, "details": "未找到职位下拉菜单"}
+
+    dropdown_label = frame.locator(JOB_POPOVER_SELECTOR).first
+    current_selected_job = await dropdown_label.inner_text(timeout=500)
+    available_jobs: List[str] = []
+    for index in range(count):
+        option = job_options.nth(index)
+        label = (await option.inner_text(timeout=500)).strip()
+        available_jobs.append(label)
+        if job_title in label:
+            await frame.locator(JOB_POPOVER_SELECTOR).click(timeout=1000)
+            await option.click(timeout=1000)
             break
-    if idx == -1:
-        return {
-            'success': False, 
-            'details': f'未找到包含"{job_title}"的职位',
-            'selected_job': job_title,
-            'available_jobs': available_jobs,
-            'expected_job': job_title,
-        }
-    else:
-        frame.locator(JOB_POPOVER_SELECTOR).click(timeout=1000)
-        selected_option.click(timeout=1000)
-        logger.info(f"已点击职位: {job_title}")
-        
-        # 等待页面变化并验证选择
-        # 等待下拉菜单标签更新
-        frame.wait_for_timeout(2000)  # 给页面一点时间更新
-    
-    # 检查下拉菜单标签是否已更新
-    while job_title not in current_selected_job and (time.time() - t0 < 3):
-        current_selected_job = dropdown_label.inner_text(timeout=300)
-        time.sleep(0.2)
-
-    if job_title in current_selected_job:
-        return {
-            'success': True,
-            'details': f'成功选择职位: {available_jobs[idx]}',
-            'selected_job': current_selected_job,
-            'available_jobs': available_jobs,
-        }
     else:
         return {
-            'success': False,
-            'details': f'职位选择可能失败，当前显示: {available_jobs[idx]}',
-            'selected_job': current_selected_job,
-            'available_jobs': available_jobs,
-            'expected_job': job_title,
+            "success": False,
+            "details": f"未找到包含'{job_title}'的职位",
+            "selected_job": current_selected_job,
+            "available_jobs": available_jobs,
         }
 
-def list_recommended_candidates_action(page, *, limit: int = 20) -> Dict[str, Any]:
-    """Click the recommended panel and return structured card information."""
-    frame = _prepare_recommendation_page(page)
+    for _ in range(15):
+        current_selected_job = await dropdown_label.inner_text(timeout=500)
+        if job_title in current_selected_job:
+            return {
+                "success": True,
+                "details": f"成功选择职位: {current_selected_job}",
+                "selected_job": current_selected_job,
+                "available_jobs": available_jobs,
+            }
+        await asyncio.sleep(0.2)
 
-    # Use the frame to locate card items
-    candidates = []
-    while len(candidates) < limit:
-        card_locators: List[Locator] = frame.locator(CANDIDATE_CARD_SELECTOR).all()
-        if len(card_locators) < limit:
-            card_locators[-1].hover(timeout=1000)
-            time.sleep(1)
-            continue
-        for card in card_locators[:limit]:
-            card.scroll_into_view_if_needed(timeout=1000)
-            viewd = 'viewed' in card.get_attribute('class')
-            greeted = card.locator('button:has-text("继续沟通")').count() > 0
-            text = card.inner_text().strip()
-            candidates.append({
-                'viewed': viewd,
-                'greeted': greeted,
-                'text': text,
-            })
-    success = bool(candidates)
-    details = f"成功获取 {len(candidates)} 个推荐候选人" if success else '未找到推荐候选人'
-    return { 'success': success, 'details': details, 'candidates': candidates }
+    return {
+        "success": False,
+        "details": "职位选择可能失败",
+        "selected_job": current_selected_job,
+        "available_jobs": available_jobs,
+    }
 
-def view_recommend_candidate_resume_action(page, index: int) -> Dict[str, Any]:
-    """点击推荐候选人卡片并抓取在线简历内容。
-    view_recommend_candidate_resume_action(page, index)
-    ├── 1. NAVIGATION PHASE
-    │   └── _prepare_recommendation_page(page)
-    │       ├── close_overlay_dialogs(page) [ui_utils.py]
-    │       ├── page.locator("dl.menu-recommend").click() [if not on recommend page]
-    │       └── page.wait_for_selector(IFRAME_OVERLAY_SELECTOR) [wait for iframe]
-    │
-    ├── 2. CANDIDATE SELECTION PHASE
-    │   ├── frame.locator(CANDIDATE_CARD_SELECTOR).all()[index]
-    │   ├── card.scroll_into_view_if_needed(timeout=1000)
-    │   └── card.click(timeout=1000)
-    │
-    ├── 3. RESUME CAPTURE SETUP PHASE
-    │   ├── _setup_wasm_route(page.context) [resume_capture.py]
-    │   └── _install_parent_message_listener(page, logger) [resume_capture.py]
-    │
-    ├── 4. RESUME PROCESSING PHASE
-    │   ├── _get_resume_handle(page, 8000, logger) [resume_capture.py]
-    │   └── _process_resume_entry(page, entry, logger) [resume_capture.py]
-    │
-    └── 5. ERROR HANDLING PHASE (if needed)
-        └── collect_resume_debug_info(page) [resume_capture.py]
-"""
-    frame = _prepare_recommendation_page(page)
 
-    ''' click candidate card '''
-    card = frame.locator(CANDIDATE_CARD_SELECTOR).all()[index]
-    card.scroll_into_view_if_needed(timeout=1000)
-    card.click(timeout=800)
+async def list_recommended_candidates_action(page: Page, *, limit: int = 20) -> Dict[str, Any]:
+    frame = await _prepare_recommendation_page(page)
+    candidates: List[Dict[str, Any]] = []
+    cards = frame.locator(CANDIDATE_CARD_SELECTOR)
+    count = await cards.count()
+    if count == 0:
+        return {"success": False, "details": "未找到推荐候选人", "candidates": []}
 
-    ''' prepare resume context '''
-    from .resume_capture import _setup_wasm_route, _install_parent_message_listener, _get_resume_handle, _process_resume_entry
-    _setup_wasm_route(page.context)
-    _install_parent_message_listener(page, logger)
+    for index in range(min(count, limit)):
+        card = cards.nth(index)
+        await card.scroll_into_view_if_needed(timeout=1000)
+        classes = await card.get_attribute("class") or ""
+        viewed = "viewed" in classes
+        greeted = await card.locator("button:has-text('继续沟通')").count() > 0
+        text = (await card.inner_text()).strip()
+        candidates.append({"viewed": viewed, "greeted": greeted, "text": text})
+    return {"success": True, "details": f"成功获取 {len(candidates)} 个推荐候选人", "candidates": candidates}
 
-    ''' process resume entry '''
-    context = _get_resume_handle(page, 10000, logger)
-    result = _process_resume_entry(page, context, logger)
-    logger.info(f"处理简历结果: {result}")
-    
-    ''' collect resume debug info '''
-    if not result.get('success'):
-        result['debug'] = collect_resume_debug_info(page)
+
+async def view_recommend_candidate_resume_action(page: Page, index: int) -> Dict[str, Any]:
+    frame = await _prepare_recommendation_page(page)
+    cards = frame.locator(CANDIDATE_CARD_SELECTOR)
+    if index >= await cards.count():
+        return {"success": False, "details": "候选人索引超出范围"}
+
+    card = cards.nth(index)
+    await card.scroll_into_view_if_needed(timeout=1000)
+    await card.click(timeout=800)
+
+    await _setup_wasm_route(page.context)
+    await _install_parent_message_listener(page, logger)
+
+    context = await _get_resume_handle(page, 10000, logger)
+    if not context.get("success"):
+        return _create_error_result(context, context.get("details", "未找到在线简历"))
+
+    result = await _process_resume_entry(page, context, logger)
+    logger.info("处理推荐候选人简历结果: %s", result)
+    if not result.get("success"):
+        result["debug"] = await collect_resume_debug_info(page)
     return result
 
-def greet_recommend_candidate_action(page, index: int, message: str) -> Dict[str, Any]:
-    """发送标准化打招呼消息给推荐候选人。"""
-    frame = _prepare_recommendation_page(page)
 
-    card = frame.locator(CANDIDATE_CARD_SELECTOR).all()[index]
-    card.scroll_into_view_if_needed(timeout=1000)
-    # card.click(timeout=1000)
+async def greet_recommend_candidate_action(page: Page, index: int, message: str) -> Dict[str, Any]:
+    frame = await _prepare_recommendation_page(page)
+    cards = frame.locator(CANDIDATE_CARD_SELECTOR)
+    if index >= await cards.count():
+        return {"success": False, "details": "候选人索引超出范围"}
+
+    card = cards.nth(index)
+    await card.scroll_into_view_if_needed(timeout=1000)
 
     greet_selectors = [
         "button.btn-greet",
         "button:has-text('打招呼')",
-        "span:has-text('打招呼')"
+        "span:has-text('打招呼')",
     ]
-
     greeted = False
     for selector in greet_selectors:
         target = card.locator(selector).first
-        if target.count():
-            target.click(timeout=2000)
+        if await target.count() > 0:
+            await target.click(timeout=2000)
             greeted = True
             break
-
     if not greeted:
-        return {'success': False, 'details': '未找到打招呼按钮'}
+        return {"success": False, "details": "未找到打招呼按钮"}
 
     if message:
-        ''' continue chat '''
-        chat_selector = 'button:has-text("继续沟通")'
-        chat_btn = card.locator(chat_selector)
-        if chat_btn.count():
-            chat_btn.click(timeout=1000)
-
-        ''' input message '''
-        input_box = page.locator("div.conversation-bd-content")
-        input_box.click()
-        input_field = input_box.locator("div.bosschat-chat-input")
-        input_field.fill("")
-        input_field.type(message)
-
-        ''' send message '''
-        send_selector = "span:has-text('发送')"
-        send_btn = page.locator(send_selector)
-        send_btn.click(timeout=1000)
-
-        ''' verify message '''
-        t0, sent = time.time(), False
-        msg = page.locator("div.conversation-message:has-text('" + message + "')")
-        while not msg.count() and (time.time() - t0 < 3) and not sent:
-            time.sleep(0.2)
-            msg = page.locator("div.conversation-message:has-text('" + message + "')")
+        chat_btn = card.locator("button:has-text('继续沟通')").first
+        if await chat_btn.count() > 0:
+            await chat_btn.click(timeout=1000)
+        input_box = page.locator("div.conversation-bd-content").first
+        await input_box.click()
+        input_field = input_box.locator("div.bosschat-chat-input").first
+        await input_field.fill("")
+        await input_field.type(message)
+        send_btn = page.locator("span:has-text('发送')").first
+        if await send_btn.count() > 0:
+            await send_btn.click(timeout=1000)
         else:
-            sent = True
+            await page.keyboard.press("Enter")
 
-    close_overlay_dialogs(page)
+    return {"success": True, "details": "打招呼成功"}
 
-    if sent:
-        return { 'success': True, 'details': '已发送消息' }
-    elif greeted:
-        return { 'success': True, 'details': '已打招呼' }
-    else:
-        return { 'success': False, 'details': '发送打招呼失败' }
+
+async def skip_recommend_candidate_action(page: Page, index: int) -> Dict[str, Any]:
+    """Placeholder for skipping a recommendation card without interacting.
+
+    # TODO: 实现推荐卡片跳过/标记逻辑
+    """
+    return {
+        "success": False,
+        "details": "TODO: implement skip logic for recommendation cards",
+        "index": index,
+    }
+
+
+__all__ = [
+    "_prepare_recommendation_page",
+    "select_recommend_job_action",
+    "list_recommended_candidates_action",
+    "view_recommend_candidate_resume_action",
+    "greet_recommend_candidate_action",
+    "skip_recommend_candidate_action",
+]
