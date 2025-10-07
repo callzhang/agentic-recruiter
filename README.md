@@ -12,6 +12,8 @@ An intelligent automation system for Boss Zhipin (Boss直聘) that helps recruit
 - **📊 Real-time Monitoring**: Track service status, cache statistics, and debug information
 - **🛡️ Robust Error Handling**: Comprehensive error handling and recovery mechanisms
 
+
+
 ## 📋 Requirements
 
 - Python 3.8+
@@ -51,6 +53,11 @@ python start_service.py
 ```
 
 The service will be available at `http://127.0.0.1:5001`
+
+### 5. Start the Client App
+```bash
+streamlit run boss_app.py
+```
 
 ## 📚 Quick Start
 
