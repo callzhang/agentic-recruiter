@@ -2,6 +2,11 @@
 from __future__ import annotations
 
 import streamlit as st
+from src.scheduler import BRDWorkScheduler
+from src.assistant_actions import AssistantActions
+from src.candidate_store import candidate_store
+from src.config import settings
+import threading
 
 from streamlit_shared import (
     SessionKeys,
@@ -18,11 +23,20 @@ def main() -> None:
     st.title("Automation Scheduler")
     ensure_state()
     sidebar_controls(include_config_path=True)
+    
+    # Initialize scheduler in session_state
+    if 'scheduler' not in st.session_state:
+        st.session_state.scheduler = None
+    if 'scheduler_config' not in st.session_state:
+        st.session_state.scheduler_config = {}
 
-    with st.spinner("获取调度器状态..."):
-        status_ok, status_payload = call_api("GET", "/automation/scheduler/status")
-
-    running = bool(status_ok and isinstance(status_payload, dict) and status_payload.get("running"))
+    # Check scheduler status from session_state
+    running = st.session_state.scheduler is not None and st.session_state.scheduler._running
+    if running:
+        status_payload = st.session_state.scheduler.get_status()
+        status_payload['config'] = st.session_state.scheduler_config
+    else:
+        status_payload = {'running': False, 'config': {}}
 
     if running:
         st.success("调度器正在运行")
@@ -45,13 +59,12 @@ def main() -> None:
         # st.write(f"刷新次数: {count}")
         
         if st.button("停止调度器", key="scheduler_toggle"):
-            with st.spinner("停止调度器..."):
-                ok, payload = call_api("POST", "/automation/scheduler/stop")
-            if ok:
+            if st.session_state.scheduler:
+                st.session_state.scheduler.stop()
+                st.session_state.scheduler = None
+                st.session_state.scheduler_config = {}
                 st.success("调度器已停止")
                 st.rerun()
-            else:
-                st.error(f"停止失败: {payload}")
     else:
         st.info("调度器未运行，配置参数后点击按钮启动。")
         selected_job_idx = st.session_state.get(SessionKeys.SELECTED_JOB_INDEX, 0)
@@ -85,21 +98,28 @@ def main() -> None:
 
         submitted = st.button("启动调度器", disabled=not any_checks)
         if submitted:
-            payload = {
-                "job": job,
-                "check_recommend_candidates": check_recommend_candidates,
-                "check_recommend_candidates_limit": check_recommend_candidates_limit,
-                "match_threshold": match_threshold,
-                "check_new_chats": check_new_chats,
-                "check_followups": check_followups,
+            # Create AssistantActions instance for scheduler
+            assistant = AssistantActions(candidate_store)
+            
+            # Build scheduler options
+            options = {
+                'job': job,
+                'recommend_limit': check_recommend_candidates_limit,
+                'enable_recommend': check_recommend_candidates,
+                'overall_threshold': match_threshold,
+                'enable_chat_processing': check_new_chats,
+                'enable_followup': check_followups,
+                'assistant': assistant,
+                'base_url': settings.BOSS_SERVICE_BASE_URL,
             }
-            with st.spinner("启动调度器..."):
-                ok, response = call_api("POST", "/automation/scheduler/start", json=payload)
-            if ok:
-                st.success(f"调度器已启动: {response}")
-                st.rerun()
-            else:
-                st.error(f"启动失败: {response}")
+            
+            # Start scheduler
+            scheduler = BRDWorkScheduler(**options)
+            scheduler.start()
+            st.session_state.scheduler = scheduler
+            st.session_state.scheduler_config = {k: v for k, v in options.items() if k != 'assistant'}
+            st.success("调度器已启动")
+            st.rerun()
 
 
 if __name__ == "__main__":
