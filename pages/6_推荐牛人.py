@@ -54,7 +54,7 @@ def main() -> None:
         st.error("请先选择职位")
         return
 
-    limit = st.slider("每次获取数量", min_value=5, max_value=100, value=20, step=5)
+    limit = st.sidebar.slider("推荐牛人获取数量", min_value=5, max_value=100, value=20, step=5)
 
     # Sync job selection with backend
     job_title = selected_job_info.get("position")

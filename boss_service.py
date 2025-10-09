@@ -11,13 +11,12 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from fastapi import Body, FastAPI, Query, Request
-from fastapi.concurrency import run_in_threadpool
 from playwright.async_api import Browser, BrowserContext, Page, Playwright, TimeoutError as PlaywrightTimeoutError, async_playwright
 
 from src.assistant_actions import assistant_actions
 from src.candidate_store import candidate_store
 from src.config import settings
-from src.global_logger import get_logger
+from src.global_logger import logger
 from src.chat_actions import (
     accept_resume_action,
     check_full_resume_available,
@@ -26,7 +25,6 @@ from src.chat_actions import (
     get_chat_list_action,
     get_chat_stats_action,
     request_resume_action,
-    select_chat_job_action,
     send_message_action,
     view_full_resume_action,
     view_online_resume_action,
@@ -37,14 +35,6 @@ from src.recommendation_actions import (
     list_recommended_candidates_action,
     select_recommend_job_action,
     view_recommend_candidate_resume_action,
-)
-
-logger = get_logger()
-
-DEFAULT_GREET_MESSAGE = (
-    "您好，我们是一家AI科技公司，是奔驰全球创新代表中唯一的中国公司，"
-    "代表中国参加中德Autobahn汽车大会，是华为云自动驾驶战略合作伙伴中唯一创业公司，"
-    "也是经过华为严选的唯一产品级AI数据合作伙伴。您对我们岗位有没有兴趣？"
 )
 
 
@@ -117,7 +107,7 @@ class BossServiceAsync:
         self.is_logged_in = False
         logger.info("Playwright 已停止。")
         try:
-            await run_in_threadpool(self.assistant_actions.stop_scheduler)
+            self.assistant_actions.stop_scheduler()
         except Exception:
             pass
 
@@ -149,11 +139,32 @@ class BossServiceAsync:
         logger.info("登录状态已保存: %s", settings.STORAGE_STATE)
         self.is_logged_in = True
 
-    async def _ensure_browser_session(self, max_wait_time: int = 600) -> Page:
+    async def _save_login_state_with_lock(self) -> None:
         async with self.browser_lock:
-            return await self._ensure_browser_session_locked(max_wait_time)
+            await self.save_login_state()
+            logger.info("登录状态已保存")
 
-    async def _ensure_browser_session_locked(self, max_wait_time: int = 600) -> Page:
+    async def _ensure_browser_session(self, max_wait_time: int = 600) -> Page:
+        """Ensure we have an open Playwright page and a valid login session.
+
+        To avoid blocking all requests while waiting for manual login, we acquire the
+        browser lock only for the short critical section that (re)creates the
+        Playwright objects.  If a login check is needed, we release the lock and
+        perform the polling without holding the lock so other read-only endpoints can
+        continue to serve status information.
+        """
+        while True:
+            async with self.browser_lock:
+                page = await self._prepare_browser_session()
+                login_needed = not self.is_logged_in
+
+            if not login_needed:
+                return page
+
+            # Perform the potentially long manual-login wait without holding the lock.
+            await self._verify_login(page, max_wait_time=max_wait_time)
+
+    async def _prepare_browser_session(self) -> Page:
         if not self.playwright:
             await self._startup_async()
         if not self.context or not self.browser:
@@ -167,22 +178,20 @@ class BossServiceAsync:
         except Exception:
             pass
 
-        if not self.is_logged_in:
-            await self._verify_login(page, max_wait_time=max_wait_time)
         return page
 
     async def _verify_login(self, page: Page, max_wait_time: int = 600) -> None:
         async def _page_contains_keywords() -> bool:
             try:
                 body_text = await page.inner_text("body")
-                keywords = ["消息", "聊天", "对话", "候选人", "简历", "打招呼"]
+                keywords = ["职位管理", "牛人", "沟通", "打招呼"]
                 return any(keyword in body_text for keyword in keywords)
             except Exception:
                 return False
 
         try:
             if await _page_contains_keywords():
-                await self.save_login_state()
+                await self._save_login_state_with_lock()
                 return
         except Exception:
             pass
@@ -190,8 +199,9 @@ class BossServiceAsync:
         start = asyncio.get_event_loop().time()
         while asyncio.get_event_loop().time() - start < max_wait_time:
             current_url = page.url
-            if settings.CHAT_URL in current_url and await _page_contains_keywords():
-                await self.save_login_state()
+            logger.info(f'等待登录: {current_url}')
+            if settings.BASE_URL in current_url and await _page_contains_keywords():
+                await self._save_login_state_with_lock()
                 logger.info("检测到登录成功。")
                 return
             if any(token in current_url.lower() for token in ("login", "web/user", "bticket")):
@@ -201,13 +211,16 @@ class BossServiceAsync:
 
     async def soft_restart(self) -> None:
         async with self.browser_lock:
+            logger.info("正在重启浏览器...")
             await self._shutdown_async()
             await self._startup_async()
+            logger.info("浏览器已重启")
 
     # ------------------------------------------------------------------
     # FastAPI routes
     # ------------------------------------------------------------------
     def setup_routes(self) -> None:
+        # Playwright/browser actions (async)
         @self.app.get("/status")
         async def get_status():
             page = await self._ensure_browser_session()
@@ -226,9 +239,14 @@ class BossServiceAsync:
             return self.is_logged_in
 
         @self.app.get("/chat/dialogs")
-        async def get_messages(limit: int = Query(10, ge=1, le=100)):
+        async def get_messages(
+            limit: int = Query(10, ge=1, le=100),
+            tab: str = Query('新招呼', description="Tab filter: 新招呼, 沟通中, 全部"),
+            status: str = Query('未读', description="Status filter: 未读, 牛人已读未回, 全部"),
+            job_title: str = Query('全部', description="Job title filter: 全部 or specific job title")
+        ):
             page = await self._ensure_browser_session()
-            return await get_chat_list_action(page, limit)
+            return await get_chat_list_action(page, limit, tab, status, job_title)
 
         @self.app.get("/chat/{chat_id}/messages")
         async def get_message_history(chat_id: str):
@@ -241,15 +259,13 @@ class BossServiceAsync:
             return await send_message_action(page, chat_id, message)
 
         @self.app.post("/chat/greet")
-        async def greet_candidate(chat_id: str = Body(..., embed=True), message: Optional[str] = Body(None, embed=True)):
+        async def greet_candidate(
+            chat_id: str = Body(..., embed=True), 
+            message: str = Body(..., embed=True)
+        ):
             page = await self._ensure_browser_session()
-            payload = await send_message_action(page, chat_id, (message or DEFAULT_GREET_MESSAGE).strip())
+            payload = await send_message_action(page, chat_id, message.strip())
             return payload
-
-        @self.app.post("/chat/select-job")
-        async def select_chat_job(job_title: str = Body(..., embed=True)):
-            page = await self._ensure_browser_session()
-            return await select_chat_job_action(page, job_title)
 
         @self.app.get("/chat/stats")
         async def get_chat_stats():
@@ -266,7 +282,7 @@ class BossServiceAsync:
             page = await self._ensure_browser_session()
             return await view_full_resume_action(page, chat_id)
 
-        @self.app.post("/resume/check_full")
+        @self.app.post("/resume/check_full_resume_available")
         async def check_full_resume(chat_id: str = Body(..., embed=True)):
             page = await self._ensure_browser_session()
             result = await check_full_resume_available(page, chat_id)
@@ -301,9 +317,8 @@ class BossServiceAsync:
             return await view_recommend_candidate_resume_action(page, index)
 
         @self.app.post("/recommend/candidate/{index}/greet")
-        async def greet_recommended_candidate(index: int, payload: Optional[dict] = Body(default=None)):
+        async def greet_recommended_candidate(index: int, message: str = Body(..., embed=True)):
             page = await self._ensure_browser_session()
-            message = (payload or {}).get("message") or DEFAULT_GREET_MESSAGE
             return await greet_recommend_candidate_action(page, index, message)
 
         @self.app.post("/recommend/select-job")
@@ -313,118 +328,83 @@ class BossServiceAsync:
             return await select_recommend_job_action(frame, job_title)
 
         # Scheduler
-        @self.app.get("/automation/scheduler/status")
-        async def scheduler_status():
-            return await run_in_threadpool(self.assistant_actions.get_scheduler_status)
+        # @self.app.get("/automation/scheduler/status")
+        # def scheduler_status():
+        #     return self.assistant_actions.get_scheduler_status()
 
-        @self.app.post("/automation/scheduler/start")
-        async def scheduler_start(payload: Optional[dict] = Body(default=None)):
-            success, details = await run_in_threadpool(self.assistant_actions.start_scheduler, payload or {})
-            status = await run_in_threadpool(self.assistant_actions.get_scheduler_status)
-            status.update({"success": success, "details": details})
-            return status
+        # @self.app.post("/automation/scheduler/start")
+        # def scheduler_start(payload: Optional[dict] = Body(default=None)):
+        #     success, details = self.assistant_actions.start_scheduler(payload or {})
+        #     status = self.assistant_actions.get_scheduler_status()
+        #     status.update({"success": success, "details": details})
+        #     return status
 
-        @self.app.post("/automation/scheduler/stop")
-        async def scheduler_stop():
-            success, details = await run_in_threadpool(self.assistant_actions.stop_scheduler)
-            return {"success": success, "details": details}
+        # @self.app.post("/automation/scheduler/stop")
+        # def scheduler_stop():
+        #     success, details = self.assistant_actions.stop_scheduler()
+        #     return {"success": success, "details": details}
 
         # Assistant QA endpoints
-        @self.app.post("/assistant/analyze-candidate")
-        async def analyze_candidate_api(payload: dict = Body(...)):
-            return await run_in_threadpool(self.assistant_actions.analyze_candidate, **payload)
+        # @self.app.post("/assistant/analyze-candidate")
+        # def analyze_candidate_api(payload: dict = Body(...)):
+        #     return self.assistant_actions.analyze_candidate(**payload)
 
-        @self.app.post("/assistant/generate-followup")
-        async def generate_followup_api(
-            chat_id: str = Body(..., embed=True),
-            prompt: str = Body(..., embed=True),
-            chat_history: List[Dict[str, Any]] = Body(default_factory=list, embed=True),
-            assistant_id: Optional[str] = Body(None, embed=True),
-            candidate_resume: str = Body(..., embed=True),
-            candidate_summary: Optional[str] = Body(None, embed=True),
-            job_info: dict = Body(..., embed=True),
-            analysis: dict = Body(..., embed=True),
-            purpose: str = Body("chat", embed=True),
-        ):
-            return await run_in_threadpool(
-                self.assistant_actions.generate_message,
-                prompt,
-                chat_history,
-                job_info,
-                assistant_id=assistant_id,
-                chat_id=chat_id,
-                candidate_resume=candidate_resume,
-                candidate_summary=candidate_summary,
-                analysis=analysis,
-                purpose=purpose,
-            )
+        # ------------------ Thread API ------------------
 
-        @self.app.post("/assistant/upsert-candidate")
-        async def upsert_candidate_api(
-            candidate_id: Optional[str] = Body(None),
-            chat_id: Optional[str] = Body(None),
-            name: Optional[str] = Body(None),
-            job_applied: Optional[str] = Body(None),
-            last_message: Optional[str] = Body(None),
-            resume_text: Optional[str] = Body(None),
-            scores: Optional[Dict[str, Any]] = Body(None),
-            metadata_extra: Optional[Dict[str, Any]] = Body(None),
-        ):
-            final_candidate_id = candidate_id or chat_id
-            if not final_candidate_id:
-                return {"success": False, "details": "缺少候选人标识"}
-            success = await run_in_threadpool(
-                self.assistant_actions.upsert_candidate,
-                candidate_id=final_candidate_id,
-                name=name,
-                job_applied=job_applied,
-                last_message=last_message,
-                resume_text=resume_text,
-                scores=scores,
-                metadata_extra=metadata_extra,
-            )
-            return {"success": success}
+        @self.app.post("/assistant/generate-message")
+        def generate_followup_api(data: dict = Body(...)):
+            return self.assistant_actions.generate_message(**data)
 
-        @self.app.post("/assistant/retrieve-answers")
-        async def retrieve_answers_api(payload: dict = Body(...)):
-            query = payload.get("query", "")
-            return await run_in_threadpool(self.assistant_actions.retrieve_relevant_answers, query)
+        @self.app.get("/candidate/{chat_id}")
+        def get_candidate_api(chat_id: str):
+            """Get candidate information from the store."""
+            return self.assistant_actions.get_candidate_by_id(chat_id)
 
-        @self.app.get("/assistant/list-entries")
-        async def list_entries_api(limit: int = Query(100, ge=1, le=1000)):
-            return await run_in_threadpool(self.assistant_actions.list_entries, limit)
+        @self.app.post("/thread/init-chat")
+        def init_chat_api(data: dict = Body(...)):
+            return self.assistant_actions.init_chat(**data)
 
-        @self.app.post("/assistant/record-qa")
-        async def record_qa_api(payload: dict = Body(...)):
-            await run_in_threadpool(self.assistant_actions.record_qa, **payload)
-            return True
+        @self.app.get('thread/{thread_id}/messages')
+        def get_thread_messages_api(thread_id: str):
+            return self.assistant_actions.get_thread_messages(thread_id)
 
-        @self.app.post("/assistant/delete-entry")
-        async def delete_entry_api(payload: dict = Body(...)):
-            entry_id = payload.get("entry_id")
-            return await run_in_threadpool(self.assistant_actions.delete_entry, entry_id)
+        # @self.app.post("/assistant/retrieve-answers")
+        # def retrieve_answers_api(payload: dict = Body(...)):
+        #     query = payload.get("query", "")
+        #     return self.assistant_actions.retrieve_relevant_answers(query)
 
-        @self.app.get("/assistant/generate-id")
-        async def generate_id_api():
-            return await run_in_threadpool(self.assistant_actions.generate_id)
+        # @self.app.get("/assistant/list-entries")
+        # def list_entries_api(limit: int = Query(10, ge=1, le=30)):
+        #     return self.assistant_actions.list_entries(limit)
 
+        # @self.app.post("/assistant/record-qa")
+        # def record_qa_api(payload: dict = Body(...)):
+        #     self.assistant_actions.record_qa(**payload)
+        #     return True
+
+        # @self.app.post("/assistant/delete-entry")
+        # def delete_entry_api(payload: dict = Body(...)):
+        #     entry_id = payload.get("entry_id")
+        #     return self.assistant_actions.delete_entry(entry_id)
+
+        ##------ OpenAI API ------
         @self.app.get("/assistant/list")
-        async def list_assistants_api():
-            assistants = await run_in_threadpool(self.assistant_actions.get_assistants)
+        def list_assistants_api():
+            """List openai assistants."""
+            assistants = self.assistant_actions.get_assistants()
             return [assistant.model_dump() for assistant in assistants.data]
 
         @self.app.post("/assistant/create")
-        async def create_assistant_api(payload: dict = Body(...)):
-            assistant = await run_in_threadpool(
-                self.assistant_actions.client.beta.assistants.create,
+        def create_assistant_api(payload: dict = Body(...)):
+            """Create a new openai assistant."""
+            assistant = self.assistant_actions.client.beta.assistants.create(
                 **payload,
             )
             return assistant.model_dump()
 
         @self.app.post("/assistant/update/{assistant_id}")
-        async def update_assistant_api(assistant_id: str, payload: dict = Body(...)):
-            assistant = await run_in_threadpool(
-                self.assistant_actions.client.beta.assistants.update,
+        def update_assistant_api(assistant_id: str, payload: dict = Body(...)):
+            assistant = self.assistant_actions.client.beta.assistants.update(
                 assistant_id,
                 **payload,
             )
@@ -432,8 +412,8 @@ class BossServiceAsync:
             return assistant.model_dump()
 
         @self.app.delete("/assistant/delete/{assistant_id}")
-        async def delete_assistant_api(assistant_id: str):
-            await run_in_threadpool(self.assistant_actions.client.beta.assistants.delete, assistant_id)
+        def delete_assistant_api(assistant_id: str):
+            self.assistant_actions.client.beta.assistants.delete(assistant_id)
             self.assistant_actions.get_assistants.cache_clear()
             return True
 
