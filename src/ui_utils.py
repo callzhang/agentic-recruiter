@@ -6,9 +6,7 @@ from typing import Optional
 
 from playwright.async_api import Page
 
-from .global_logger import get_logger
-
-logger = get_logger()
+from .global_logger import logger
 
 # selectors reused across modules
 IFRAME_OVERLAY_SELECTOR = "iframe[src*='c-resume'], iframe[name='recommendFrame']"
@@ -77,3 +75,30 @@ async def close_overlay_dialogs(page: Page, timeout_ms: int = 1000) -> bool:
     except Exception:
         return False
     return False
+
+
+async def safe_evaluate_in_fresh_context(selector: str) -> str:
+    """Safely evaluate a selector by creating a fresh page context in the current event loop."""
+    from playwright.async_api import async_playwright
+    from src.config import settings
+    
+    playwright = await async_playwright().start()
+    browser = await playwright.chromium.connect_over_cdp(settings.CDP_URL)
+    
+    try:
+        # Get the first available page or create a new one
+        if browser.contexts and browser.contexts[0].pages:
+            page = browser.contexts[0].pages[0]
+        else:
+            context = await browser.new_context()
+            page = await context.new_page()
+        
+        return await page.evaluate(f"""
+            () => {{
+                const element = document.querySelector('{selector}');
+                return element ? element.innerText : '';
+            }}
+        """)
+    finally:
+        await browser.close()
+        await playwright.stop()

@@ -12,9 +12,7 @@ from uuid import NAMESPACE_URL, uuid5
 import requests
 
 from src.config import settings
-from .global_logger import get_logger
-
-logger = get_logger()
+from .global_logger import logger
 
 if TYPE_CHECKING:  # pragma: no cover - import guard
     from .assistant_actions import AssistantActions

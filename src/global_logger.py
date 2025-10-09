@@ -4,7 +4,6 @@ This module provides a simple logging interface that can be used anywhere in the
 """
 
 import logging
-import sys
 from typing import Optional
 
 # Global logger instance
@@ -42,8 +41,8 @@ def get_logger() -> logging.Logger:
     return _global_logger
 
 
+logger = get_logger()
 if __name__ == "__main__":
-    logger = get_logger()
     logger.info("Hello, world!")
     logger.error("Error message")
     logger.warning("Warning message")

@@ -6,7 +6,7 @@ from typing import Optional, Dict, Any
 
 class Settings(BaseModel):
     # Boss Zhipin URLs (from jobs.yaml)
-    BASE_URL: str = "https://www.zhipin.com/"
+    BASE_URL: str = "https://www.zhipin.com/web/chat"
     CHAT_URL: str = "https://www.zhipin.com/web/chat/index"
     RECOMMEND_URL: str = "https://www.zhipin.com/web/chat/recommend"
     LOGIN_URL: str = "https://www.zhipin.com/web/user"
