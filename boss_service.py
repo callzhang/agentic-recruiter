@@ -106,10 +106,6 @@ class BossServiceAsync:
         self.playwright = None
         self.is_logged_in = False
         logger.info("Playwright 已停止。")
-        try:
-            self.assistant_actions.stop_scheduler()
-        except Exception:
-            pass
 
     # ------------------------------------------------------------------
     # Browser/session helpers
@@ -327,22 +323,6 @@ class BossServiceAsync:
             frame = await _prepare_recommendation_page(page)
             return await select_recommend_job_action(frame, job_title)
 
-        # Scheduler
-        # @self.app.get("/automation/scheduler/status")
-        # def scheduler_status():
-        #     return self.assistant_actions.get_scheduler_status()
-
-        # @self.app.post("/automation/scheduler/start")
-        # def scheduler_start(payload: Optional[dict] = Body(default=None)):
-        #     success, details = self.assistant_actions.start_scheduler(payload or {})
-        #     status = self.assistant_actions.get_scheduler_status()
-        #     status.update({"success": success, "details": details})
-        #     return status
-
-        # @self.app.post("/automation/scheduler/stop")
-        # def scheduler_stop():
-        #     success, details = self.assistant_actions.stop_scheduler()
-        #     return {"success": success, "details": details}
 
         # Assistant QA endpoints
         # @self.app.post("/assistant/analyze-candidate")
@@ -356,9 +336,9 @@ class BossServiceAsync:
             return self.assistant_actions.generate_message(**data)
 
         @self.app.get("/candidate/{chat_id}")
-        def get_candidate_api(chat_id: str):
+        def get_candidate_api(chat_id: str, fields: Optional[List[str]] = None):
             """Get candidate information from the store."""
-            return self.assistant_actions.get_candidate_by_id(chat_id)
+            return self.assistant_actions.get_candidate_by_id(chat_id, fields)
 
         @self.app.post("/thread/init-chat")
         def init_chat_api(data: dict = Body(...)):
