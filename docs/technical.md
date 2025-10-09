@@ -2,46 +2,207 @@
 
 
 ## 业务逻辑
-从 v2.1 起，业务编排完全转移到 Streamlit 客户端，FastAPI 仅提供 Playwright 操作和 AI 服务。页面 `1_自动化.py` 将候选人依次流经四个步骤，每一步都在界面中输出执行日志（候选人摘要、分析结果、动作、阶段）：
 
-1. **推荐牛人**
-   - `GET /recommend/candidates` 拉取推荐列表 → 对每个 `index` 调用 `/recommend/candidate/{idx}/resume` 获取在线简历。
-   - 通过 `POST /assistant/analyze-candidate` 分析是否匹配；高分转入 `GREET`、低分标记 `PASS`。
-   - 使用新的 `generate_message(..., purpose="greet")` 生成首轮打招呼内容（TODO：待接入 `/recommend/candidate/{idx}/greet`）。
-   - `POST /assistant/upsert-candidate` 存储简历、分析、生成的 Thread 信息。
+### 四个独立自动化工作流入口 (v2.2.0)
 
-2. **聊天（新招呼）**
-   - `get_chat_list_action` 过滤“新招呼”栏目 → `view_online_resume_action` 抓取在线简历。
-   - `generate_message(..., purpose="chat")` + `send_message_action` 完成跟进；阈值以下通过 `mark_candidate_stage_action(..., "PASS")`（#TODO）标记。
+从 v2.1 起，业务编排完全转移到 Streamlit 客户端，FastAPI 仅提供 Playwright 操作和 AI 服务。页面 `1_自动化.py` 提供**四个独立的工作流入口**，每个入口可独立执行，用于处理不同来源的候选人。这些工作流会更新候选人的阶段状态（stage），支持双向转换。
 
-3. **聊天（沟通中）**
-   - 拉取“沟通中”聊天与历史，优先调用 `AssistantActions.get_cached_resume()` 命中向量库缓存，必要时再触发 `view_full_resume_action`。
-   - 拿到离线简历后重新 `analyze_candidate`，高分进入 `SEEK`；若获取到联系方式，调用 `notify_hr_action`（#TODO）并标记 `CONTACT`。
+**重要**: 这四个工作流是**独立的入口点**，不是顺序执行的流程。每个工作流都可以将候选人的stage在 PASS、GREET、SEEK、CONTACT、WAITING_LIST 之间自由转换。
 
-4. **追结果**
-   - 在候选人库中过滤 `updated_at > 1 day` 且阶段为 `GREET/SEEK` 的记录，利用 `generate_message(..., purpose="chat")`（或未来的 `purpose="followup"`）生成催促消息，通过 `send_message_action` 发送。
+#### 工作流入口 vs 候选人阶段状态
+
+**工作流入口** (4个独立入口):
+- **推荐牛人**: 处理推荐页面的候选人
+- **新招呼**: 处理聊天中的新招呼对话
+- **沟通中**: 处理聊天中的活跃对话
+- **追结果**: 对超时未回复的候选人进行跟进
+
+**候选人阶段状态** (可双向转换):
+- **`PASS`**: 不匹配，已拒绝（未达到阈值）
+- **`GREET`**: 表达兴趣，已索要完整简历
+- **`SEEK`**: 强匹配，正在寻求联系方式
+- **`CONTACT`**: 已获得联系方式
+- **`WAITING_LIST`**: （未来）不确定，需要进一步沟通确认
+
+#### 工作流1: 推荐牛人 (Recommend Page Entry)
+- **数据获取**: `GET /recommend/candidates` 拉取推荐列表 → 对每个 `index` 调用 `/recommend/candidate/{idx}/resume` 获取在线简历
+- **AI分析**: 通过 `POST /assistant/analyze-candidate` 分析匹配度
+- **Stage决策**: 根据得分转换stage → `GREET` / `SEEK` / `WAITING_LIST` / `PASS`
+- **打招呼**: 使用 `generate_message(..., purpose="greet")` 生成首轮打招呼内容 + `/recommend/candidate/{idx}/greet`
+- **数据存储**: `POST /assistant/upsert-candidate` 存储简历、分析、Thread信息，`chat_id=NULL`
+- **关键特点**: 此工作流创建的记录无 `chat_id`，通过 `candidate_id` 标识
+
+#### 工作流2: 新招呼 (New Greetings Entry)
+- **列表获取**: `get_chat_list_action(tab="新招呼", status="未读")` 过滤新招呼栏目
+- **记录查询**: 通过 `chat_id` 从Zilliz直接获取（如存在则更新，不存在则创建）
+- **简历查看**: `view_online_resume_action(chat_id)` 抓取在线简历
+- **AI分析**: `POST /assistant/analyze-candidate` 确定stage转换
+- **Stage决策**: 根据得分决定stage → `GREET` / `SEEK` / `WAITING_LIST` / `PASS`
+- **消息发送**: `generate_message(..., purpose="chat")` + `send_message_action` 完成跟进
+- **记录更新**: 添加/更新 `chat_id`，更新 `stage`
+
+#### 工作流3: 沟通中 (Active Chats Entry)
+- **列表获取**: `get_chat_list_action(tab="沟通中", status="未读")` 拉取沟通中聊天
+- **记录查询**: 通过 `chat_id` 从Zilliz直接获取
+- **缓存优先**: 优先使用已有的 `online_resume` / `full_resume`
+- **简历请求**: 如无 `full_resume`，调用 `request_resume_action` 索要离线简历
+- **离线简历**: 收到后调用 `view_full_resume_action` 获取完整简历
+- **重新分析**: 基于 `full_resume` 重新 `analyze_candidate`，**可能stage倒退**（如 `SEEK` → `GREET`）
+- **联系方式**: 若获取到微信/电话，调用 `notify_hr_action`（#TODO）并标记 `CONTACT`
+- **状态更新**: 更新 `stage`, `full_resume`, `updated_at`
+
+#### 工作流4: 追结果 (Follow-up Entry)
+- **筛选条件**: Zilliz查询 `updated_at > 1天 AND stage IN ['GREET', 'SEEK', 'WAITING_LIST']`
+- **消息生成**: 利用 `generate_message(..., purpose="followup")` 生成催促消息
+- **消息发送**: 通过 `send_message_action` 发送催促消息
+- **状态更新**: 更新 `updated_at`，可能根据回复更新 `stage`
+
+### 数据流设计
+
+**独立工作流架构**:
+```
+推荐牛人 Entry → 创建记录 (chat_id=NULL)
+新招呼 Entry   → 查询chat_id → 更新记录 (添加chat_id)
+沟通中 Entry   → 查询chat_id → 更新记录 (更新stage/full_resume)
+追结果 Entry   → 查询stage → 更新记录 (更新updated_at)
+```
+
+**Stage转换** (双向):
+```
+任何工作流都可以将候选人在以下stage之间转换:
+PASS ↔ GREET ↔ SEEK ↔ CONTACT
+        ↕
+  WAITING_LIST
+```
+
+**查询策略**:
+- 聊天工作流（新招呼、沟通中）: 使用 `chat_id` 直接查询Zilliz
+- 推荐工作流: 创建新记录，`chat_id=NULL`
+- 追结果工作流: 通过 `stage` 和 `updated_at` 过滤
 
 所有操作都会即时写入 Streamlit 的运行面板，支持操作员逐条复核。服务端仍保留 `BRDWorkScheduler` 以兼容旧流程，但默认不再发起自动 greeting。
 
-## Zilliz schema
-```YAML
-metadata:
-- online_resume: bool
-- full_resume: bool
-- stage: str
- - thread_id: str
- - assistant_id: str
- - analysis_summary: str
+## Thread API架构 (v2.2.0核心设计)
 
-stage:
-- PASS
-- GREET (waiting for full resume)
-- SEEK (got full resume, and passed the analysis, waiting for wechat/phone#)
-- CONTACT (notified recruiter)
+### Thread作为对话记忆
+
+**设计理念**: 使用OpenAI Thread API作为主要对话记忆存储，所有上下文（岗位描述、简历、分析、聊天记录）都保存在thread中。
+
+**优势**:
+- **完整上下文**: Thread自动维护完整对话历史
+- **简化调用**: 消息生成只需 `thread_id` + `purpose`，无需重建上下文
+- **自动管理**: OpenAI API自动处理上下文窗口和历史管理
+
+**Thread内容结构**:
+1. 系统消息/用户消息: 岗位描述（job_info）
+2. 用户消息/助手消息: 简历文本（resume_text）
+3. 助手消息: 分析结果（purpose="analyze"）
+4. 用户消息 + 助手消息: 所有聊天对话
+5. 附加上下文: 完整简历（full_resume，当可用时）
+
+### Zilliz角色重新定义
+
+**不是**: 主要对话存储（由Thread承担）  
+**而是**: 阶段追踪器 + 路由器 + 性能缓存
+
+**五大功能**:
+1. **阶段追踪**: 记录候选人当前stage (PASS/GREET/SEEK/CONTACT/WAITING_LIST)
+2. **对话路由**: 链接 `chat_id` ↔ `thread_id`，使聊天工作流能找到对应thread
+3. **简历缓存**: 保存 `resume_text`/`full_resume`，避免10秒浏览器重新抓取
+4. **语义搜索**: 通过 `resume_vector` 查找候选人（当chat_id未知时）
+5. **审计追踪**: 保存 `analysis` JSON用于历史审查和合规
+
+### 函数拆分设计
+
+**`init_chat(name, job_info, resume_text, chat_id=None, chat_history=None)`** - 初始化对话
+
+调用时机: **获取简历后、分析前**（推荐工作流、新招呼工作流首次处理）
+
+**重要**: 此函数仅在已获取 `resume_text` 且分析前调用，`resume_text` 为必需参数。
+
+参数:
+- `name`: str (候选人姓名)
+- `job_info`: dict (岗位信息)
+- `resume_text`: str (简历文本 - 必需)
+- `chat_id`: str (可选，聊天工作流使用)
+- `chat_history`: list (可选，现有聊天记录)
+
+功能:
+1. 创建OpenAI thread
+2. 添加岗位描述和简历到thread
+3. 创建Zilliz记录（含thread_id, resume_text, resume_vector）
+4. 返回 thread_id 和 candidate_id
+
+**`generate_message(thread_id, assistant_id, purpose, user_message=None, full_resume=None, instruction=None, format_json=False)`** - 生成消息
+
+调用时机: 任何需要消息生成的场景
+
+参数:
+- `thread_id`: str (OpenAI thread ID - 必需)
+- `assistant_id`: str (OpenAI assistant ID - 必需)
+- `purpose`: str (消息目的 - "analyze", "greet", "chat", "followup")
+- `user_message`: str (候选人的最新消息 - 可选)
+- `full_resume`: str (完整简历文本 - 可选)
+- `instruction`: str (自定义指令 - 可选)
+- `format_json`: bool (是否请求JSON格式 - 可选)
+
+功能:
+1. 如有full_resume，添加到thread
+2. 如有user_message，添加到thread
+3. 根据purpose添加助手请求并运行thread
+4. purpose="analyze"时，解析结果并更新Zilliz的stage和analysis
+5. 返回生成的消息（及分析结果）
+
+**Purpose参数**:
+- `"analyze"`: 分析简历，返回JSON结构化分析，更新Zilliz stage
+- `"greet"`: 生成打招呼消息
+- `"chat"`: 生成对话回复
+- `"followup"`: 生成催促/跟进消息
+
+## Zilliz schema
+
+### 完整字段结构
+```YAML
+# 主键和向量
+candidate_id: VARCHAR(64) - 主键，UUID生成
+resume_vector: FLOAT_VECTOR - 简历向量嵌入
+
+# 基础信息
+chat_id: VARCHAR(100) - 聊天ID，推荐阶段为NULL，聊天阶段添加
+name: VARCHAR(200) - 候选人姓名
+job_applied: VARCHAR(128) - 申请职位
+last_message: VARCHAR(2048) - 最后消息内容
+
+# 简历内容
+resume_text: VARCHAR(25000) - 在线简历文本
+full_resume: VARCHAR(10000) - 离线完整简历文本
+
+# 阶段管理
+stage: VARCHAR(20) - 候选人阶段状态
+thread_id: VARCHAR(100) - OpenAI Thread ID
+analysis: JSON - AI分析结果和评分
+
+# 元数据
+metadata: JSON - 扩展元数据
+updated_at: VARCHAR(64) - 最后更新时间
 ```
 
-- `AssistantActions.get_cached_resume(candidate_id)` 会首先查询该存储，命中则跳过 Playwright 抓取，平均节省 ~10s。
-- `generate_message` 也会把最新 `thread_id / assistant_id` 写回 `metadata`，保证下一次对话使用同一个 Threads 上下文。
+### 候选人阶段状态（支持双向转换）
+- **`PASS`**: 不匹配，已拒绝（未达到阈值）
+- **`GREET`**: 表达兴趣，已索要完整简历
+- **`SEEK`**: 强匹配，正在寻求联系方式
+- **`CONTACT`**: 已获得联系方式
+- **`WAITING_LIST`**: （未来）不确定，需要进一步沟通确认
+
+### 数据流特点（基于Thread API）
+- **推荐工作流**: `init_chat(name, job_info, resume_text)` 创建thread和记录，`chat_id=NULL`
+- **聊天工作流**: 通过 `chat_id` 直接查询获取 `thread_id`（无需语义搜索）
+- **对话上下文**: 完全保存在thread中，Zilliz仅存储 `thread_id` 用于路由
+- **Stage转换**: 支持双向转换，`generate_message(purpose="analyze")` 会更新Zilliz的stage
+- **简历缓存**: Zilliz保存 `resume_text`/`full_resume`，命中则跳过Playwright抓取，平均节省~10s
+- **审计追踪**: Zilliz保存 `analysis` JSON用于历史审查
+- **初始化时机**: `init_chat` 仅在获取 `resume_text` 后、分析前调用
+- **参数明确性**: 使用命名参数而非字典，减少猜测和错误
 
 ## 系统架构
 

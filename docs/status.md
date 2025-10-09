@@ -8,7 +8,8 @@
 - **登录状态**: 已登录
 - **浏览器模式**: 外部Chrome + CDP连接
 - **Streamlit状态**: 会话状态优化完成 (v2.0.2)
-- **最后更新**: 2025-10-03 14:30
+- **架构状态**: v2.1.0架构重构完成，v2.2.0四个独立自动化工作流入口规划中
+- **最后更新**: 2025-10-09 18:30
 
 ## 已完成功能
 
@@ -132,6 +133,17 @@ curl "http://127.0.0.1:5001/search?city=北京&job=Python开发"
 
 ## 待完成功能
 
+### v2.2.0 四个独立自动化工作流入口 + Thread API (规划中)
+- ⏳ **Thread API架构** - OpenAI Thread作为对话记忆，Zilliz作为阶段追踪+路由+缓存
+- ⏳ **函数拆分** - `init_chat` (创建thread) + `generate_message` (使用thread生成消息)
+- ⏳ **工作流1: 推荐牛人** - init_chat创建thread，generate_message分析+打招呼
+- ⏳ **工作流2: 新招呼** - 通过chat_id获取thread_id，generate_message回复
+- ⏳ **工作流3: 沟通中** - 使用thread重新分析full_resume，支持stage双向转换
+- ⏳ **工作流4: 追结果** - generate_message(purpose="followup")基于完整对话历史
+- ⏳ **Stage管理** - 支持 PASS、GREET、SEEK、CONTACT、WAITING_LIST 双向转换
+- ⏳ **简历缓存** - Zilliz保存resume_text/full_resume避免10s浏览器操作
+- ⏳ **UI增强** - 四个独立执行面板，实时日志，进度显示
+
 ### P2 优先级
 - ⏳ 自动黑名单扩充 (从消息页提取负面信息)
 - ✅ 简历自动读取（在线简历抓取 + OCR 转 Markdown）
@@ -235,6 +247,16 @@ bosszhipin_bot/
 - ✅ 资源自动清理
 
 ## 下一步计划
+
+### v2.2.0 四个独立自动化工作流入口 (当前重点)
+1. **工作流1实现**: 推荐牛人处理，创建记录(chat_id=NULL)，AI分析，打招呼生成
+2. **工作流2实现**: 新招呼处理，chat_id直接查询，定制消息发送
+3. **工作流3实现**: 沟通中管理，支持stage双向转换，简历请求，重新分析
+4. **工作流4实现**: 追结果功能，超时筛选（包括WAITING_LIST），催促消息生成
+5. **UI重构**: 四个独立执行面板，实时日志，进度显示
+6. **数据查询**: 使用chat_id直接查询Zilliz（无需语义搜索）
+
+### 后续优化计划
 1. 实现候选人监控和自动决策
 2. 添加消息自动回复功能
 3. 完善事件缓存模块重构
@@ -244,6 +266,10 @@ bosszhipin_bot/
 7. 支持多招聘平台集成
 
 ## 进行中的重点事项
-- 🔄 计划将 `boss_service.py` 迁移到 Playwright 异步 API，缓解 `greenlet.error` 并提升并发稳定性。
-- 📄 迁移阶段任务详见仓库根目录 `async_migration_tasks.md`，涵盖设计原则、函数清单、测试方案与发布节奏。
-- 🛠️ 相关模块 (`src/chat_actions.py`, `src/recommendation_actions.py`, `src/boss_utils.py`) 将提供异步版本并逐步替换当前同步实现。
+- 🔄 **v2.2.0四个独立自动化工作流入口+Thread API规划完成** - 业务逻辑、技术实现、数据流设计已确定
+- 📄 **文档更新完成** - `tasks.md`, `docs/technical.md`, `docs/automation_plan.md`, `docs/status.md` 已更新
+  - 明确workflows vs stages区别
+  - Thread API作为对话记忆，Zilliz重新定位为阶段追踪+路由+缓存
+  - init_chat + generate_message函数拆分设计
+- 🛠️ **待实现功能** - Thread API集成、Stage管理（含WAITING_LIST）、UI四个独立面板等功能待开发
+- 🔄 计划将 `boss_service.py` 迁移到 Playwright 异步 API，缓解 `greenlet.error` 并提升并发稳定性
