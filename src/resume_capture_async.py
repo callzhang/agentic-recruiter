@@ -23,9 +23,7 @@ from playwright.async_api import (
     TimeoutError as PlaywrightTimeoutError,
 )
 
-from .global_logger import get_logger
-
-logger = get_logger()
+from .global_logger import logger
 
 INLINE_RESUME_SELECTORS = [
     "div.resume-box",
@@ -390,11 +388,12 @@ async def _setup_wasm_route(context: BrowserContext) -> None:
     glob_pattern = "**/wasm_canvas-*.js"
 
     async def _route_resume(route: Route, request: Request) -> None:
-        if request.method.upper() != "GET":
-            await route.continue_()
-            return
+
         filename = request.url.rsplit("/", 1)[-1]
         local_path = patched_map.get(filename)
+        logger.info("---->拦截 %s，使用本地 patched 版本 %s", filename, local_path)
+        await route.abort(error_code="timedout")
+        return
         if not local_path:
             # Fallback: try to find the highest versioned patch for the same base version
             import re
@@ -418,9 +417,10 @@ async def _setup_wasm_route(context: BrowserContext) -> None:
                     #TODO: add dingtalk notification
                     await route.continue_()
                     return
-        logger.info("拦截 %s，使用本地 patched 版本 %s", filename, local_path)
-        await route.fulfill(path=str(local_path), content_type="application/javascript; charset=utf-8")
 
+        logger.info("---->拦截 %s，使用本地 patched 版本 %s", filename, local_path)
+        await route.fulfill(path=str(local_path), content_type="application/javascript; charset=utf-8")
+        
     try:
         await context.unroute(glob_pattern)
     except Exception:
@@ -479,8 +479,9 @@ async def _get_resume_handle(page: Page, timeout_ms: int = 10000, logger=None) -
     overlay = page.locator(RESUME_OVERLAY_SELECTOR)
 
     if await overlay.count() > 0:
-        await asyncio.sleep(timeout_ms / 1000)
+        await overlay.locator(INLINE_RESUME_SELECTORS[0]).wait_for(state="visible", timeout=timeout_ms)
         return {
+            "success": True,
             "mode": "inline",
             "iframe_handle": iframe,
             "entry": overlay,
@@ -493,25 +494,29 @@ async def _get_resume_handle(page: Page, timeout_ms: int = 10000, logger=None) -
             handle = await iframe.first.element_handle()
             frame = await handle.content_frame() if handle else None
             entry = frame.locator(RESUME_OVERLAY_SELECTOR) if frame else None
-            await asyncio.sleep(timeout_ms / 1000)
+            await entry.wait_for(state="visible", timeout=timeout_ms)
             if entry and await entry.count() > 0:
                 return {
+                    "success": True,
                     "mode": "inline",
                     "iframe_handle": iframe,
                     "frame": frame,
                     "entry": entry,
                 }
             return {
+                "success": True,
                 "mode": "iframe",
                 "iframe_handle": iframe,
                 "frame": frame,
             }
         return {
+            "success": False,
             "mode": "unknown",
             "frame": iframe,
         }
 
     return {
+        "success": False,
         "mode": "unknown",
         "frame": None,
         "details": "未检测到简历容器",
@@ -1256,11 +1261,24 @@ async def _process_resume_entry(page: Page, context_info: Dict[str, Any], logger
 
 
 async def extract_pdf_viewer_text(frame: Frame) -> Dict[str, Any]:
+    # use inner_html to extract text
     try:
-        await frame.locator("div.textLayer").first.wait_for(state="visible", timeout=5000)
-    except Exception:
+        text_list = []
+        pdf_text_layer = frame.locator("div.textLayer")
+        await pdf_text_layer.first.wait_for(state="visible", timeout=5000)
+        for page in await pdf_text_layer.all():
+            html = await page.inner_html()
+            text = extract_text_from_pdfjs_html(html)
+            text_list.append(text)
+        text = "\n".join(text_list)
+        cleaned_text = clean_resume_text(text)
+        assert len(cleaned_text) > 100, "PDF文本长度小于100"
+        return {"pages": [], "text": cleaned_text}
+    except Exception as e:
+        logger.error(f"提取PDF文本失败: {e}\n {cleaned_text}")
         pass
 
+    # use evaluate to extract text
     try:
         pages: Any = await frame.evaluate(
             dedent(
@@ -1340,11 +1358,8 @@ async def extract_pdf_viewer_text(frame: Frame) -> Dict[str, Any]:
                 """
             )
         )
-    except Exception:
-        pages = []
-        fallback = await frame.evaluate("() => document.body ? document.body.innerText || '' : ''")
-        fallback = clean_resume_text(fallback)
-        return {"pages": [], "text": fallback}
+    except Exception as e:
+        logger.error(f"evaluate frame文本失败: {e}")
 
     if isinstance(pages, dict):
         if "__error" in pages:
@@ -1359,7 +1374,17 @@ async def extract_pdf_viewer_text(frame: Frame) -> Dict[str, Any]:
                 combined.append(line)
 
     cleaned_text = clean_resume_text("\n".join(combined))
-    return {"pages": pages, "text": cleaned_text}
+    if len(cleaned_text) < 100:
+        logger.error(f"evaluate frame文本长度小于100: {cleaned_text}")
+
+    # fallback to inner_text
+    pages = []
+    fallback = await frame.evaluate("() => document.body ? document.body.innerText || '' : ''")
+    fallback = clean_pdf_text(fallback)
+    if len(fallback) < 100:
+        logger.error(f"fallback to inner_text文本长度小于100: {fallback}")
+    return {"pages": [], "text": fallback, "error": str(e)}
+
 
 
 def clean_resume_text(text: str) -> str:
@@ -1368,6 +1393,62 @@ def clean_resume_text(text: str) -> str:
     text = re.sub(r"\n\s\n", "\n", text)
     text = text.replace("<TRIPLE_NL>", "\n\n")
     return text.strip()
+
+import re, unicodedata
+
+def clean_pdf_text(raw: str) -> str:
+    text = raw.replace('\x00', '')
+    text = re.sub(r'[\x01-\x1F\x7F]', '', text)
+    # remove BOSS-style hashed tokens like f6a4b4051154ea161XJ_2tS-GFFTwYu4VvOcWOGkl_7RPhFl3g~~
+    text = re.sub(r'(?:[A-Za-z0-9_-]{20,}~~)+', '', text)
+    # merge single-char lines
+    text = re.sub(r'(?<=\S)\n(?=\S)', '', text)
+    # collapse newlines and spaces
+    text = re.sub(r'\n{2,}', '\n', text)
+    text = re.sub(r' {2,}', ' ', text)
+    text = unicodedata.normalize('NFKC', text)
+    return text.strip()
+
+from bs4 import BeautifulSoup
+import re
+
+def extract_text_from_pdfjs_html(html: str) -> str:
+    soup = BeautifulSoup(html, "html.parser")
+
+    # Try standard textLayer spans first
+    spans = soup.select(".textLayer span")
+    if not spans:
+        # fallback: PDF.js markedContent structure
+        spans = soup.select("span.markedContent span[role='presentation']")
+
+    items = []
+    for s in spans:
+        style = s.get("style", "")
+        m_top = re.search(r"top:\s*([\d.]+)px", style)
+        m_left = re.search(r"left:\s*([\d.]+)px", style)
+        text = s.get_text(strip=True)
+        if m_top and m_left and text:
+            items.append((float(m_top.group(1)), float(m_left.group(1)), text))
+
+    if not items:
+        # fallback to simple innerText for debugging
+        return soup.get_text(separator="", strip=True)
+
+    # Sort by vertical then horizontal position
+    items.sort(key=lambda x: (round(x[0], 1), x[1]))
+    lines = []
+    buffer, current_y = [], None
+    for y, x, t in items:
+        if current_y is None or abs(y - current_y) > 5:
+            if buffer:
+                lines.append("".join(buffer))
+            buffer = [t]
+            current_y = y
+        else:
+            buffer.append(t)
+    if buffer:
+        lines.append("".join(buffer))
+    return "\n".join(lines)
 
 
 __all__ = [

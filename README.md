@@ -117,7 +117,7 @@ Complete API reference available at [`docs/api_endpoints.md`](docs/api_endpoints
 
 ### Resume Operations
 - `POST /resume/request` - Request resume from candidate
-- `POST /resume/check_full` - Check whether an attached resume exists
+- `POST /resume/check_full_resume_available` - Check whether an attached resume exists
 - `POST /resume/view_full` - View attached resume
 - `POST /resume/online` - Extract online resume content
 

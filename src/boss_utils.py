@@ -8,9 +8,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from .global_logger import get_logger
-
-logger = get_logger()
+from .global_logger import logger
 
 # used to detect resume overlay
 IFRAME_OVERLAY_SELECTOR = "iframe[src*='c-resume'], iframe[name='recommendFrame']"

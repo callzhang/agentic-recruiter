@@ -1420,6 +1420,13 @@ function __wbg_finalize_init(instance, module) {
     }
 
     try {
+        const renderFallback = (container) => {
+            try {
+                if (!container) return;
+                container.setAttribute('data-wasm-rendering', 'disabled');
+            } catch (err) {}
+        };
+
         if (wasm && typeof wasm.start === 'function' && !wasm.__resume_wrapped_start) {
             const originalStart = wasm.start;
             wasm.start = function(container, content, geek_info_encrypt_string, geek_info_other_fields, iframe_window, iframe_offset, handle_rust_panic) {
@@ -1429,9 +1436,12 @@ function __wbg_finalize_init(instance, module) {
                         window.__resume_data_store.geek_info_other_fields = geek_info_other_fields;
                         window.__resume_data_store.geek_info_encrypt_string = geek_info_encrypt_string;
                     }
-                } catch (err) {
-                }
-                return originalStart.apply(this, arguments);
+                } catch (err) {}
+                renderFallback(container, content);
+                try {
+                    console.warn("⚠️ WASM rendering disabled — keeping server-provided HTML");
+                } catch (err) {}
+                return undefined;
             };
             wasm.__resume_wrapped_start = originalStart;
         }
@@ -1444,9 +1454,12 @@ function __wbg_finalize_init(instance, module) {
                         window.__resume_data_store.geek_info_other_fields = geek_info_other_fields;
                         window.__resume_data_store.geek_info_encrypt_string = geek_info_encrypt_string;
                     }
-                } catch (err) {
-                }
-                return originalAnon.apply(this, arguments);
+                } catch (err) {}
+                renderFallback(container, content);
+                try {
+                    console.warn("⚠️ WASM rendering disabled — keeping server-provided HTML");
+                } catch (err) {}
+                return undefined;
             };
             wasm.__resume_wrapped_start_anonymous = originalAnon;
         }
