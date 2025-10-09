@@ -213,6 +213,7 @@ class AssistantActions:
         assistant_id: str,
         purpose: str,
         user_message: str,
+        chat_history: List[Dict[str, Any]],
         full_resume: Optional[str] = None,
         format_json: Optional[bool] = False,
     ) -> Dict[str, Any]:
@@ -228,6 +229,7 @@ class AssistantActions:
             assistant_id: OpenAI assistant ID (required)
             purpose: Message purpose - "analyze", "greet", "chat", "followup"
             user_message: Latest message from candidate (required)
+            chat_history: Complete chat history to sync with thread (required)
             full_resume: Complete resume text to add to thread context (optional)
             format_json: Whether to request JSON response format
             
@@ -252,14 +254,22 @@ class AssistantActions:
                 "thread_id": None
             }
         
+        # Get current thread messages for comparison
+        thread_messages = self._list_thread_messages(thread_id)
+        
+        # Sync thread with complete chat history
+        history_messages = self._normalise_history(chat_history)
+        thread_messages = self._sync_thread_with_history(thread_id, thread_messages, history_messages)
+        logger.info("Synced chat history to thread %s", thread_id)
+        
         # Add full resume to thread if provided
         if full_resume:
             full_resume_text = f'完整简历信息:\n{full_resume[:2000]}'
-            self._append_message_to_thread(thread_id, [], "user", full_resume_text)
+            self._append_message_to_thread(thread_id, thread_messages, "user", full_resume_text)
             logger.info("Added full resume to thread %s", thread_id)
         
         # Add user message to thread
-        self._append_message_to_thread(thread_id, [], "user", user_message)
+        self._append_message_to_thread(thread_id, thread_messages, "user", user_message)
         logger.info("Added user message to thread %s", thread_id)
         
         # Get instruction for purpose
