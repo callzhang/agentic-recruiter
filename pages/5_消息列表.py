@@ -199,9 +199,6 @@ def _analyze_candidate(chat_id: str, assistant_id: str, history: list[dict]) -> 
     context = {
         "chat_id": chat_id,
         "assistant_id": assistant_id,
-        # "job_info": selected_job,
-        # "candidate_summary": candidate_summary,
-        # "candidate_resume": resume_text,
         "chat_history": history,
         "purpose": "analyze",
         # "instruction": "请根据岗位描述，对候选人的简历进行打分，用于决定是否继续推进。",
