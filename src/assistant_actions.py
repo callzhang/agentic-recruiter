@@ -7,7 +7,6 @@ import time
 from datetime import datetime
 from functools import lru_cache
 from typing import Any, Dict, Iterable, List, Optional
-from uuid import uuid4
 
 from annotated_types import Not
 from openai import OpenAI
@@ -16,7 +15,6 @@ from pydantic_core.core_schema import str_schema
 from tenacity import retry, stop_after_attempt, wait_exponential
 from deprecated import deprecated
 from .candidate_store import CandidateStore, candidate_store
-from .scheduler import BRDWorkScheduler
 from .config import settings
 from .global_logger import logger
 
@@ -62,11 +60,6 @@ class AssistantActions:
         else:
             self.client = None
         
-        # Scheduler management
-        import threading
-        self.scheduler: BRDWorkScheduler | None = None
-        self.scheduler_lock = threading.Lock()
-        self.scheduler_config: dict[str, Any] = {}
     
     # Assistants ----------------------------------------------------
     @lru_cache(maxsize=1)
@@ -91,9 +84,9 @@ class AssistantActions:
 
     # Candidates ----------------------------------------------------
     # @lru_cache(maxsize=1000)
-    def get_candidate_by_id(self, chat_id: str) -> Optional[Dict[str, Any]]:
+    def get_candidate_by_id(self, chat_id: str, fields: Optional[List[str]] = ["*"]) -> Optional[Dict[str, Any]]:
         """Get candidate by chat_id."""
-        record = self.store.get_candidate_by_chat_id(chat_id)
+        record = self.store.get_candidate_by_chat_id(chat_id, fields)
         if record:
             record.pop("resume_vector", None)
             record.pop("metadata", None)
@@ -580,140 +573,7 @@ def upsert_candidate(self, **kwargs) -> bool:
     else:
         return self.store.update_candidate(**kwargs)
 
-# QA Persistence ---------------------------------------------------
-def retrieve_relevant_answers(
-    self, 
-    query: str, 
-    top_k: Optional[int] = None,
-    similarity_threshold: Optional[float] = None
-) -> List[Dict[str, Any]]:
-    """Retrieve relevant QA entries for a query.
-    
-    Used by: boss_service.py (QA search endpoint)
-    """
-    if not self.enabled:
-        return []
-    vector = self.get_embedding(query)
-    if not vector:
-        return []
-    return self.store.search(vector, top_k, similarity_threshold)
 
-def record_qa(
-    self, 
-    *,
-    qa_id: str | None = None, 
-    question: str, 
-    answer: str,
-    keywords: Optional[List[str]] = None
-) -> str | None:
-    """Record a QA entry in the store.
-    
-    Used by: boss_service.py (QA endpoint), pages/7_问答库.py (UI)
-    """
-    if not self.enabled:
-        return None
-    text = f"问题: {question}\n回答: {answer}"
-    vector = self.get_embedding(text)
-    if not vector:
-        vector = [0.0] * settings.ZILLIZ_EMBEDDING_DIM  # Default dimension
-    qa_id = (qa_id or self.generate_id()).strip()
-    entry = {
-        "qa_id": qa_id,
-        "question": question,
-        "answer": answer,
-        "qa_vector": vector,
-        "keywords": keywords or [],
-    }
-    self.store.insert([entry])
-    return qa_id
-
-def list_entries(self, limit: int = 200, offset: int = 0) -> List[Dict[str, Any]]:
-    """List QA entries from store.
-    
-    Used by: boss_service.py (list endpoint), pages/7_问答库.py (UI)
-    """
-    if not self.enabled:
-        return []
-    # TODO: - would query Zilliz in full version
-    return []
-
-def delete_entry(self, resume_id: str) -> bool:
-    """Delete a QA entry from store.
-    
-    Used by: boss_service.py (delete endpoint), pages/7_问答库.py (UI)
-    """
-    if not self.enabled:
-        return False
-    # TODO - would delete from Zilliz in full version
-    return False
-
-@staticmethod
-def generate_id() -> str:
-    """Generate a unique ID.
-    
-    Used by: boss_service.py (ID generation endpoint), pages/7_问答库.py (UI), record_qa (internal)
-    """
-    return uuid4().hex
-
-# Scheduler Management -----------------------------------------
-def get_scheduler_status(self) -> Dict[str, Any]:
-    """Get scheduler status and configuration.
-    
-    Used by: boss_service.py (status endpoints)
-    """
-    with self.scheduler_lock:
-        status = {
-            'running': self.scheduler is not None,
-            'config': dict(self.scheduler_config) if self.scheduler is not None else {}
-        }
-        if self.scheduler is not None and hasattr(self.scheduler, 'get_status'):
-            status.update(self.scheduler.get_status())
-        return status
-
-def start_scheduler(self, payload: Dict[str, Any]) -> tuple[bool, str]:
-    """Start the automation scheduler.
-    
-    Used by: boss_service.py (start endpoint)
-    """
-    with self.scheduler_lock:
-        if self.scheduler:
-            return False, '调度器已运行'
-        
-        """Build scheduler options from payload."""
-
-        options: Dict[str, Any] = {
-            'job': payload.get('job'),
-            'recommend_limit': payload.get('check_recommend_candidates_limit') or 20,
-            'enable_recommend': bool(payload.get('check_recommend_candidates', True)),
-            'overall_threshold': payload.get('match_threshold') or 9.0,
-            'enable_chat_processing': bool(payload.get('check_new_chats')),
-            'enable_followup': bool(payload.get('check_followups')),
-            'assistant': self,
-            'base_url': settings.BOSS_SERVICE_BASE_URL,  # Pass API base URL instead of page
-        }
-
-        scheduler = BRDWorkScheduler(**options)
-        scheduler.start()
-        self.scheduler = scheduler
-        options.pop('assistant')
-        self.scheduler_config = options
-        return True, '调度器已启动'
-
-    def stop_scheduler(self) -> tuple[bool, str]:
-        """Stop the automation scheduler.
-        
-        Used by: boss_service.py (stop endpoint)
-        """
-        with self.scheduler_lock:
-            if not self.scheduler:
-                return False, '调度器未运行'
-            scheduler = self.scheduler
-            self.scheduler = None
-            self.scheduler_config = {}
-        
-        # Stop scheduler directly - it has its own timeout handling
-        scheduler.stop()
-        return True, '已停止调度器'
 
 
 
