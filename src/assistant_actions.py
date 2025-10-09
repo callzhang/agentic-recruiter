@@ -82,15 +82,40 @@ class AssistantActions:
         )
         return response.data[0].embedding
 
-    # Candidates ----------------------------------------------------
+    # Candidate Management --------------------------------------
     # @lru_cache(maxsize=1000)
     def get_candidate_by_id(self, chat_id: str, fields: Optional[List[str]] = ["*"]) -> Optional[Dict[str, Any]]:
         """Get candidate by chat_id."""
         record = self.store.get_candidate_by_chat_id(chat_id, fields)
         if record:
             record.pop("resume_vector", None)
-            record.pop("metadata", None)
         return record
+
+    
+    def _upsert_candidate(self, **kwargs) -> bool:
+        """Insert or update candidate information to the store.
+        Used by: boss_service.py (upsert endpoint), src/scheduler.py (automation), generate_message (internal)
+        """
+        # Generate embedding for new candidates
+        existing_candidate = self.get_candidate_by_id(kwargs.get("chat_id"))
+        if not existing_candidate:  # create a new candidate
+            resume_text = kwargs.get("resume_text")
+            if resume_text:
+                embedding = self.get_embedding(resume_text)
+                kwargs["resume_vector"] = embedding
+        
+            # Truncate resume text to avoid token limits
+            resume_text = kwargs.get("resume_text")
+            if resume_text:
+                kwargs["resume_text"] = resume_text[:8000]
+                
+            return self.store.insert_candidate(**kwargs)
+        else:
+            return self.store.update_candidate(**kwargs)
+
+
+
+
 
 
     # AI Generation with Threads API ------------------------------
@@ -104,8 +129,8 @@ class AssistantActions:
         name: str,
         job_info: Dict[str, Any],
         resume_text: str,
+        chat_history: List[Dict[str, Any]],
         chat_id: Optional[str] = None,
-        chat_history: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         """
         Initialize conversation thread and Zilliz record.
@@ -142,10 +167,13 @@ class AssistantActions:
         logger.info("Added job description to thread %s", thread_id)
         
         # Sync thread with chat history if provided
-        if chat_history:
-            history_messages = self._normalise_history(chat_history)
-            thread_messages = self._sync_thread_with_history(thread_id, thread_messages, history_messages)
-            logger.info("Synced chat history to thread %s", thread_id)
+        history_messages = self._normalise_history(chat_history)
+        thread_messages = self._sync_thread_with_history(thread_id, thread_messages, history_messages)
+        logger.info("Synced chat history to thread %s", thread_id)
+        if len(chat_history) > 0:
+            last_message = chat_history[-1].get("message")
+        else:
+            last_message = ""
         
         # Add candidate resume to thread
         candidate_resume_text = f'请查看我的简历:\n{resume_text[:2000]}'
@@ -157,22 +185,16 @@ class AssistantActions:
         # Generate embedding for semantic search
         embedding = self.get_embedding(resume_text)
         
-        # Prepare metadata
-        metadata = {
-            "thread_id": thread_id,
-            "resume_text": resume_text,
-        }
-        
-        # Upsert candidate record
-        success = self.store.upsert_candidate(
+        # create candidate record
+        success = self._upsert_candidate(
             chat_id=chat_id,
             name=name,
+            last_message=last_message,
             job_applied=job_info["position"],
             resume_text=resume_text,
             resume_vector=embedding,
             stage=None,  # Not analyzed yet
-            metadata=metadata,
-            partial=True
+            thread_id=thread_id,
         )
         
         return {
@@ -183,15 +205,15 @@ class AssistantActions:
         
 
 
-
+    ## ------------Main Message Generation----------------------------------
+    
     def generate_message(
         self,
         chat_id: str,
         assistant_id: str,
         purpose: str,
-        user_message: Optional[str] = None,
+        user_message: str,
         full_resume: Optional[str] = None,
-        instruction: Optional[str] = None,
         format_json: Optional[bool] = False,
     ) -> Dict[str, Any]:
         """
@@ -205,9 +227,8 @@ class AssistantActions:
             chat_id: Chat ID to look up thread (required)
             assistant_id: OpenAI assistant ID (required)
             purpose: Message purpose - "analyze", "greet", "chat", "followup"
-            user_message: Latest message from candidate (optional)
+            user_message: Latest message from candidate (required)
             full_resume: Complete resume text to add to thread context (optional)
-            instruction: Custom instruction (optional, uses default for purpose if not provided)
             format_json: Whether to request JSON response format
             
         Returns:
@@ -217,87 +238,76 @@ class AssistantActions:
                 - success: bool
                 - thread_id: str
         """
-        try:
-            assert chat_id, "chat_id is required"
-            assert assistant_id, "assistant_id is required"
-            assert purpose, "purpose is required"
-            
-            # Get thread_id from Zilliz store using chat_id
-            thread_id = self.get_thread_id(chat_id=chat_id)
-            if not thread_id:
-                return {
-                    "message": "抱歉，未找到对应的对话线程，请先初始化对话。",
-                    "analysis": None,
-                    "success": False,
-                    "thread_id": None
-                }
-            
-            # Add full resume to thread if provided
-            if full_resume:
-                full_resume_text = f'完整简历信息:\n{full_resume[:2000]}'
-                self._append_message_to_thread(thread_id, [], "user", full_resume_text)
-                logger.info("Added full resume to thread %s", thread_id)
-            
-            # Add user message to thread if provided
-            if user_message:
-                self._append_message_to_thread(thread_id, [], "user", user_message)
-                logger.info("Added user message to thread %s", thread_id)
-            
-            # Get instruction for purpose
-            if not instruction:
-                instruction = DEFAULT_PROMPTS.get(purpose)
-                assert instruction, f"prompt for {purpose} is not found"
-                if purpose == "analyze":
-                    format_json = True
-            
-            # Create a new run
-            run = self.client.beta.threads.runs.create(
-                thread_id=thread_id,
-                assistant_id=assistant_id,
-                additional_instructions=instruction,
-                response_format={"type": "json_object"} if format_json else None,
-            )
-            
-            # Wait for completion
-            if not self._wait_for_run_completion(thread_id, run.id):
-                logger.error("Run failed or timed out for thread %s", thread_id)
-                return {
-                    "message": "抱歉，消息生成失败，请稍后重试。",
-                    "analysis": None,
-                    "success": False,
-                    "thread_id": thread_id
-                }
-            
-            # Extract generated message
-            generated_message = self._extract_latest_assistant_message(thread_id).strip()
-            
-            # Parse analysis if purpose is "analyze"
-            analysis = None
-            if purpose == "analyze" and format_json:
-                try:
-                    analysis = json.loads(generated_message)
-                    logger.info("Parsed analysis from thread %s", thread_id)
-                    # Analysis is kept in the thread - no need to store in Zilliz
-                        
-                except json.JSONDecodeError as e:
-                    logger.error("Failed to parse analysis JSON: %s", str(e))
-                    analysis = {"error": "Failed to parse analysis", "raw_message": generated_message}
-            
+        assert chat_id, "chat_id is required"
+        assert assistant_id, "assistant_id is required"
+        assert purpose, "purpose is required"
+        
+        # Get thread_id from Zilliz store using chat_id
+        thread_id = self.get_thread_id(chat_id=chat_id)
+        if not thread_id:
             return {
-                "message": generated_message,
-                "analysis": analysis,
-                "success": True,
-                "thread_id": thread_id
+                "message": "抱歉，未找到对应的对话线程，请先初始化对话。",
+                "analysis": None,
+                "success": False,
+                "thread_id": None
             }
-            
-        except Exception as e:
-            logger.error("Failed to generate message: %s", str(e))
+        
+        # Add full resume to thread if provided
+        if full_resume:
+            full_resume_text = f'完整简历信息:\n{full_resume[:2000]}'
+            self._append_message_to_thread(thread_id, [], "user", full_resume_text)
+            logger.info("Added full resume to thread %s", thread_id)
+        
+        # Add user message to thread
+        self._append_message_to_thread(thread_id, [], "user", user_message)
+        logger.info("Added user message to thread %s", thread_id)
+        
+        # Get instruction for purpose
+        instruction = DEFAULT_PROMPTS.get(purpose)
+        assert instruction, f"prompt for {purpose} is not found"
+        if purpose == "analyze":
+            format_json = True
+        
+        # Create a new run
+        run = self.client.beta.threads.runs.create(
+            thread_id=thread_id,
+            assistant_id=assistant_id,
+            additional_instructions=instruction,
+            response_format={"type": "json_object"} if format_json else None,
+        )
+        
+        # Wait for completion
+        if not self._wait_for_run_completion(thread_id, run.id):
+            logger.error("Run failed or timed out for thread %s", thread_id)
             return {
-                "message": f"消息生成失败: {str(e)}",
+                "message": "抱歉，消息生成失败，请稍后重试。",
                 "analysis": None,
                 "success": False,
                 "thread_id": thread_id
             }
+        
+        # Extract generated message
+        generated_message = self._extract_latest_assistant_message(thread_id).strip()
+        
+        # Parse analysis if purpose is "analyze"
+        analysis = None
+        if purpose == "analyze" and format_json:
+            try:
+                analysis = json.loads(generated_message)
+                logger.info("Parsed analysis from thread %s", thread_id)
+                # Analysis is kept in the thread - no need to store in Zilliz
+                    
+            except json.JSONDecodeError as e:
+                logger.error("Failed to parse analysis JSON: %s", str(e))
+                analysis = {"error": "Failed to parse analysis", "raw_message": generated_message}
+        
+        return {
+            "message": generated_message,
+            "analysis": analysis,
+            "success": True,
+            "thread_id": thread_id
+        }
+
 
     def get_thread_id(self, chat_id: Optional[str] = None, candidate_resume: Optional[str] = None) -> Optional[str]:
         """
@@ -376,203 +386,132 @@ class AssistantActions:
 
         return messages
 
-def _normalise_history(self, chat_history: List[Dict[str, Any]]) -> List[Dict[str, str]]:
-    """Convert chat history to thread message format."""
-    role_map = {"candidate": "user", "recruiter": "assistant", "system": "assistant"}
-    normalised: List[Dict[str, str]] = []
-    for entry in chat_history or []:
-        role = role_map.get(entry.get("type"))
-        message = (entry.get("message") or "").strip()
-        if role and message:
-            normalised.append({"role": role, "content": message})
-        else:
-            logger.warning(f"缺少角色或消息内容: [{role}]: {entry}")
-    return normalised
+    def _normalise_history(self, chat_history: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+        """Convert chat history to thread message format."""
+        role_map = {"candidate": "user", "recruiter": "assistant", "system": "assistant"}
+        normalised: List[Dict[str, str]] = []
+        for entry in chat_history or []:
+            role = role_map.get(entry.get("type"))
+            message = (entry.get("message") or "").strip()
+            if role and message:
+                normalised.append({"role": role, "content": message})
+            else:
+                logger.warning(f"缺少角色或消息内容: [{role}]: {entry}")
+        return normalised
 
-def _sync_thread_with_history(
-    self,
-    thread_id: str,
-    thread_messages: List[Dict[str, str]],
-    history_messages: List[Dict[str, str]],
-) -> List[Dict[str, str]]:
-    """Sync thread messages with chat history, adding missing messages."""
-    comparable_thread = [
-        (msg["role"], msg["content"])
-        for msg in thread_messages
-    ]
-
-    last_common = -1
-    idx_thread = len(comparable_thread) - 1
-    for idx_history in range(len(history_messages) - 1, -1, -1):
-        history_msg = history_messages[idx_history]
-        while idx_thread >= 0:
-            thread_role, thread_content = comparable_thread[idx_thread]
-            if (
-                thread_role == history_msg["role"]
-                and thread_content == history_msg["content"]
-            ):
-                last_common = idx_history
-                idx_thread -= 1
-                break
-            idx_thread -= 1
-        if last_common != -1:
-            break
-
-    pending = history_messages[last_common + 1 :]
-    for message in pending:
-        self.client.beta.threads.messages.create(
-            thread_id=thread_id,
-            role=message["role"],
-            content=message["content"],
-        )
-        thread_messages.append({"role": message["role"], "content": message["content"]})
-
-    return thread_messages
-
-def _append_message_to_thread(
-    self,
-    thread_id: str,
-    thread_messages: List[Dict[str, str]],
-    role: str,
-    content: str,
-) -> bool:
-    """Add message to thread if not already present.
-    return True if the message is added, False if the message is already present.
-    return: bool
-    """
-    for message in thread_messages:
-        if message.get("role") == role and message.get("content") == content:
-            return False
-    self.client.beta.threads.messages.create(thread_id=thread_id, role=role, content=content)
-    thread_messages.append({"role": role, "content": content})
-    return True
-
-
-def _format_analysis_message(self, analysis: Dict[str, Any]) -> str:
-    """Format candidate analysis into readable message."""
-    if not isinstance(analysis, dict):
-        return str(analysis)
-    key_map = {
-        "skill": "技能匹配度",
-        "startup_fit": "创业契合度",
-        "willingness": "加入意愿",
-        "overall": "综合评分",
-    }
-    lines: List[str] = []
-    for key in key_map.keys():
-        value = analysis.get(key)
-        lines.append(f"{key_map[key]}: {value}")
-    summary = analysis.get("summary")
-    if summary:
-        lines.append(f"简历分析总结: {summary}")
-    if not lines:
-        return ""
-    return "你好，以下是对你简历的评估评估:\n" + "\n".join(lines)
-
-
-def _wait_for_run_completion(self, thread_id: str, run_id: str, timeout: int = 60) -> bool:
-    """Wait for AI assistant run to complete with timeout."""
-    start = time.time()
-    while time.time() - start < timeout:
-        run_status = self.client.beta.threads.runs.retrieve(thread_id=thread_id, run_id=run_id)
-        status = getattr(run_status, "status", "")
-        if status == "completed":
-            return True
-        if status in {"failed", "cancelled", "expired"}:
-            logger.error("Run %s stopped with status %s", run_id, status)
-            return False
-        time.sleep(1)
-    logger.error("Run %s timed out", run_id)
-    return False
-
-def _extract_latest_assistant_message(self, thread_id: str) -> str:
-    """Extract the latest assistant message from thread."""
-    response = self.client.beta.threads.messages.list(
-        thread_id=thread_id,
-        order="desc",
-        limit=10,
-    )
-    for message in response.data:
-        if message.role != "assistant":
-            continue
-        text_blocks = [
-            block.text.value
-            for block in message.content
-            if getattr(block, "type", None) == "text"
+    def _sync_thread_with_history(
+        self,
+        thread_id: str,
+        thread_messages: List[Dict[str, str]],
+        history_messages: List[Dict[str, str]],
+    ) -> List[Dict[str, str]]:
+        """Sync thread messages with chat history, adding missing messages."""
+        comparable_thread = [
+            (msg["role"], msg["content"])
+            for msg in thread_messages
         ]
-        content = "\n".join(text_blocks).strip()
-        return content # only return the latest assistant message
+
+        last_common = -1
+        idx_thread = len(comparable_thread) - 1
+        for idx_history in range(len(history_messages) - 1, -1, -1):
+            history_msg = history_messages[idx_history]
+            while idx_thread >= 0:
+                thread_role, thread_content = comparable_thread[idx_thread]
+                if (
+                    thread_role == history_msg["role"]
+                    and thread_content == history_msg["content"]
+                ):
+                    last_common = idx_history
+                    idx_thread -= 1
+                    break
+                idx_thread -= 1
+            if last_common != -1:
+                break
+
+        pending = history_messages[last_common + 1 :]
+        for message in pending:
+            self.client.beta.threads.messages.create(
+                thread_id=thread_id,
+                role=message["role"],
+                content=message["content"],
+            )
+            thread_messages.append({"role": message["role"], "content": message["content"]})
+
+        return thread_messages
+
+    def _append_message_to_thread(
+        self,
+        thread_id: str,
+        thread_messages: List[Dict[str, str]],
+        role: str,
+        content: str,
+    ) -> bool:
+        """Add message to thread if not already present.
+        return True if the message is added, False if the message is already present.
+        return: bool
+        """
+        for message in thread_messages:
+            if message.get("role") == role and message.get("content") == content:
+                return False
+        self.client.beta.threads.messages.create(thread_id=thread_id, role=role, content=content)
+        thread_messages.append({"role": role, "content": content})
+        return True
 
 
-@deprecated(reason="use `generate_message` instead")  # TODO: remove this
-def analyze_candidate_remove(
-    self, 
-    job_info: dict,   
-    candidate_resume: str,
-    chat_history: dict,
-    candidate_summary: str = None,
-) -> Optional[Dict[str, Any]]:
-    """Analyze candidate and return scoring results.
-    
-    Used by: boss_service.py (analysis endpoint), src/scheduler.py (automation), pages/6_推荐牛人.py (UI)
-    """
-    if not self.client:
-        raise SystemError("OpenAI client not available for candidate analysis")
-    
-    prompt = f"""请基于以下信息对候选人做出量化评估。
-【岗位描述】
-{job_info}
+    def _format_analysis_message(self, analysis: Dict[str, Any]) -> str:
+        """Format candidate analysis into readable message."""
+        if not isinstance(analysis, dict):
+            return str(analysis)
+        key_map = {
+            "skill": "技能匹配度",
+            "startup_fit": "创业契合度",
+            "willingness": "加入意愿",
+            "overall": "综合评分",
+        }
+        lines: List[str] = []
+        for key in key_map.keys():
+            value = analysis.get(key)
+            lines.append(f"{key_map[key]}: {value}")
+        summary = analysis.get("summary")
+        if summary:
+            lines.append(f"简历分析总结: {summary}")
+        if not lines:
+            return ""
+        return "你好，以下是对你简历的评估评估:\n" + "\n".join(lines)
 
-【候选人材料】
-{candidate_summary}
-{candidate_resume}
 
-【近期对话】
-{chat_history}
+    def _wait_for_run_completion(self, thread_id: str, run_id: str, timeout: int = 60) -> bool:
+        """Wait for AI assistant run to complete with timeout."""
+        start = time.time()
+        while time.time() - start < timeout:
+            run_status = self.client.beta.threads.runs.retrieve(thread_id=thread_id, run_id=run_id)
+            status = getattr(run_status, "status", "")
+            if status == "completed":
+                return True
+            if status in {"failed", "cancelled", "expired"}:
+                logger.error("Run %s stopped with status %s", run_id, status)
+                return False
+            time.sleep(1)
+        logger.error("Run %s timed out", run_id)
+        return False
 
-请给出 1-10 的四个评分：技能匹配度、创业契合度、加入意愿、综合评分，并提供简要分析。输出严格使用 JSON 格式：
-{{
-"skill": <int>,
-"startup_fit": <int>,
-"willingness": <int>,
-"overall": <int>,
-"summary": "..."
-}}
-"""
-    response = self.client.chat.completions.create(
-        model=OPENAI_DEFAULT_MODEL,
-        messages=[{"role": "user", "content": prompt}],
-        response_format={"type": "json_object"}  # Ensures the model outputs valid JSON
-    )
-    data = json.loads(response.choices[0].message.content)
-    if not data:
-        logger.error("无法解析评分结果")
-    return data
-
-# Candidate Management --------------------------------------
-
-def upsert_candidate(self, **kwargs) -> bool:
-    """Insert or update candidate information to the store.
-    
-    Used by: boss_service.py (upsert endpoint), src/scheduler.py (automation), generate_message (internal)
-    """
-    # Generate embedding for new candidates
-    existing_candidate = self.get_candidate_by_id(kwargs.get("chat_id"))
-    if not existing_candidate:  # create a new candidate
-        resume_text = kwargs.get("resume_text")
-        if resume_text:
-            embedding = self.get_embedding(resume_text)
-            kwargs["resume_vector"] = embedding
-    
-        # Truncate resume text to avoid token limits
-        resume_text = kwargs.get("resume_text")
-        if resume_text:
-            kwargs["resume_text"] = resume_text[:8000]
-            
-        return self.store.insert_candidate(**kwargs)
-    else:
-        return self.store.update_candidate(**kwargs)
-
+    def _extract_latest_assistant_message(self, thread_id: str) -> str:
+        """Extract the latest assistant message from thread."""
+        response = self.client.beta.threads.messages.list(
+            thread_id=thread_id,
+            order="desc",
+            limit=10,
+        )
+        for message in response.data:
+            if message.role != "assistant":
+                continue
+            text_blocks = [
+                block.text.value
+                for block in message.content
+                if getattr(block, "type", None) == "text"
+            ]
+            content = "\n".join(text_blocks).strip()
+            return content # only return the latest assistant message
 
 
 
