@@ -203,7 +203,29 @@ class AssistantActions:
             "success": success
         }
         
-
+    def append_resume_to_thread_and_store(self, chat_id: str, resume_text: str, resume_source: str) -> bool:
+        """Append resume to both thread and Zilliz store."""
+        thread_id = self.get_thread_id(chat_id=chat_id)
+        if not thread_id:
+            logger.error("No thread_id found for chat_id: %s", chat_id)
+            return False
+        
+        # Get current thread messages for comparison
+        thread_messages = self._list_thread_messages(thread_id)
+        
+        # Add resume to thread
+        resume_message = f'完整简历信息:\n{resume_text[:2000]}'
+        self._append_message_to_thread(thread_id, thread_messages, "user", resume_message)
+        logger.info("Added resume to thread %s", thread_id)
+        
+        # Update Zilliz store with resume information
+        success = self._upsert_candidate(
+            chat_id=chat_id, 
+            resume_text=resume_text, 
+            resume_source=resume_source
+        )
+        
+        return success
 
     ## ------------Main Message Generation----------------------------------
     
@@ -212,9 +234,8 @@ class AssistantActions:
         chat_id: str,
         assistant_id: str,
         purpose: str,
-        user_message: str,
         chat_history: List[Dict[str, Any]],
-        full_resume: Optional[str] = None,
+        # full_resume: Optional[str] = None,
         format_json: Optional[bool] = False,
     ) -> Dict[str, Any]:
         """
@@ -228,7 +249,6 @@ class AssistantActions:
             chat_id: Chat ID to look up thread (required)
             assistant_id: OpenAI assistant ID (required)
             purpose: Message purpose - "analyze", "greet", "chat", "followup"
-            user_message: Latest message from candidate (required)
             chat_history: Complete chat history to sync with thread (required)
             full_resume: Complete resume text to add to thread context (optional)
             format_json: Whether to request JSON response format
@@ -246,13 +266,7 @@ class AssistantActions:
         
         # Get thread_id from Zilliz store using chat_id
         thread_id = self.get_thread_id(chat_id=chat_id)
-        if not thread_id:
-            return {
-                "message": "抱歉，未找到对应的对话线程，请先初始化对话。",
-                "analysis": None,
-                "success": False,
-                "thread_id": None
-            }
+        assert thread_id, "thread_id is required"
         
         # Get current thread messages for comparison
         thread_messages = self._list_thread_messages(thread_id)
@@ -261,16 +275,6 @@ class AssistantActions:
         history_messages = self._normalise_history(chat_history)
         thread_messages = self._sync_thread_with_history(thread_id, thread_messages, history_messages)
         logger.info("Synced chat history to thread %s", thread_id)
-        
-        # Add full resume to thread if provided
-        if full_resume:
-            full_resume_text = f'完整简历信息:\n{full_resume[:2000]}'
-            self._append_message_to_thread(thread_id, thread_messages, "user", full_resume_text)
-            logger.info("Added full resume to thread %s", thread_id)
-        
-        # Add user message to thread
-        self._append_message_to_thread(thread_id, thread_messages, "user", user_message)
-        logger.info("Added user message to thread %s", thread_id)
         
         # Get instruction for purpose
         instruction = DEFAULT_PROMPTS.get(purpose)
@@ -460,10 +464,11 @@ class AssistantActions:
         return True if the message is added, False if the message is already present.
         return: bool
         """
-        for message in thread_messages:
-            if message.get("role") == role and message.get("content") == content:
-                return False
-        self.client.beta.threads.messages.create(thread_id=thread_id, role=role, content=content)
+        if thread_messages:
+            for message in thread_messages:
+                if message.get("role") == role and message.get("content") == content:
+                    return False
+            self.client.beta.threads.messages.create(thread_id=thread_id, role=role, content=content)
         thread_messages.append({"role": role, "content": content})
         return True
 

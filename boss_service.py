@@ -332,11 +332,11 @@ class BossServiceAsync:
         # ------------------ Thread API ------------------
 
         @self.app.post("/assistant/generate-message")
-        def generate_followup_api(data: dict = Body(...)):
+        def generate_message(data: dict = Body(...)):
             return self.assistant_actions.generate_message(**data)
 
         @self.app.get("/candidate/{chat_id}")
-        def get_candidate_api(chat_id: str, fields: Optional[List[str]] = None):
+        def get_candidate_api(chat_id: str, fields: Optional[List[str]] = ["*"]):
             """Get candidate information from the store."""
             return self.assistant_actions.get_candidate_by_id(chat_id, fields)
 
@@ -347,6 +347,11 @@ class BossServiceAsync:
         @self.app.get('thread/{thread_id}/messages')
         def get_thread_messages_api(thread_id: str):
             return self.assistant_actions.get_thread_messages(thread_id)
+
+        @self.app.post("/assistant/append-resume")
+        def append_resume_api(data: dict = Body(...)):
+            """Append resume text to both Zilliz store and thread."""
+            return self.assistant_actions.append_resume_to_thread_and_store(**data)
 
         # @self.app.post("/assistant/retrieve-answers")
         # def retrieve_answers_api(payload: dict = Body(...)):
