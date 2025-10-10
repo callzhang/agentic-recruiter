@@ -249,8 +249,8 @@ class BossServiceAsync:
             page = await self._ensure_browser_session()
             return await get_chat_history_action(page, chat_id)
 
-        @self.app.post("/chat/send")
-        async def send_message_api(chat_id: str = Body(..., embed=True), message: str = Body(..., embed=True)):
+        @self.app.post("/chat/{chat_id}/send")
+        async def send_message_api(chat_id: str, message: str = Body(..., embed=True)):
             page = await self._ensure_browser_session()
             return await send_message_action(page, chat_id, message)
 
@@ -348,10 +348,10 @@ class BossServiceAsync:
         def get_thread_messages_api(thread_id: str):
             return self.assistant_actions.get_thread_messages(thread_id)
 
-        @self.app.post("/assistant/append-resume")
-        def append_resume_api(data: dict = Body(...)):
-            """Append resume text to both Zilliz store and thread."""
-            return self.assistant_actions.append_resume_to_thread_and_store(**data)
+        # @self.app.post("/assistant/append-resume")
+        # def append_resume_api(data: dict = Body(...)):
+        #     """Append resume text to both Zilliz store and thread."""
+        #     return self.assistant_actions.append_resume_to_thread_and_store(**data)
 
         # @self.app.post("/assistant/retrieve-answers")
         # def retrieve_answers_api(payload: dict = Body(...)):

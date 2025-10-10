@@ -32,38 +32,39 @@ RESUME_IFRAME_SELECTOR = "iframe.attachment-box"
 PDF_VIEWER_SELECTOR = "div.pdfViewer"
 
 
-async def _prepare_chat_page(page: Page, tab = '新招呼', status = '未读', job_title = '全部', wait_timeout: int = 5000) -> Page:
+async def _prepare_chat_page(page: Page, tab = None, status = None, job_title = None, wait_timeout: int = 5000) -> Page:
     await close_overlay_dialogs(page)
     await ensure_on_chat_page(page, settings, logger)
 
-    tab_selector = f"div.chat-label-item[title*='{tab}']"
-    chat_tab = page.locator(tab_selector).first
-    if 'selected' not in await chat_tab.get_attribute("class"):
-        try:
-            await chat_tab.click()
-            await page.locator(CHAT_ITEM_SELECTORS).first.wait_for(state="visible", timeout=wait_timeout)
-        except Exception as exc: 
-            logger.warning("切换聊天标签失败(%s): %s", tab, exc)
-
-    status_selector = f"div.chat-message-filter-left > span:has-text('{status}')"
-    chat_status = page.locator(status_selector).first
-    if 'active' not in await chat_status.get_attribute("class"):
-        try:
-            await chat_status.click()
-            await page.locator(CHAT_ITEM_SELECTORS).first.wait_for(state="visible", timeout=wait_timeout)
-        except Exception as exc:
-            logger.warning("切换聊天状态失败(%s): %s", status, exc)
-
-    current_job_selector = f"div.ui-dropmenu-label > span.chat-select-job"
-    job_selector = f'div.ui-dropmenu-list >> li:has-text("{job_title}")'
-    current_job = await page.locator(current_job_selector).first.inner_text()
-    if job_title not in current_job:
-        try:
-            await page.locator(current_job_selector).first.click()
-            await page.locator(job_selector).first.click()
-            await page.locator(CHAT_ITEM_SELECTORS).first.wait_for(state="visible", timeout=wait_timeout)
-        except Exception as exc: 
-            logger.warning("切换聊天职位失败(%s): %s", job_title, exc)
+    if tab:
+        tab_selector = f"div.chat-label-item[title*='{tab}']"
+        chat_tab = page.locator(tab_selector).first
+        if 'selected' not in await chat_tab.get_attribute("class"):
+            try:
+                await chat_tab.click()
+                await page.locator(CHAT_ITEM_SELECTORS).first.wait_for(state="visible", timeout=wait_timeout)
+            except Exception as exc: 
+                logger.warning("切换聊天标签失败(%s): %s", tab, exc)
+    if status:
+        status_selector = f"div.chat-message-filter-left > span:has-text('{status}')"
+        chat_status = page.locator(status_selector).first
+        if 'active' not in await chat_status.get_attribute("class"):
+            try:
+                await chat_status.click()
+                await page.locator(CHAT_ITEM_SELECTORS).first.wait_for(state="visible", timeout=wait_timeout)
+            except Exception as exc:
+                logger.warning("切换聊天状态失败(%s): %s", status, exc)
+    if job_title:
+        current_job_selector = f"div.ui-dropmenu-label > span.chat-select-job"
+        job_selector = f'div.ui-dropmenu-list >> li:has-text("{job_title}")'
+        current_job = await page.locator(current_job_selector).first.inner_text()
+        if job_title not in current_job:
+            try:
+                await page.locator(current_job_selector).first.click()
+                await page.locator(job_selector).first.click()
+                await page.locator(CHAT_ITEM_SELECTORS).first.wait_for(state="visible", timeout=wait_timeout)
+            except Exception as exc: 
+                logger.warning("切换聊天职位失败(%s): %s", job_title, exc)
 
     return page
 
@@ -71,10 +72,9 @@ async def _prepare_chat_page(page: Page, tab = '新招呼', status = '未读', j
 async def _go_to_chat_dialog(page: Page, chat_id: str, wait_timeout: int = 5000) -> Optional[Locator]:
     direct_selectors = [
         f"{CHAT_ITEM_SELECTORS}[data-id=\"{chat_id}\"]",
-        f"{CHAT_ITEM_SELECTORS}[id='{chat_id}']",
         f"[role='listitem'][data-id=\"{chat_id}\"]",
     ]
-    target: Optional[Locator] = None
+    target: Optional[Locator] = None    
     for selector in direct_selectors:
         locator = page.locator(selector).first
         if await locator.count() > 0:
