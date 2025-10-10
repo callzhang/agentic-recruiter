@@ -52,6 +52,41 @@ def _fetch_history(chat_id: str) -> List[str]:
     return payload
 
 
+def pass_and_next(dialogs: List[Dict[str, Any]], current_chat_id: str) -> None:
+    """Move to the next candidate in the dialog list."""
+    if not dialogs:
+        st.warning("没有更多候选人了")
+        return
+    
+    # Find current index
+    current_index = None
+    for i, dialog in enumerate(dialogs):
+        if dialog.get("id") == current_chat_id:
+            current_index = i
+            break
+    
+    if current_index is None:
+        st.warning("未找到当前候选人")
+        return
+    
+    # Move to next candidate
+    next_index = current_index + 1
+    if next_index >= len(dialogs):
+        st.info("已经是最后一个候选人了")
+        return
+    
+    # Update session state to select next candidate
+    next_chat_id = dialogs[next_index]["id"]
+    st.session_state[SessionKeys.SELECTED_CHAT_ID] = next_chat_id
+    
+    # Clear cached data for the new candidate
+    _fetch_resume.clear()
+    _fetch_history.clear()
+    
+    st.success(f"已切换到下一个候选人: {dialogs[next_index].get('name', 'Unknown')}")
+    st.rerun()
+
+
 def _fetch_best_resume(chat_id: str) -> tuple[str, str]:
     """
     Fetch best available resume (full resume preferred, online as fallback).
@@ -301,6 +336,16 @@ def main() -> None:
         return
     # 对话下拉框
     col_select, col_refresh = st.columns([9, 1])
+    
+    # Get current selection from session state or default to first dialog
+    current_selection = st.session_state.get(SessionKeys.SELECTED_CHAT_ID)
+    default_index = 0
+    if current_selection:
+        try:
+            default_index = next(i for i, row in enumerate(dialogs) if row['id'] == current_selection)
+        except StopIteration:
+            default_index = 0
+    
     chat_id = col_select.selectbox(
         'None',
         options=[row["id"] for row in dialogs],
@@ -309,9 +354,13 @@ def main() -> None:
             cid,
         ),
         key="chat_selector",
-        index=1,
+        index=default_index,
         label_visibility="collapsed",
     )
+    
+    # Update session state when selection changes
+    if chat_id != current_selection:
+        st.session_state[SessionKeys.SELECTED_CHAT_ID] = chat_id
     # 选中对话
     selected_dialog = next((row for row in dialogs if row['id'] == chat_id), None)
     if col_refresh.button("🔄", key="refresh_messages_main"):
@@ -401,7 +450,7 @@ def main() -> None:
 
     # === Message Section (user-triggered) ===
     st.subheader("生成消息")
-    last_message = st.session_state.setdefault(SessionKeys.GENERATED_MESSAGES, {})[chat_id]
+    last_message = st.session_state.setdefault(SessionKeys.GENERATED_MESSAGES, {}).get(chat_id)
     draft_message = st.empty()
     draft = draft_message.text_area("消息内容", value=last_message, height=180, key=f"message_draft_{chat_id}")
     col_generate, col_send = st.columns(2)
@@ -430,5 +479,8 @@ def main() -> None:
             else:
                 st.error("发送失败")
 
+    # pass and next button
+    if st.button("PASS，查看下一个候选人", key=f"pass_and_next_{chat_id}"):
+        pass_and_next(dialogs, chat_id)
 if __name__ == "__main__":
     main()

@@ -45,6 +45,7 @@ class SessionKeys:
     ANALYSIS_RESULTS = "analysis_results"   # AI analysis results (skill, startup_fit, etc.)
     GENERATED_MESSAGES = "generated_messages"  # Generated message drafts by chat_id
     SELECTED_ASSISTANT_ID = "selected_assistant_id"  # Selected assistant ID
+    SELECTED_CHAT_ID = "selected_chat_id"  # Currently selected chat ID for navigation
 
 
 def ensure_state() -> None:
