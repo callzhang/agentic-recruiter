@@ -268,13 +268,16 @@ class AssistantActions:
         assert instruction, f"prompt for {purpose} is not found"
         if purpose == "analyze":
             format_json = True
+        else:
+            # For non-analyze purposes, explicitly enforce text format
+            instruction += "\n\n重要：请直接输出纯文本内容，不要使用任何JSON格式、markdown格式或其他特殊格式。"
         
         # Create a new run
         run = self.client.beta.threads.runs.create(
             thread_id=thread_id,
             assistant_id=assistant_id,
             additional_instructions=instruction,
-            response_format={"type": "json_object"} if format_json else None,
+            response_format={"type": "json_object"} if format_json else {"type": "text"},
         )
         
         # Wait for completion
