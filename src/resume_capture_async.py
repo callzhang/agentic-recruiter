@@ -1400,7 +1400,7 @@ def clean_pdf_text(raw: str) -> str:
     text = raw.replace('\x00', '')
     text = re.sub(r'[\x01-\x1F\x7F]', '', text)
     # remove BOSS-style hashed tokens like f6a4b4051154ea161XJ_2tS-GFFTwYu4VvOcWOGkl_7RPhFl3g~~
-    text = re.sub(r'(?:[A-Za-z0-9_-]{20,}~~)+', '', text)
+    text = re.sub(r'[A-Za-z0-9_-]{10,}~~', '', text)
     # merge single-char lines
     text = re.sub(r'(?<=\S)\n(?=\S)', '', text)
     # collapse newlines and spaces

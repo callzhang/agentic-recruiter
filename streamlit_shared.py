@@ -242,7 +242,6 @@ def call_api(method: str, path: str, **kwargs) -> Tuple[bool, Any]:
         with st.spinner(f"正在请求 API: {path} ..."):
             response = requests.request(method.upper(), url, timeout=30, **kwargs)
         response.raise_for_status()
-        content_type = response.headers.get("content-type", "")
         return True, response.json()
     except requests.RequestException as exc:
         return False, str(exc)
