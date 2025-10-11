@@ -272,10 +272,7 @@ class AssistantActions:
         # Wait for completion
         if not self._wait_for_run_completion(thread_id, run.id):
             logger.error("Run failed or timed out for thread %s", thread_id)
-            return {
-                "message": "抱歉，消息生成失败，请稍后重试。",
-                "success": False,
-            }
+            raise RuntimeError("消息生成失败，请稍后重试")
         
         # Extract generated message
         generated_message = self._extract_latest_assistant_message(thread_id).strip()
