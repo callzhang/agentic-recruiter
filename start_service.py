@@ -269,90 +269,60 @@ def start_service(*, scheduler_options: Optional[Dict[str, Any]] | None = None):
                 print(f"[!] Chrome启动失败: {e}")
                 return False
 
-        # Use modern watchfiles with polling for better reliability
-        # Only watch files that belong to the boss server
-        # 
-        # POLLING METHOD EXPLANATION:
-        # - WATCHFILES_FORCE_POLLING=true: Forces polling instead of file system events
-        # - WATCHFILES_POLL_DELAY_MS=1000: Check for changes every 1 second
-        # - Polling is more reliable than file system events in some environments
-        # - Slightly more resource intensive but more stable
-        # env["WATCHFILES_FORCE_POLLING"] = "true"
-        env["WATCHFILES_POLL_DELAY_MS"] = "1000"  # 1 second polling interval
-        env["WATCHFILES_IGNORE_PERMISSION_ERRORS"] = "true"  # Ignore permission errors
-        env["WATCHFILES_DEFAULT_FILTERS"] = "*.py"
-        env["WATCHFILES_ROOTS"] = "src,boss_service.py"
-        env["WATCHFILES_SKIP_DIRS"] = "streamlit_shared.py,logs,notebooks,venv,data,__pycache__"
         # 使用 uvicorn 启动（可开启 --reload；CDP模式下重载不会中断浏览器）
-        # 只监控与 boss_service 相关的核心文件，排除不必要的文件
-        cmd = [
-            sys.executable, "-m", "uvicorn",
-            "boss_service:app",
-            "--host", host,
-            "--port", port,
-            "--reload",
-            "--reload-dir", "src",
-            "--reload-include", "boss_service.py",
-            # "--reload-include", "src/*",
-            "--reload-delay", "3.0"
-        ]
-        # 新建进程组，以便整体发送信号
-        process = subprocess.Popen(cmd, env=env, preexec_fn=os.setsid)
-
-        def signal_handler(sig, frame):
-            print("\n[*] 正在停止服务...")
-            try:
-                # 停止uvicorn进程
-                os.killpg(os.getpgid(process.pid), signal.SIGTERM)
-                process.wait(timeout=3)
-            except Exception:
-                try:
-                    os.killpg(os.getpgid(process.pid), signal.SIGKILL)
-                except Exception:
-                    pass
-
-            # 可选：清理Chrome进程（通常保留以便下次使用）
-            cleanup_chrome = os.environ.get('CLEANUP_CHROME_ON_EXIT', 'false').lower() == 'true'
-            if cleanup_chrome:
-                print("[*] 清理Chrome进程...")
-                kill_existing_chrome(user_data)
-            if scheduler_started:
-                try:
-                    requests.post(f"{base_url}/automation/scheduler/stop", timeout=10)
-                except Exception:
-                    pass
-            
-            print("[+] 服务已停止")
-            sys.exit(0)
-        
-        signal.signal(signal.SIGINT, signal_handler)
-        signal.signal(signal.SIGTERM, signal_handler)
-        
+        # 直接使用 Python API 以支持 reload_excludes (uvicorn 0.21.0+)
         print("[+] 服务启动成功!")
         print(f"[*] 服务地址: http://{host}:{port}")
         print("[*] 按 Ctrl+C 停止服务")
         
-        # 等待进程结束
-        process.wait()
+        # Start uvicorn directly with reload_excludes
+        # Only watch src/ directory + boss_service.py, exclude everything else
+        # Note: uvicorn.run() blocks here until server stops (Ctrl+C or error)
+        import uvicorn
+        uvicorn.run(
+            "boss_service:app",
+            host=host,
+            port=int(port),
+            reload=True,
+            reload_dirs=["src"],  # Only watch src/ directory
+            reload_includes=["boss_service.py"],  # Also watch boss_service.py specifically
+            reload_excludes=[
+                "pages/**",
+                "scripts/**", 
+                "test/**",
+                "config/**",
+                "data/**",
+                "docs/**",
+                "examples/**",
+                "wasm/**",
+                "streamlit_shared.py",
+                "boss_app.py",
+                "start_service.py",
+                "*.ipynb",
+                "*.md",
+                "__pycache__/**"
+            ],
+            reload_delay=3.0
+        )
+        
+        # Cleanup after uvicorn stops gracefully (e.g., Ctrl+C)
+        print("\n[*] 正在停止服务...")
         if scheduler_started:
             try:
                 requests.post(f"{base_url}/automation/scheduler/stop", timeout=10)
             except Exception:
                 pass
         
+        # 可选：清理Chrome进程（通常保留以便下次使用）
+        cleanup_chrome = os.environ.get('CLEANUP_CHROME_ON_EXIT', 'false').lower() == 'true'
+        # if cleanup_chrome:
+        #     print("[*] 清理Chrome进程...")
+        #     kill_existing_chrome(user_data)
+        
+        print("[+] 服务已停止")
+        
     except KeyboardInterrupt:
         print("\n[*] 正在停止服务...")
-        try:
-            os.killpg(os.getpgid(process.pid), signal.SIGTERM)
-        except Exception:
-            pass
-        try:
-            process.wait(timeout=10)
-        except Exception:
-            try:
-                os.killpg(os.getpgid(process.pid), signal.SIGKILL)
-            except Exception:
-                pass
         if scheduler_started:
             try:
                 requests.post(f"{base_url}/automation/scheduler/stop", timeout=10)
