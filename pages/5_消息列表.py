@@ -1,6 +1,6 @@
 """Enhanced message console with resume viewing, scoring, and AI drafting."""
 from __future__ import annotations
-
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -51,40 +51,6 @@ def _fetch_history(chat_id: str) -> List[str]:
         raise ValueError(f"获取聊天记录失败: {payload}")
     return payload
 
-
-def pass_and_next(dialogs: List[Dict[str, Any]], current_chat_id: str) -> None:
-    """Move to the next candidate in the dialog list."""
-    if not dialogs:
-        st.warning("没有更多候选人了")
-        return
-    
-    # Find current index
-    current_index = None
-    for i, dialog in enumerate(dialogs):
-        if dialog.get("id") == current_chat_id:
-            current_index = i
-            break
-    
-    if current_index is None:
-        st.warning("未找到当前候选人")
-        return
-    
-    # Move to next candidate
-    next_index = current_index + 1
-    if next_index >= len(dialogs):
-        st.info("已经是最后一个候选人了")
-        return
-    
-    # Update session state to select next candidate
-    next_chat_id = dialogs[next_index]["id"]
-    st.session_state[SessionKeys.SELECTED_CHAT_ID] = next_chat_id
-    
-    # Clear cached data for the new candidate
-    _fetch_resume.clear()
-    _fetch_history.clear()
-    
-    st.success(f"已切换到下一个候选人: {dialogs[next_index].get('name', 'Unknown')}")
-    st.rerun()
 
 
 def _fetch_best_resume(chat_id: str) -> tuple[str, str]:
@@ -200,33 +166,31 @@ def render_resume_section(
 
 
 def render_history_section(history: List[Dict[str, Any]]) -> None:
-    """Render history section UI (separated from data fetching)"""
-    with st.expander("对话记录", expanded=True):
-        # Format history data for better table display
-        formatted_history = []
-        for item in history:
-            type_emoji = "👤" if item.get('type') == 'candidate' else "🏢"
-            status_emoji = "✅" if item.get('status') == 'processed' else "⏳" if item.get('status') else "❓"
-            formatted_item = {
-                '类型': f"{type_emoji} {'候选人' if item.get('type') == 'candidate' else 'HR'}",
-                '时间': item.get('timestamp', ''),
-                '消息内容': item.get('message', ''),
-                '状态': f"{status_emoji} {item.get('status') if item.get('status') else '未处理'}"
-            }
-            formatted_history.append(formatted_item)
-        import pandas as pd
-        df = pd.DataFrame(history)
-        st.dataframe(
-            df, 
-            width="stretch", 
-            hide_index=True,
-            column_config={
-                "类型": st.column_config.TextColumn("类型", width="small"),
-                "时间": st.column_config.TextColumn("时间", width="medium"),
-                "消息内容": st.column_config.TextColumn("消息内容", width="large"),
-                "状态": st.column_config.TextColumn("状态", width="small")
-            }
-        )
+    st.subheader("聊天记录")
+    formatted_history = []
+    for item in history:
+        type_emoji = "👤" if item.get('type') == 'candidate' else "🏢"
+        status_emoji = "✅" if item.get('status') == 'processed' else "⏳" if item.get('status') else "❓"
+        formatted_item = {
+            '类型': f"{type_emoji} {'候选人' if item.get('type') == 'candidate' else 'HR'}",
+            '时间': item.get('timestamp', ''),
+            '消息内容': item.get('message', ''),
+            '状态': f"{status_emoji} {item.get('status') if item.get('status') else '未处理'}"
+        }
+        formatted_history.append(formatted_item)
+    import pandas as pd
+    df = pd.DataFrame(history)
+    st.dataframe(
+        df, 
+        width="stretch", 
+        hide_index=True,
+        column_config={
+            "类型": st.column_config.TextColumn("类型", width="small"),
+            "时间": st.column_config.TextColumn("时间", width="medium"),
+            "消息内容": st.column_config.TextColumn("消息内容", width="large"),
+            "状态": st.column_config.TextColumn("状态", width="small")
+        }
+    )
 
 
 @st.cache_data(show_spinner="分析中...")
@@ -291,6 +255,28 @@ def generate_message(chat_id: str, assistant_id: str, history: list[dict]) -> Di
     })
     return generated_message
 
+def stream_message(message: str) -> None:
+    """Stream message."""
+    for w in message:
+        yield w
+        time.sleep(0.02)
+
+def send_message_and_request_full_resume(chat_id: str, message: str) -> None:
+    if not message:
+        st.warning("消息内容不能为空")
+    else:
+        with st.spinner("发送中..."):
+            ok, payload = call_api("POST", f"/chat/{chat_id}/send", json={"message": message})
+            if ok and payload.get("success"):
+                st.success(payload.get("details"))
+            else:
+                st.error(payload.get("details"))
+        with st.spinner("请求完整简历中..."):
+            ok, payload = call_api("POST", "/resume/request", json={"chat_id": chat_id})
+            if ok and payload.get("success"):
+                st.success(payload.get("details"))
+            else:
+                st.error(payload.get("details"))
 
 # ---------------------------------------------------------------------------
 # Main entrypoint
@@ -307,59 +293,45 @@ def main() -> None:
     job_info = get_selected_job(selected_job_idx)
     job_title = job_info.get("position")
     # === Filter Controls ===
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        tab_filter = st.radio(
-            "聊天标签",
-            options=['全部', '新招呼', '沟通中'],
-            index=0,
-            help="选择要查看的聊天标签",
-            horizontal=True
-        )
-    
-    with col2:
-        status_filter = st.radio(
-            "消息状态",
-            options=['全部', '未读', '牛人已读未回'],
-            index=0,
-            help="选择要查看的消息状态",
-            horizontal=True
-        )
+    candidate_type = st.radio("Candidate type", options=['新招呼', '沟通中', '牛人已读未回'], index=0, horizontal=True)
+    if candidate_type == '新招呼':
+        tab_filter = '新招呼'
+        status_filter = '未读'
+    elif candidate_type == '沟通中':
+        tab_filter = '沟通中'
+        status_filter = '未读'
+    else:
+        tab_filter = '沟通中'
+        status_filter = '牛人已读未回'
     
     
-    # === Data Loading Phase (cached, fast) ===
+    # dialogs
     dialogs = _get_dialogs(limit, tab_filter, status_filter, job_title)
-
     if not dialogs:
         st.info("暂无聊天对话数据。。。")
         return
+
     # 对话下拉框
     col_select, col_refresh = st.columns([9, 1])
-    
-    # Get current selection from session state or default to first dialog
-    current_selection = st.session_state.get(SessionKeys.SELECTED_CHAT_ID)
-    default_index = 0
-    if current_selection:
-        try:
-            default_index = next(i for i, row in enumerate(dialogs) if row['id'] == current_selection)
-        except StopIteration:
-            default_index = 0
-    
+    cached_chat_id = st.session_state.get(SessionKeys.SELECTED_CHAT_ID)
+    if 'chat_selector' not in st.session_state:
+        st.session_state["chat_selector"] = cached_chat_id
+
+    # get chat_id
     chat_id = col_select.selectbox(
         'None',
         options=[row["id"] for row in dialogs],
         format_func=lambda cid: next(
-            (f"{row['name']}({row['job_title']}):{row['text']}" for row in dialogs if row['id'] == cid),
+            (f"{row['name']}({row['job_title']}): {row['text']}" for row in dialogs if row['id'] == cid),
             cid,
         ),
-        key="chat_selector",
-        index=default_index,
+        key=f"chat_selector",
+        index=None, #When you pass index=None, you tell Streamlit “don’t fix an index, use whatever is in session_state,” allowing your explicit state update to drive the selection.
         label_visibility="collapsed",
     )
     
     # Update session state when selection changes
-    if chat_id != current_selection:
+    if chat_id and chat_id != cached_chat_id:
         st.session_state[SessionKeys.SELECTED_CHAT_ID] = chat_id
     # 选中对话
     selected_dialog = next((row for row in dialogs if row['id'] == chat_id), None)
@@ -396,17 +368,7 @@ def main() -> None:
             resume_source = "在线简历"
     assert resume_text, "无法获取简历数据"
     
-    # Fetch history data (cached by @st.cache_data for 5 minutes)
-    chat_messages = _fetch_history(chat_id)
-
-    if not record_exists:
-        # init chat
-        suceess = init_chat(chat_id, selected_dialog.get("name"), job_info, resume_text, chat_messages)
-        if not suceess:
-            st.error("初始化聊天失败")
-            return
-
-    # === UI Rendering Phase (display data in expanders) ===
+   
     # Resume expanders - now filled with cached data
     with st.expander("简历信息", expanded=bool(resume_text)):
         col1, col2 = st.columns(2)
@@ -424,25 +386,32 @@ def main() -> None:
         else:
             st.warning("暂无简历数据")
     
-    # History expander - now filled with fetched data
+    
+    # Fetch history data (cached by @st.cache_data for 5 minutes)
+    chat_messages = _fetch_history(chat_id)
     render_history_section(chat_messages)
+
+    # 创建对象
+    if not record_exists:
+        # init chat
+        suceess = init_chat(chat_id, selected_dialog.get("name"), job_info, resume_text, chat_messages)
+        if not suceess:
+            st.error("初始化聊天失败")
+            return
 
     # === Scoring Section (user-triggered) ===
     st.subheader("自动评分")
 
     # Display analysis results
     # analysis_result = st.session_state.get(SessionKeys.ANALYSIS_RESULTS, {}).get(chat_id)
-    analysis_result = candidate_object.get("analysis")
-    if not analysis_result:
-        analysis_result = st.session_state.get(SessionKeys.ANALYSIS_RESULTS, {}).get(chat_id)
+    analysis_result = candidate_object.get("analysis") or st.session_state.get(SessionKeys.ANALYSIS_RESULTS, {}).get(chat_id)
     if analysis_result:
         cols = st.columns(4)
         cols[0].metric("技能匹配", analysis_result.get("skill"))
         cols[1].metric("创业契合", analysis_result.get("startup_fit"))
         cols[2].metric("加入意愿", analysis_result.get("willingness"))
         cols[3].metric("综合评分", analysis_result.get("overall"), help='1-10分, 如果需要调整评分，请修改助手配置')
-        st.markdown(f"**分析总结：** {analysis_result.get('summary', '—')}")
-
+        st.text_area("分析总结", value=analysis_result.get('summary', '—'), height=180, key=f"analysis_summary_{chat_id}")
     else:
         analysis_result = _analyze_candidate(chat_id, assistant_id, chat_messages)
         st.session_state.setdefault(SessionKeys.ANALYSIS_RESULTS, {})[chat_id] = analysis_result
@@ -450,37 +419,49 @@ def main() -> None:
 
     # === Message Section (user-triggered) ===
     st.subheader("生成消息")
-    last_message = st.session_state.setdefault(SessionKeys.GENERATED_MESSAGES, {}).get(chat_id)
-    draft_message = st.empty()
-    draft = draft_message.text_area("消息内容", value=last_message, height=180, key=f"message_draft_{chat_id}")
-    col_generate, col_send = st.columns(2)
-    # Generate button
-    if col_generate.button("生成建议", key=f"generate_msg_{chat_id}", disabled=bool(draft)):
-        followup_message = generate_message(chat_id, assistant_id, chat_messages)
-        draft_message.text_area("消息内容", value=followup_message, height=180)
-        st.session_state.setdefault(SessionKeys.GENERATED_MESSAGES, {})[chat_id] = followup_message
-        st.rerun()
-
-    # Send button
-    if col_send.button("发送消息", key=f"send_msg_{chat_id}", disabled=not bool(draft)):
-        content = draft.strip()
-        if not content:
-            st.warning("消息内容不能为空")
+    followup_message = st.session_state.setdefault(SessionKeys.GENERATED_MESSAGES, {}).get(chat_id)
+    if not followup_message:
+        if st.button("生成建议", key=f"generate_msg_{chat_id}", disabled=bool(followup_message)):
+            followup_message = generate_message(chat_id, assistant_id, chat_messages)
+            st.write_stream(stream_message(followup_message))
+            st.session_state[SessionKeys.GENERATED_MESSAGES][chat_id] = followup_message
         else:
-            with st.spinner("发送中..."):
-                ok, payload = call_api(
-                    "POST",
-                    f"/chat/{chat_id}/send",
-                    json={"message": content},
-                )
-                success = ok
-            if success:
-                st.success("消息已发送")
-            else:
-                st.error("发送失败")
+            st.warning("请先生成消息")
+    else:
+        st.text_area("消息内容", value=followup_message, height=180, key=f"message_draft_{chat_id}")
+    # Send button
+    if st.button("发送消息", key=f"send_msg_{chat_id}", disabled=not bool(followup_message)):
+        send_message_and_request_full_resume(chat_id, followup_message)
 
     # pass and next button
+    current_index = next(i for i, row in enumerate(dialogs) if row['id'] == cached_chat_id)
+    if st.button('Next'):
+        next_index = current_index + 1
+        next_chat_id = dialogs[next_index]["id"]
+        st.session_state[SessionKeys.SELECTED_CHAT_ID] = next_chat_id
+        del st.session_state["chat_selector"] 
+        st.rerun()
+
     if st.button("PASS，查看下一个候选人", key=f"pass_and_next_{chat_id}"):
-        pass_and_next(dialogs, chat_id)
+        """Move to the next candidate in the dialog list."""
+        next_index = current_index + 1
+        if next_index >= len(dialogs):
+            # fetch more candidates
+            pass
+
+        next_chat_id = dialogs[next_index]["id"]
+        st.session_state[SessionKeys.SELECTED_CHAT_ID] = next_chat_id
+        del st.session_state["chat_selector"] 
+        # update the candidate with stage=PASS
+        ok, payload = call_api("POST", "/candidate/discard", json={"chat_id": chat_id, "stage": "PASS"})
+        if not payload.get("success"):
+            st.error(f"更新候选人阶段失败: {payload}")
+            time.sleep(3)
+        else:
+            st.success(f"已更新候选人阶段: {payload}")
+        
+        st.success(f"已切换到下一个候选人: {dialogs[next_index].get('name', 'Unknown')}（{next_chat_id}）")
+        
+        st.rerun() #todo: 现在无法自动跳转到下一个候选人，需要手动刷新
 if __name__ == "__main__":
     main()

@@ -140,6 +140,7 @@ def _edit_role(role: Dict[str, Any], idx: int) -> None:
         "description",
         "target_profile",
         "keywords",
+        "extra",
     }
     extra = {k: deepcopy(v) for k, v in role.items() if k not in handled}
     extra_yaml = yaml.safe_dump(extra, allow_unicode=True, sort_keys=False) if extra else ""
@@ -150,11 +151,10 @@ def _edit_role(role: Dict[str, Any], idx: int) -> None:
         height=220,
         placeholder="请输入其它配置，格式为 YAML",
     )
-    parsed = yaml.safe_load(updated_extra) or {}
+    role['extra'] = updated_extra
     for key in list(role.keys()):
         if key not in handled:
             role.pop(key)
-    role.update(parsed)
 
 
 def main() -> None:
@@ -220,7 +220,6 @@ def main() -> None:
                 roles.append(_create_role(new_position, new_role_id, existing_ids))
                 auto_save_config(config)
                 st.success("新岗位已保存")
-                st.rerun()
 
 
 if __name__ == "__main__":

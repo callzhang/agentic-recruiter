@@ -1,59 +1,101 @@
-# Configuration settings
 config:
-  base_url: "https://www.zhipin.com/"
-  chat_url: "https://www.zhipin.com/web/chat/index"
-  recommend_url: "https://www.zhipin.com/web/chat/recommend"
-  login_url: "https://www.zhipin.com/web/user"
-  storage_state: "data/state.json"
-  cdp_url: "http://127.0.0.1:9222"
-  boss_service_base_url: "http://127.0.0.1:5001"
-  boss_criteria_path: "config/jobs.yaml"
-
-# Job roles and criteria
+  base_url: https://www.zhipin.com/
+  chat_url: https://www.zhipin.com/web/chat/index
+  recommend_url: https://www.zhipin.com/web/chat/recommend
+  login_url: https://www.zhipin.com/web/user
+  storage_state: data/state.json
+  cdp_url: http://127.0.0.1:9222
+  boss_service_base_url: http://127.0.0.1:5001
+  boss_criteria_path: config/jobs.yaml
 roles:
 - id: algo
   position: 大模型算法工程师
   keywords:
     positive:
-    - 大模型
-    - LLM
-    - 分布式训练
-    - 数据治理
-    - PyTorch
-    - TensorFlow
-    - RAG
-    - 量化
-    - 蒸馏
-    - 检索增强
-    - LoRA
     - PEFT
     - RLHF
-    - AI 基础设施
-    - 增加一个选项
+    - RLAIF
+    - DPO
+    - GDPO
+    - reward modeling
+    - alignment
+    - CoT
+    - Meta-of-Thought
+    - MoE
+    - QLoRA
+    - AdaLoRA
+    - P-Tuning
+    - BitFit
+    - UniPELT
+    - vision-language models
+    - LVLM
+    - multimodal
+    - speculative decoding
+    - distillation
+    - gradient
+    - perplexity
+    - CLIP
+    - augmentation
+    - synthetic
+    - active learning
+    - parallelism
+    - gradient synchronizatio
+    - context engineering
+    - Constitutional AI
+    - Flow Matching
+    - Consistency Models
+    - Sparse Activation
+    - of Thoughts
+    - VLM
     negative:
-    - 只做学术
-    - 不愿意跨学科协作
-    - 缺乏工程落地经验
-    - 不熟悉分布式系统
+    - machine learning
+    - deep learning
+    - AI
+    - CNN
+    - RNN
+    - LSTM
   background: 'MorningStar 与 Rosetta 正在把企业内部的“混沌数据”打造成可持续进化的 AI 增长飞轮。
 
     你将加入一个以第一性原理重新发明企业级数据基础设施的核心团队，服务对象覆盖自动驾驶、金融与大型制造业等头部客户，面对 PB 级数据与高可靠性场景。'
-  responsibilities: '- 设计并迭代企业级大模型训练/推理流水线，涵盖数据治理、特征挖掘与评估机制。
+  responsibilities: '前沿对齐研究 (Alignment Research)：负责大语言模型AI对齐（Alignment）的前沿研究，深入探索并实践如
+    GDPO、RLAIF 及 Constitutional AI 等超越传统 RLHF 的先进对齐技术，构建可信赖AI的核心。
 
-    - 将 LLM / 多模态模型落地至 MorningStar 平台，输出可复用的组件与最佳实践。
 
-    - 优化模型在生产环境的稳定性与效率，包含分布式调度、量化/蒸馏、检索增强等模块。
+    创新范式探索 (Paradigm Exploration)：设计并实现创新的模型训练与评估机制。你将不仅仅是应用，而是要深入研究如 Flow Matching、Consistency
+    Models 等新一代生成模型框架，并探索 CoT (Chain-of-Thought) 到 Meta-of-Thought 等复杂推理结构的潜力。
 
-    - 与产品、前线解决方案团队协作，将业务需求拆解为可验证的技术里程碑。'
-  requirements: '- 计算机、数学、自动化等相关专业背景，硕士及以上优先。
 
-    - 3-8 年算法/大模型经验，具备至少一个从数据→模型→部署端到端成功案例。
+    性能与效率优化 (Performance & Efficiency Optimization)：研究并落地如 QLoRA、AdaLoRA、P-Tuning
+    等多样化的 PEFT 技术。同时，探索 MoE 架构下的 Sparse Activation 机制、speculative decoding 和 distillation
+    等前沿方案，实现极致的训练与推理效率。
 
-    - 精通 Python，熟悉 PyTorch / TensorFlow，掌握 LoRA、PEFT、RLHF 等主流技术栈。
 
-    - 深入理解分布式训练、模型加速或 RAG/向量检索之一，具备工程可落地能力。
+    多模态能力构建 (Multimodal Capabilities)：负责 vision-language models (LVLM) 的研究与落地，利用 CLIP
+    等模型的思想，构建强大的多模态理解与生成能力。
 
-    - 强烈的产品 ownership 意识，愿意在快速演进的事件驱动架构中持续重构、追求极致质量。'
+
+    数据中心AI实践 (Data-Centric AI Practices)：将 active learning、synthetic data augmentation
+    等数据策略与模型训练相结合，通过 context engineering 提升模型在特定领域的表现。
+
+
+    大规模训练 (Large-Scale Training)：深入理解大规模训练中的 parallelism 策略和 gradient synchronization
+    等核心技术，确保算法在分布式环境下的高效运行。'
+  requirements: '计算机科学、人工智能、运筹学或相关领域的硕士或博士学位，具备深厚的数学功底。
+
+
+    在大语言模型领域有扎实的研究背景，尤其在AI对齐、生成模型或高效模型架构方向有深入实践。
+
+
+    具备 DPO/GDPO、RLAIF 等先进对齐算法的实践经验，或在 Flow Matching、Consistency Models 等生成模型理论与实现上有深入研究。
+
+
+    拥有丰富的 PEFT 实践经验，熟悉 QLoRA、AdaLoRA、P-Tuning、BitFit 或 UniPELT 等至少两种以上技术。
+
+
+    熟悉 MoE 等稀疏化模型架构，并理解其核心机制。
+
+
+    对解决AI核心技术问题充满热情，能够从 gradient 和 perplexity 等基础层面思考和解决问题。'
   description: '负责数据中心化大模型平台的核心研发，构建 MorningStar 的训练/评估/部署一体化能力，
 
     包括模型效率优化、推理加速、以及围绕自动驾驶、金融等行业客户的差异化方案。'
@@ -61,7 +103,90 @@ roles:
 
     - 熟悉 LLM、RAG、数据治理与事件驱动架构的任一方向，并愿意跨学科协作。
 
-    - 能在快速迭代的创业节奏中兼顾技术深度与可交付性，对结果负责。'
+    - 能在快速迭代的创业节奏中兼顾技术深度与可交付性，对结果负责。
+
+    技术画像 (Technical Profile)
+
+    一位来自顶尖AI Lab的博士，其研究方向聚焦于如何让LLM更诚实，他/她不仅发表过关于模型幻觉或AI对齐的ACL/NeurIPS论文，还在项目中主导或深度参与过RLAIF或GDPO算法的实现与改进，并对当前的LLM评估机制有自己批判性的思考和独到见解。
+
+
+    理想人选画像 (Ideal Candidate Profile)
+
+    对第一性原理充满热情 (Passionate about First Principles): 你不满足于调用API，而是痴迷于探究技术背后的数学原理与核心思想（如
+    gradient 的流动和 perplexity 的本质）。你拥有扎实的数学基础，并享受从理论推导到代码实现的全过程。
+
+
+    是创造者，也是分享者 (A Creator and a Contributor): 你对技术怀有纯粹的热爱，是开源社区的积极参与者或贡献者，相信开放协作是推动技术进步的最佳路径。
+
+
+    怀有创业精神 (Possesses an Entrepreneurial Spirit): 你渴望将前沿研究转化为能改变行业的产品，不畏惧挑战未知。你将以主人翁的心态，与一个同样充满激情的顶尖团队一起，定义一个全新的领域。
+
+
+    本质驱动，而非履历驱动 (Intrinsically Motivated, Not Resume-Driven): 驱动你的是解决AI核心难题的内在渴望，而不是为了填充一份光鲜的履历。你享受探索、实验和创造带来的成就感。'
+  extra: '关键词与简历筛选标签 (For HR Screening)
+
+    为了帮助我们精准地找到最合适的候选人，请严格按照以下关键词列表进行筛选。目标是提升准确率（Accuracy），而非召回率（Recall）。
+
+
+    负面关键词清单 (Negative Keywords)
+
+    请优先排除个人简介和项目经历中仅包含以下通用或过时词汇，而无更深层次技术细节的简历：
+
+    machine learning, deep learning, AI, CNN, RNN, LSTM
+
+
+    核心技术方向与筛选关键词
+
+    方向一：AI对齐与偏好学习 (Alignment & Preference Learning)
+
+    此方向是构建可信赖AI、解决模型幻觉的基石，旨在让模型真正理解并遵循人类的复杂意图和价值观。
+
+    关键词: RLHF, RLAIF, DPO / GDPO, reward modeling, alignment, Constitutional AI
+
+    筛选建议: 重点关注对偏好数据收集、奖励模型设计与训练有深入理解的候选人。具备 DPO 或 RLAIF 实际项目经验是极强的信号，表明候选人已超越传统 RLHF
+    的认知，处于技术前沿。
+
+
+    方向二：高效微调与架构 (Efficient Tuning & Architectures)
+
+    此方向关注如何在有限的计算资源下，最大化模型的性能与迭代效率，是技术产品化和商业化的关键。
+
+    关键词: PEFT, QLoRA, AdaLoRA, P-Tuning, BitFit, UniPELT, MoE (Mixture of Experts),
+    Sparse Activation
+
+    筛选建议: 候选人应至少精通两种以上的 PEFT 方法，并能阐述其原理和适用场景。对于 MoE，需考察其对路由算法、负载均衡等核心机制的理解深度，而非停留在概念层面。
+
+
+    方向三：高级推理与生成模型 (Advanced Reasoning & Generative Models)
+
+    此方向致力于突破当前LLM线性、浅层推理的瓶颈，探索更强大的认知能力和新一代的生成模型理论。
+
+    关键词: CoT (Chain-of-Thought), Meta-of-Thought, ... of Thoughts (e.g., Tree of Thoughts,
+    Graph of Thoughts), Flow Matching, Consistency Models
+
+    筛选建议: 寻找在复杂问题求解（如数学、代码生成）方面有成功经验的候选人。若其研究涉及到对模型推理过程的结构化探索（如思维树/图），或对 Flow Matching
+    等有深厚数学背景的生成理论有研究，应作为顶级人才重点跟进。
+
+
+    方向四：多模态与推理优化 (Multimodality & Inference Optimization)
+
+    此方向旨在将AI的能力从纯文本扩展到图像、视频等更广阔的世界，并确保模型在生产环境中的高效响应。
+
+    关键词: vision-language models / LVLM, multimodal, CLIP, speculative decoding, distillation
+
+    筛选建议: 需具备 LVLM 的实际训练或微调经验。对于推理优化，应关注候选人是否有通过 speculative decoding 或 distillation
+    等技术显著降低延迟、提升吞吐量的量化成果。
+
+
+    方向五：数据策略与大规模训练 (Data Strategy & Large-Scale Training)
+
+    此方向是所有上层研究的根基，涵盖从数据源头提升模型智能，到驾驭超大规模计算集群的工程挑战。
+
+    关键词: augmentation, synthetic data, active learning, context engineering, parallelism,
+    gradient synchronization
+
+    筛选建议: 考察候选人是否具备“数据中心AI”的思维模式，例如通过 active learning 或 synthetic data 提升模型能力的经验。在大规模训练方面，对
+    parallelism（张量、流水线、数据并行）的理解深度是核心评估点。'
 - id: architecture
   position: 架构师
   background: '我们是 Preseen (星尘数据)，一家致力于构建全球领先AI基础设施的公司。当前，绝大多数企业的AI潜力因无法有效利用其私有数据而被封印。我们的核心产品

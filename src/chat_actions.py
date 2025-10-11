@@ -131,28 +131,32 @@ async def request_resume_action(page: Page, chat_id: str) -> Dict[str, Any]:
         resume_pending.click()
         await page.wait_for_timeout(500)
         if await resume_pending.count() == 0:
-            return {"success": True, "already_sent": True, "details": "简历请求已发送（按钮已禁用）"}
-        
+            return {"success": True, "details": "简历请求已发送（按钮已禁用）"}
+    
+    # 求简历
     btn = page.locator("span.operate-btn:has-text('求简历')").first
     await btn.wait_for(state="visible", timeout=3000)
     is_disabled = await btn.evaluate(
         "el => el.classList.contains('disabled') || el.disabled || el.getAttribute('disabled') !== null"
     )
     if is_disabled:
-        return {"success": True, "already_sent": True, "details": "简历请求已发送（按钮已禁用）"}
-
+        return {"success": True, "details": "简历请求已发送（按钮已禁用）"}
     await btn.click()
-    confirm_continue = page.locator("div:has-text('继续交换')").first
+    
+    await page.wait_for_timeout(1000)
+    # 境外提醒
+    confirm_continue = page.locator("div.btn-v2:has-text('继续交换')").first
     if await confirm_continue.count() > 0:
         await confirm_continue.click()
+    # 
     confirm = page.locator("span.boss-btn-primary:has-text('确定')").first
     await confirm.click()
 
-    await page.wait_for_function(
-        "() => (document.body && document.body.innerText && document.body.innerText.includes('简历请求已发送'))",
-        timeout=5000,
-    )
-    return {"success": True, "already_sent": False, "details": "简历请求已发送"}
+    try:
+        await page.wait_for_selector("div.item-system >> span:has-text='简历请求已发送'", timeout=5000)
+    except Exception:
+        return {"success": False, "details": "简历请求未发送或超时"}
+    return {"success": True, "details": "简历请求已发送"}
 
 
 async def send_message_action(page: Page, chat_id: str, message: str) -> Dict[str, Any]:
@@ -184,7 +188,7 @@ async def send_message_action(page: Page, chat_id: str, message: str) -> Dict[st
     return {"success": False, "details": "消息可能未发送成功，输入框仍有内容"}
 
 
-
+import time
 async def discard_candidate_action(page: Page, chat_id: str) -> Dict[str, Any]:
     await _prepare_chat_page(page)
     dialog = await _go_to_chat_dialog(page, chat_id)
@@ -194,14 +198,18 @@ async def discard_candidate_action(page: Page, chat_id: str) -> Dict[str, Any]:
     not_fit_button = page.locator("div.not-fit-wrap").first
     await not_fit_button.wait_for(state="visible", timeout=3000)
     await not_fit_button.hover()
-    await asyncio.sleep(0.5)
-    await not_fit_button.click()
-
-    await page.wait_for_timeout(300)
-    dialog = await _go_to_chat_dialog(page, chat_id)
-    if dialog is None:
-        return {"success": True, "details": "确认已丢弃"}
-    return {"success": False, "details": "确认丢弃失败: 未删除对话"}
+    await asyncio.sleep(1)
+    
+    # wait for dialog to be deleted
+    t0 = time.time()
+    while await _go_to_chat_dialog(page, chat_id):
+        await not_fit_button.click()
+        await asyncio.sleep(0.5)
+        if time.time() - t0 > 5:
+            logger.warning("PASS失败: 未删除对话")
+            return {"success": False, "details": "PASS失败: 未删除对话"}
+    else:
+        return {"success": True, "details": "确认已PASS"}
 
 
 async def get_chat_list_action(page: Page, limit: int = 10, tab: str = '新招呼', status: str = '未读', job_title: str = '全部') -> List[Dict[str, Any]]:
