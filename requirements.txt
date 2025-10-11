@@ -11,3 +11,4 @@ openai==1.52.0
 tenacity==8.4.2
 streamlit-tags==1.2.8
 colorlog==6.8.2
+sentry-sdk[fastapi]>=2.0.0

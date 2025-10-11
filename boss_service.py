@@ -10,7 +10,9 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+import sentry_sdk
 from fastapi import Body, FastAPI, Query, Request
+from fastapi.responses import JSONResponse
 from playwright.async_api import Browser, BrowserContext, Page, Playwright, TimeoutError as PlaywrightTimeoutError, async_playwright
 
 from src.assistant_actions import assistant_actions
@@ -42,6 +44,24 @@ class BossServiceAsync:
     """Async Playwright driver exposed as FastAPI service."""
 
     def __init__(self) -> None:
+        # Initialize Sentry for error tracking (Sentry 2.x auto-detects FastAPI)
+        sentry_config = settings.SECRETS.get("sentry", {})
+        sentry_dsn = sentry_config.get("dsn")
+        if sentry_dsn:
+            sentry_sdk.init(
+                dsn=sentry_dsn,
+                enable_tracing=True,
+                traces_sample_rate=0.1,
+                profiles_sample_rate=0.1,
+                send_default_pii=True,
+                environment=sentry_config.get("environment", "development"),
+                release=sentry_config.get("release"),
+            )
+            logger.info("Sentry initialized: environment=%s, release=%s", 
+                       sentry_config.get("environment"), sentry_config.get("release"))
+        else:
+            logger.info("Sentry DSN not configured in secrets.yaml, error tracking disabled")
+        
         self.app = FastAPI(lifespan=self.lifespan)
         self.playwright: Optional[Playwright] = None
         self.browser: Optional[Browser] = None
@@ -54,6 +74,7 @@ class BossServiceAsync:
         self.assistant_actions = assistant_actions
         self.event_manager = None  # Placeholder for legacy debug endpoint
         self.setup_routes()
+        self.setup_exception_handlers()
 
     # ------------------------------------------------------------------
     # Lifecycle management
@@ -213,6 +234,66 @@ class BossServiceAsync:
             logger.info("浏览器已重启")
 
     # ------------------------------------------------------------------
+    # Exception handlers
+    # ------------------------------------------------------------------
+    def setup_exception_handlers(self) -> None:
+        """Configure global exception handlers for consistent error responses."""
+        @self.app.get("/sentry-debug")
+        async def trigger_error():
+            """Test endpoint to verify Sentry integration."""
+            division_by_zero = 1 / 0
+        
+        @self.app.exception_handler(Exception)
+        async def unified_exception_handler(request: Request, exc: Exception):
+            """Unified exception handler with branching logic based on exception type."""
+            
+            # Determine status code, log level, and error message based on exception type
+            if isinstance(exc, ValueError):
+                status_code = 400
+                log_level = "warning"
+                sentry_level = "warning"
+                error_message = str(exc)
+                logger.warning("ValueError in %s: %s", request.url.path, error_message)
+                
+            elif isinstance(exc, PlaywrightTimeoutError):
+                status_code = 408
+                log_level = "warning"
+                sentry_level = "warning"
+                error_message = f"操作超时: {str(exc)}"
+                logger.warning("Playwright timeout in %s: %s", request.url.path, str(exc))
+                
+            elif isinstance(exc, RuntimeError):
+                status_code = 500
+                log_level = "error"
+                sentry_level = "error"
+                error_message = str(exc)
+                logger.error("RuntimeError in %s: %s", request.url.path, error_message)
+                
+            else:
+                # Catch-all for unexpected exceptions
+                status_code = 500
+                log_level = "error"
+                sentry_level = "error"
+                error_message = "Internal server error"
+                logger.exception("Unhandled exception in %s", request.url.path)
+            
+            # Send to Sentry with context and appropriate level
+            with sentry_sdk.push_scope() as scope:
+                scope.set_context("request", {
+                    "url": str(request.url),
+                    "method": request.method,
+                    "path": request.url.path,
+                })
+                scope.set_tag("exception_type", type(exc).__name__)
+                scope.set_level(sentry_level)
+                sentry_sdk.capture_exception(exc)
+            
+            return JSONResponse(
+                status_code=status_code,
+                content={"error": error_message}
+            )
+
+    # ------------------------------------------------------------------
     # FastAPI routes
     # ------------------------------------------------------------------
     def setup_routes(self) -> None:
@@ -260,8 +341,7 @@ class BossServiceAsync:
             message: str = Body(..., embed=True)
         ):
             page = await self._ensure_browser_session()
-            payload = await send_message_action(page, chat_id, message.strip())
-            return payload
+            return await send_message_action(page, chat_id, message.strip())
 
         @self.app.get("/chat/stats")
         async def get_chat_stats():
@@ -281,10 +361,8 @@ class BossServiceAsync:
         @self.app.post("/resume/check_full_resume_available")
         async def check_full_resume(chat_id: str = Body(..., embed=True)):
             page = await self._ensure_browser_session()
-            result = await check_full_resume_available(page, chat_id)
-            if isinstance(result, dict):
-                return result.get("success", False)
-            return bool(result)
+            resume_button = await check_full_resume_available(page, chat_id)
+            return resume_button is not None
 
         @self.app.post("/resume/online")
         async def view_online_resume_api(chat_id: str = Body(..., embed=True)):
@@ -304,8 +382,7 @@ class BossServiceAsync:
         @self.app.get("/recommend/candidates")
         async def get_recommended_candidates(limit: int = Query(20, ge=1, le=100)):
             page = await self._ensure_browser_session()
-            result = await list_recommended_candidates_action(page, limit=limit)
-            return result.get("candidates", [])
+            return await list_recommended_candidates_action(page, limit=limit)
 
         @self.app.get("/recommend/candidate/{index}/resume")
         async def view_recommended_candidate_resume(index: int):
@@ -347,30 +424,6 @@ class BossServiceAsync:
         @self.app.get('thread/{thread_id}/messages')
         def get_thread_messages_api(thread_id: str):
             return self.assistant_actions.get_thread_messages(thread_id)
-
-        # @self.app.post("/assistant/append-resume")
-        # def append_resume_api(data: dict = Body(...)):
-        #     """Append resume text to both Zilliz store and thread."""
-        #     return self.assistant_actions.append_resume_to_thread_and_store(**data)
-
-        # @self.app.post("/assistant/retrieve-answers")
-        # def retrieve_answers_api(payload: dict = Body(...)):
-        #     query = payload.get("query", "")
-        #     return self.assistant_actions.retrieve_relevant_answers(query)
-
-        # @self.app.get("/assistant/list-entries")
-        # def list_entries_api(limit: int = Query(10, ge=1, le=30)):
-        #     return self.assistant_actions.list_entries(limit)
-
-        # @self.app.post("/assistant/record-qa")
-        # def record_qa_api(payload: dict = Body(...)):
-        #     self.assistant_actions.record_qa(**payload)
-        #     return True
-
-        # @self.app.post("/assistant/delete-entry")
-        # def delete_entry_api(payload: dict = Body(...)):
-        #     entry_id = payload.get("entry_id")
-        #     return self.assistant_actions.delete_entry(entry_id)
 
         ##------ OpenAI API ------
         @self.app.get("/assistant/list")
