@@ -37,10 +37,13 @@ def _render_response(ok: bool, payload: Any) -> None:
 
 @st.cache_data(show_spinner="获取在线简历中...")
 def _fetch_candidate_resume(index: int) -> str:
+    """Fetch candidate resume. API now returns dict with 'text' directly."""
     ok, payload = call_api("GET", f"/recommend/candidate/{index}/resume")
-    if ok and payload.get("success"):
-        return payload['text']
-    raise ValueError(f"获取在线简历失败: {payload}")
+    if not ok:
+        raise ValueError(f"API 调用失败")
+    if not isinstance(payload, dict):
+        raise ValueError(f"响应格式错误: {payload}")
+    return payload.get('text', '')
 
 def main() -> None:
     st.title("推荐牛人")

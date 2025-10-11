@@ -62,27 +62,24 @@ def _fetch_best_resume(chat_id: str) -> tuple[str, str]:
     Returns:
         tuple[str, str]: (resume_text, source) where source is "附件简历" or "在线简历"
     """
-    # Step 1: Check if full resume is available
-    full_resume_available = check_full_resume(chat_id)
-    
-    # Step 2: Get full resume if available
-    if full_resume_available:
-        full_payload = _fetch_full_resume(chat_id)
-        if full_payload.get("success"):
+    # Step 1: Try full resume first
+    try:
+        if check_full_resume(chat_id):
+            full_payload = _fetch_full_resume(chat_id)
             resume_text = full_payload.get("text", "")
             if resume_text:
                 return resume_text, "附件简历"
-            else:
-                st.error(f"获取附件简历失败: {full_payload}")
+    except Exception:
+        pass  # Silently fall through to online resume
     
-    # Step 3: Fallback to online resume
-    online_payload = _fetch_online_resume(chat_id)
-    if online_payload.get("success"):
+    # Step 2: Fallback to online resume
+    try:
+        online_payload = _fetch_online_resume(chat_id)
         resume_text = online_payload.get("text", "")
         if resume_text:
             return resume_text, "在线简历"
-        else:
-            st.error(f"获取在线简历失败: {online_payload}")
+    except Exception:
+        pass  # No resume available
     
     return None, "无"
 
@@ -96,8 +93,10 @@ def check_full_resume(chat_id: str) -> bool:
 def _fetch_full_resume(chat_id: str) -> Dict[str, Any]:
     """Fetch full resume with Streamlit caching."""
     ok, payload = call_api("POST", "/resume/view_full", json={"chat_id": chat_id})
-    if not ok or not payload.get('success'): 
-        raise ValueError(f"获取简历失败: {payload}")
+    if not ok:
+        raise ValueError(f"API 调用失败")
+    if not isinstance(payload, dict):
+        raise ValueError(f"响应格式错误: {payload}")
     return payload
 
 
@@ -105,8 +104,10 @@ def _fetch_full_resume(chat_id: str) -> Dict[str, Any]:
 def _fetch_online_resume(chat_id: str) -> Dict[str, Any]:
     """Fetch online resume with Streamlit caching."""
     ok, payload = call_api("POST", "/resume/online", json={"chat_id": chat_id})
-    if not ok or not isinstance(payload, dict):
-        raise ValueError(f"获取简历失败: {payload}")
+    if not ok:
+        raise ValueError(f"API 调用失败")
+    if not isinstance(payload, dict):
+        raise ValueError(f"响应格式错误: {payload}")
     return payload
 
 
@@ -150,18 +151,15 @@ def render_resume_section(
             return text
 
         if st.session_state[load_state_key]:
-            data = _fetch_resume(chat_id, endpoint)
-            success = bool(data and data.get("success", True))
-        if not success:
-            details = data.get("details") if data else None
-            st.warning(details or "无法获取简历。")
-            return text
-
-        text = data.get("text") or data.get("content") or ""
-        if text:
-            st.text_area("内容", value=text, height=300)
-        else:
-            st.info("暂无可显示的简历文本。")
+            try:
+                data = _fetch_resume(chat_id, endpoint)
+                text = data.get("text") or data.get("content") or ""
+                if text:
+                    st.text_area("内容", value=text, height=300)
+                else:
+                    st.info("暂无可显示的简历文本。")
+            except Exception as e:
+                st.warning(f"无法获取简历: {str(e)}")
         return text
 
 
@@ -262,21 +260,32 @@ def stream_message(message: str) -> None:
         time.sleep(0.02)
 
 def send_message_and_request_full_resume(chat_id: str, message: str) -> None:
+    """Send message and request full resume. API now returns bool instead of success/details dict."""
     if not message:
         st.warning("消息内容不能为空")
-    else:
+        return
+    
+    # Send message
+    try:
         with st.spinner("发送中..."):
-            ok, payload = call_api("POST", f"/chat/{chat_id}/send", json={"message": message})
-            if ok and payload.get("success"):
-                st.success(payload.get("details"))
+            ok, result = call_api("POST", f"/chat/{chat_id}/send", json={"message": message})
+            if ok and result is True:
+                st.success("消息发送成功")
             else:
-                st.error(payload.get("details"))
+                st.error(f"消息发送失败: {result}")
+    except Exception as e:
+        st.error(f"发送消息时出错: {str(e)}")
+    
+    # Request resume
+    try:
         with st.spinner("请求完整简历中..."):
-            ok, payload = call_api("POST", "/resume/request", json={"chat_id": chat_id})
-            if ok and payload.get("success"):
-                st.success(payload.get("details"))
+            ok, result = call_api("POST", "/resume/request", json={"chat_id": chat_id})
+            if ok and result is True:
+                st.success("简历请求已发送")
             else:
-                st.error(payload.get("details"))
+                st.error(f"简历请求失败: {result}")
+    except Exception as e:
+        st.error(f"请求简历时出错: {str(e)}")
 
 # ---------------------------------------------------------------------------
 # Main entrypoint
