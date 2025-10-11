@@ -1,0 +1,38 @@
+# Boss直聘机器人配置文件
+# 非敏感配置存储在此文件中
+# 敏感数据（API密钥、密码等）存储在 secrets.yaml
+
+# Boss直聘 URLs
+boss_zhipin:
+  base_url: https://www.zhipin.com/
+  chat_url: https://www.zhipin.com/web/chat/index
+  recommend_url: https://www.zhipin.com/web/chat/recommend
+  login_url: https://www.zhipin.com/web/user
+
+# 本地服务配置
+service:
+  host: 127.0.0.1
+  port: 5001
+  base_url: http://127.0.0.1:5001
+  criteria_path: config/jobs.yaml
+
+# 浏览器配置
+browser:
+  storage_state: data/state.json
+  cdp_url: http://127.0.0.1:9222
+
+# Zilliz配置（非敏感部分）
+zilliz:
+  collection_name: CN_candidates
+  embedding_model: text-embedding-3-small
+  embedding_dim: 1536
+  similarity_top_k: 5
+  enable_cache: false
+
+# OpenAI配置（非敏感部分）
+openai:
+  name: CN_recruiting_bot
+  model: gpt-4o-mini
+  temperature: 0.7
+  max_tokens: 2000
+

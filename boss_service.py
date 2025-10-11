@@ -45,20 +45,19 @@ class BossServiceAsync:
 
     def __init__(self) -> None:
         # Initialize Sentry for error tracking (Sentry 2.x auto-detects FastAPI)
-        sentry_config = settings.SECRETS.get("sentry", {})
-        sentry_dsn = sentry_config.get("dsn")
-        if sentry_dsn:
+        sentry_config = settings.get_sentry_config()
+        if sentry_config["dsn"]:
             sentry_sdk.init(
-                dsn=sentry_dsn,
+                dsn=sentry_config["dsn"],
                 enable_tracing=True,
                 traces_sample_rate=0.1,
                 profiles_sample_rate=0.1,
                 send_default_pii=True,
-                environment=sentry_config.get("environment", "development"),
-                release=sentry_config.get("release"),
+                environment=sentry_config["environment"] or "development",
+                release=sentry_config["release"] or "unknown",
             )
             logger.info("Sentry initialized: environment=%s, release=%s", 
-                       sentry_config.get("environment"), sentry_config.get("release"))
+                       sentry_config["environment"], sentry_config["release"])
         else:
             logger.info("Sentry DSN not configured in secrets.yaml, error tracking disabled")
         
