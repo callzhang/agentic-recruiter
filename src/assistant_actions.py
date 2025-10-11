@@ -84,14 +84,6 @@ class AssistantActions:
 
 
     # Candidate Management --------------------------------------
-    # @lru_cache(maxsize=1000)
-    def get_candidate_by_id(self, chat_id: str, fields: Optional[List[str]] = ["*"]) -> Optional[Dict[str, Any]]:
-        """Get candidate by chat_id."""
-        record = self.store.get_candidate_by_chat_id(chat_id, fields)
-        if record:
-            record.pop("resume_vector", None)
-        return record
-
     
     def _upsert_candidate(self, **kwargs) -> bool:
         """Insert or update candidate information to the store.
@@ -100,31 +92,23 @@ class AssistantActions:
         # Generate embedding for new candidates
         candidate_id = kwargs.get("candidate_id")
         chat_id = kwargs.get("chat_id")
-        if candidate_id:
-            exist = True
-        else:
-            existing_candidate = self.get_candidate_by_id(chat_id)
-            if not existing_candidate:
-                exist = False
-            else:
-                exist = True
-                candidate_id = existing_candidate.get("candidate_id")
+        existing_candidate = self.store.get_candidate_by_id(chat_id=chat_id, candidate_id=candidate_id)
 
-        if not exist:  # create a new candidate
+        if not existing_candidate:  # create a new candidate
             resume_text = kwargs.get("resume_text")
             if resume_text:
                 embedding = self.get_embedding(resume_text)
                 kwargs["resume_vector"] = embedding
         
-            # Truncate resume text to avoid token limits
+            # Truncate resume text to avoid over limits
             resume_text = kwargs.get("resume_text")
             if resume_text:
                 kwargs["resume_text"] = resume_text[:8000]
                 
             return self.store.insert_candidate(**kwargs)
         else:
-            kwargs["candidate_id"] = candidate_id
-            return self.store.update_candidate(**kwargs)
+            existing_candidate.update(kwargs)
+            return self.store.update_candidate(**existing_candidate)
             
 
 
@@ -323,7 +307,7 @@ class AssistantActions:
             
         # Try chat_id lookup first
         if chat_id:
-            record = self.store.get_candidate_by_chat_id(chat_id)
+            record = self.store.get_candidate_by_id(chat_id)
             if record:
                 return record
         

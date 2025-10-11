@@ -338,7 +338,7 @@ class BossServiceAsync:
         @self.app.get("/candidate/{chat_id}")
         def get_candidate_api(chat_id: str, fields: Optional[List[str]] = ["*"]):
             """Get candidate information from the store."""
-            return self.assistant_actions.get_candidate_by_id(chat_id, fields)
+            return self.assistant_actions.store.get_candidate_by_id(chat_id, fields)
 
         @self.app.post("/thread/init-chat")
         def init_chat_api(data: dict = Body(...)):

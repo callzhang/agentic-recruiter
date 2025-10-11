@@ -229,12 +229,15 @@ class CandidateStore:
             return None
 
 
-    def get_candidate_by_chat_id(self, chat_id: str, fields: Optional[List[str]] = ["*"]) -> Optional[Dict[str, Any]]:
+    def get_candidate_by_id(self, chat_id = None, candidate_id: Optional[str] = None, fields: Optional[List[str]] = ["*"]) -> Optional[Dict[str, Any]]:
         """Retrieve a single candidate record by chat_id."""
-        if not chat_id or not self.enabled or not self.collection:
-            return None
+        assert chat_id or candidate_id, "chat_id or candidate_id is required"
 
-        expr = f"chat_id == {json.dumps(chat_id)}"
+        if chat_id:
+            expr = f"chat_id == {json.dumps(chat_id)}"
+        elif candidate_id:
+            expr = f"candidate_id == {json.dumps(candidate_id)}"
+
         results: List[Dict[str, Any]] = self.collection.query(
             expr=expr,
             output_fields=fields,
@@ -244,25 +247,6 @@ class CandidateStore:
         if not results:
             return None
         return results[0]
-
-    def update_candidate_metadata(self, candidate_id: str, metadata: Dict[str, Any]) -> bool:
-        """Merge metadata updates for a candidate without touching other fields."""
-        if not candidate_id or not self.enabled or not self.collection:
-            return False
-
-        payload = {
-            "candidate_id": candidate_id,
-            "metadata": metadata or {},
-            "updated_at": datetime.now().isoformat(),
-        }
-
-        try:
-            self.collection.upsert([payload], partial=True)
-            self.collection.flush()
-        except Exception as exc:  # pragma: no cover - Milvus errors surface here
-            logger.exception("Failed to update metadata for %s: %s", candidate_id, exc)
-            return False
-        return True
 
 # ------------------------------------------------------------------
 # Candidate record persistence
