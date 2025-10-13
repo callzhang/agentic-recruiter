@@ -124,23 +124,61 @@ async def get_candidate_detail(
     # For recommend candidates, extract the index from the ID
     if mode == "recommend" and candidate_id.startswith("recommend_"):
         index = int(candidate_id.split("_")[1])
-        # Fetch the actual candidate data from the list again to get name, etc.
-        # Note: This requires re-fetching the list, but we keep it simple for now
-        # In production, you might want to cache the list in session or pass data directly
-        candidate_data = {
-            "chat_id": candidate_id,
-            "id": candidate_id,
-            "name": "推荐候选人",  # Will be displayed, could fetch from list if needed
-            "mode": "recommend",
-            "index": index
-        }
+        
+        # Try to fetch the actual candidate data from the recommend list
+        ok_list, recommend_list = await call_api("GET", "/recommend/candidates", params={"limit": 100}, timeout=20.0)
+        if ok_list and isinstance(recommend_list, list) and index < len(recommend_list):
+            item = recommend_list[index]
+            candidate_data = {
+                "chat_id": candidate_id,
+                "id": candidate_id,
+                "name": item.get("name", "推荐候选人"),
+                "job_title": item.get("job_title"),
+                "job_applied": item.get("job_title"),
+                "text": item.get("text"),
+                "mode": "recommend",
+                "index": index,
+                "viewed": item.get("viewed"),
+                "greeted": item.get("greeted"),
+                "stage": item.get("stage")
+            }
+        else:
+            # Fallback if we can't fetch the list
+            candidate_data = {
+                "chat_id": candidate_id,
+                "id": candidate_id,
+                "name": "推荐候选人",
+                "mode": "recommend",
+                "index": index
+            }
     else:
         # Try to fetch candidate from store
         ok, candidate_data = await call_api("GET", f"/candidate/{candidate_id}")
         
         if not ok or not candidate_data:
-            # If not in store, fetch basic info from chat/recommend
-            candidate_data = {"chat_id": candidate_id, "id": candidate_id, "mode": "chat"}
+            # If not in store, try to fetch from chat list to get basic info
+            # This will get name, job_title, text from the chat list
+            ok_list, chat_list = await call_api("GET", "/chat/dialogs", params={"limit": 100})
+            if ok_list and isinstance(chat_list, list):
+                # Find the candidate in the list
+                for item in chat_list:
+                    if item.get("id") == candidate_id:
+                        candidate_data = {
+                            "chat_id": candidate_id,
+                            "id": candidate_id,
+                            "name": item.get("name"),
+                            "job_title": item.get("job_title"),
+                            "job_applied": item.get("job_title"),
+                            "last_message": item.get("text"),
+                            "mode": "chat"
+                        }
+                        break
+                else:
+                    # Not found in list, create minimal data
+                    candidate_data = {"chat_id": candidate_id, "id": candidate_id, "mode": "chat"}
+            else:
+                # Fallback to minimal data
+                candidate_data = {"chat_id": candidate_id, "id": candidate_id, "mode": "chat"}
     
     # Get default assistant and job if not provided
     if not assistant_id:
