@@ -28,11 +28,13 @@
                     class="px-4 py-2 font-medium text-gray-700 hover:text-blue-600">
                 📄 简历
             </button>
+            {% if candidate.mode != 'recommend' %}
             <button @click="activeTab = 'history'"
                     :class="activeTab === 'history' ? 'tab-active' : ''"
                     class="px-4 py-2 font-medium text-gray-700 hover:text-blue-600">
                 💬 聊天记录
             </button>
+            {% endif %}
             <button @click="activeTab = 'analysis'"
                     :class="activeTab === 'analysis' ? 'tab-active' : ''"
                     class="px-4 py-2 font-medium text-gray-700 hover:text-blue-600">
@@ -106,7 +108,8 @@
             {% endif %}
         </div>
         
-        <!-- History tab -->
+        <!-- History tab (chat candidates only) -->
+        {% if candidate.mode != 'recommend' %}
         <div x-show="activeTab === 'history'">
             <div id="chat-history" 
                  hx-get="/web/candidates/history/{{ candidate.chat_id or candidate.id }}"
@@ -116,6 +119,7 @@
                 <div class="text-center text-gray-500">加载中...</div>
             </div>
         </div>
+        {% endif %}
         
         <!-- Analysis tab -->
         <div x-show="activeTab === 'analysis'">

@@ -415,13 +415,14 @@ async def accept_full_resume_action(page: Page, chat_id: str) -> bool:
 
 
 async def check_full_resume_available(page: Page, chat_id: str):
-    """Check if full resume is available. """
+    """Check if full resume is available. Returns resume_button Locator if available, None otherwise."""
     await _prepare_chat_page(page)
     dialog = await _go_to_chat_dialog(page, chat_id)
     if not dialog:
         logger.warning("未找到指定对话项")
         return None
-    # accept resume if available
+    
+    # Accept resume if available
     await accept_full_resume_action(page, chat_id)
 
     resume_button = page.locator(RESUME_BUTTON_SELECTOR).first
@@ -429,16 +430,17 @@ async def check_full_resume_available(page: Page, chat_id: str):
         logger.warning("未找到简历按钮")
         return None
 
+    # Wait for button to become enabled (resume uploaded)
     for _ in range(10):
         classes = await resume_button.get_attribute("class") or ""
         if "disabled" not in classes:
-            break
+            # Resume is available!
+            return resume_button
         await asyncio.sleep(0.1)
-    else:
-        logger.warning("暂无离线简历")
-        return None
-
-    return resume_button
+    
+    # Button still disabled after waiting
+    logger.warning("暂无离线简历")
+    return None
 
 
 async def view_full_resume_action(page: Page, chat_id: str) -> Dict[str, Any]:
