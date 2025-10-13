@@ -236,6 +236,10 @@ def start_service(*, scheduler_options: Optional[Dict[str, Any]] | None = None):
             else:
                 chrome_path = "google-chrome"  # Linux
             
+            # Get BASE_URL from config for app mode
+            from src.config import settings
+            chat_url = settings.CHAT_URL or "about:blank"
+            
             chrome_cmd = [
                 chrome_path,
                 f"--remote-debugging-port={cdp_port}",
@@ -248,18 +252,14 @@ def start_service(*, scheduler_options: Optional[Dict[str, Any]] | None = None):
                 "--disable-default-apps",
                 "--disable-sync",
                 "--disable-translate",
-                # "--disable-web-security",
                 "--disable-features=VizDisplayCompositor",
-                # "--no-sandbox",
                 "--window-size=1200,800",
-                # 限制Chrome只处理特定URL，避免干扰正常浏览
-                "--restrict-http-scheme",
                 "--disable-background-timer-throttling",
                 "--disable-renderer-backgrounding",
                 "--disable-backgrounding-occluded-windows",
-                # 设置默认页面为空白页，避免自动打开其他页面
-                "--new-window",
-                "about:blank"
+                # Launch in app mode - creates dedicated window without address bar
+                # This makes it clear the browser is for automation only
+                f"--app={chat_url}"
             ]
             try:
                 subprocess.Popen(chrome_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, preexec_fn=os.setsid)

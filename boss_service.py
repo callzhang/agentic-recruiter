@@ -168,6 +168,47 @@ class BossServiceAsync:
             await candidate.goto(settings.CHAT_URL, wait_until="domcontentloaded", timeout=20000)
         return candidate
 
+    async def _inject_navigation_guard(self, page: Page) -> None:
+        """
+        Optional: Inject JavaScript to prevent manual link clicks from navigating.
+        This provides an additional layer on top of Chrome's --app mode.
+        
+        Note: This is currently NOT automatically called. Enable it by calling this
+        method after page loads if you want to completely block manual navigation.
+        The --app mode in start_service.py already provides good isolation.
+        """
+        allowed_origin = settings.BASE_URL
+        navigation_guard_script = f"""
+        (function() {{
+            const allowedOrigin = '{allowed_origin}';
+            
+            // Prevent link clicks that navigate outside BASE_URL
+            document.addEventListener('click', function(event) {{
+                let target = event.target;
+                while (target && target.tagName !== 'A') {{
+                    target = target.parentElement;
+                }}
+                if (target && target.tagName === 'A') {{
+                    const href = target.getAttribute('href');
+                    if (href && !href.startsWith(allowedOrigin) && !href.startsWith('/') && !href.startsWith('#')) {{
+                        event.preventDefault();
+                        event.stopPropagation();
+                        console.log('[Navigation Guard] Blocked navigation to:', href);
+                    }}
+                }}
+            }}, true);
+            
+            // Log when navigation is attempted
+            window.addEventListener('beforeunload', function(event) {{
+                console.log('[Navigation Guard] Page unload detected');
+            }});
+            
+            console.log('[Navigation Guard] Installed - only {allowed_origin} navigation allowed');
+        }})();
+        """
+        await page.evaluate(navigation_guard_script)
+        logger.debug("Navigation guard injected for page: %s", page.url)
+
     async def save_login_state(self) -> None:
         if not self.context:
             return
@@ -441,7 +482,8 @@ class BossServiceAsync:
             return candidate_store.get_candidate_by_id(chat_id, fields)
 
         @self.app.post("/thread/init-chat")
-        def init_chat_api(data: dict = Body(...)):
+        async def init_chat_api(data: dict = Body(...)):
+            """Initialize chat thread."""
             return assistant_actions.init_chat(**data)
 
         @self.app.get('thread/{thread_id}/messages')
