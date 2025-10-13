@@ -644,8 +644,8 @@ response = requests.post(
 
 ## 相关文档
 
-- [API 重构详细文档](api_refactoring_2024.md)
 - [技术规范](technical.md)
 - [架构设计](architecture.mermaid)
 - [项目状态](status.md)
+- [变更日志](../changelog.md)
 

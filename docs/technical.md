@@ -1,5 +1,6 @@
-# Boss直聘机器人技术规格
+# 技术规格
 
+## 架构概览
 
 ## 业务逻辑
 
@@ -18,554 +19,414 @@
 - **追结果**: 对超时未回复的候选人进行跟进
 
 **候选人阶段状态** (可双向转换):
-- **`PASS`**: 不匹配，已拒绝（未达到阈值）
-- **`GREET`**: 表达兴趣，已索要完整简历
-- **`SEEK`**: 强匹配，正在寻求联系方式
+- **`PASS`**: 不匹配，已拒绝（未达到阈值）, overall_socre <= borderline
+- **`GREET`**: 表达兴趣，已索要完整简历, overall_socre >= borderline
+- **`SEEK`**: 强匹配，正在寻求联系方式, overall_socre >= threshold_seek
 - **`CONTACT`**: 已获得联系方式
-- **`WAITING_LIST`**: （未来）不确定，需要进一步沟通确认
+
+**AI决策和分析的Action**
+```python
+ACTIONS = {
+    # generate message actions
+    "GREET_ACTION": "请生成首次打招呼消息", # 打招呼
+    "ANALYZE_ACTION": "请根据岗位描述，对候选人的简历进行打分，用于决定是否继续推进。", # 分析候选人
+    "ASK_FOR_RESUME_DETAILS_ACTION": "请根据上述沟通历史，生成下一条跟进消息。重点在于挖掘简历细节，判断候选人是否符合岗位要求，请直接提出问题，让候选人回答经验细节，或者澄清模棱两可的地方。不要超过100字，且能够直接发送给候选人的文字，不要发模板或者嵌入占位符。", # 询问简历细节
+    "ANSWER_QUESTIONS_ACTION": "请回答候选人提出的问题。", # 回答问题
+    "FOLLOWUP_ACTION": "请生成下一条跟进消息，用于吸引候选人回复。", # 跟进消息
+    "REQUEST_CONTACT_MESSAGE_ACTION": "请生成下一条跟进消息，用于吸引候选人回复。", # 联系方式
+    # browser actions
+    "SEND_MESSAGE_BROWSER_ACTION": "请发送消息给候选人。", # 发送消息
+    "REQUEST_FULL_RESUME_BROWSER_ACTION": "请请求完整简历。", # 请求完整简历
+    "REQUEST_WECHAT_PHONE_BROWSER_ACTION": "请请求候选人微信和电话。", # 请求微信和电话
+    # notification actions
+    "NOTIFY_HR_ACTION": "请通知HR。", # 通知HR
+    # chat actions
+    "WAIT_ACTION": "已经完成所有动作，等待候选人回复。"
+}
+```
 
 #### 工作流1: 推荐牛人 (Recommend Page Entry)
 - **数据获取**: `GET /recommend/candidates` 拉取推荐列表 → 对每个 `index` 调用 `/recommend/candidate/{idx}/resume` 获取在线简历
-- **AI分析**: 通过 `POST /assistant/analyze-candidate` 分析匹配度
-- **Stage决策**: 根据得分转换stage → `GREET` / `SEEK` / `WAITING_LIST` / `PASS`
-- **打招呼**: 使用 `generate_message(..., purpose="greet")` 生成首轮打招呼内容 + `/recommend/candidate/{idx}/greet`
-- **数据存储**: `POST /assistant/upsert-candidate` 存储简历、分析、Thread信息，`chat_id=NULL`
+- **创建record**: `POST /assistant/init-chat` 创建数据库对象，`chat_id=NULL`
+- **AI分析**: 通过 `POST /assistant/generate-message (..., purpose="analyze")` 分析匹配度
+- **Stage决策**: 根据overall_score得分转换stage → `GREET`(>=borderline) / `PASS`(<borderline)
+- **PASS**: 如果PASS，则`discard_candidate_action`丢弃候选人
+- **打招呼**: 如果GREET, 则使用 `generate_message(..., purpose="greet")` 生成首轮打招呼内容 + `/recommend/candidate/{idx}/greet`，并更新 `stage`为`GREET`
 - **关键特点**: 此工作流创建的记录无 `chat_id`，通过 `candidate_id` 标识
 
 #### 工作流2: 新招呼 (New Greetings Entry)
 - **列表获取**: `get_chat_list_action(tab="新招呼", status="未读")` 过滤新招呼栏目
-- **记录查询**: 通过 `chat_id` 从Zilliz直接获取（如存在则更新，不存在则创建）
-- **简历查看**: `view_online_resume_action(chat_id)` 抓取在线简历
-- **AI分析**: `POST /assistant/analyze-candidate` 确定stage转换
-- **Stage决策**: 根据得分决定stage → `GREET` / `SEEK` / `WAITING_LIST` / `PASS`
-- **消息发送**: `generate_message(..., purpose="chat")` + `send_message_action` 完成跟进
-- **记录更新**: 添加/更新 `chat_id`，更新 `stage`
+- **记录查询**: 通过 `chat_id` 从Zilliz直接获取（如存在则更新，不存在则创建:`init-chat`）
+- **简历查看**: 优先使用record的 `online_resume`
+    - 如果`online_resume`为空, 则调用 `view_online_resume_action(chat_id)` 抓取在线简历,
+    - 同时如果`check_full_resume_available`为True, 则调用 `view_full_resume_action` 获取完整简历
+    - 最后调用 `update_candidate_resume` 跟新resume
+- **AI分析**: `generate_message(..., purpose="analyze")` 对候选人进行分析
+- **Stage决策**: 根据overall_score得分决定stage → `GREET`(>=borderline) / `PASS`(<borderline)
+- **PASS**: 如果PASS，则`discard_candidate_action`丢弃候选人
+- **打招呼**: 如果GREET, 则`generate_message(..., purpose="chat")` + `send_message_action` + `request_full_resume_action` 完成跟进
+- **记录更新**: 更新 `stage`
 
 #### 工作流3: 沟通中 (Active Chats Entry)
 - **列表获取**: `get_chat_list_action(tab="沟通中", status="未读")` 拉取沟通中聊天
-- **记录查询**: 通过 `chat_id` 从Zilliz直接获取
-- **缓存优先**: 优先使用已有的 `online_resume` / `full_resume`
-- **简历请求**: 如无 `full_resume`，调用 `request_resume_action` 索要离线简历
-- **离线简历**: 收到后调用 `view_full_resume_action` 获取完整简历
-- **重新分析**: 基于 `full_resume` 重新 `analyze_candidate`，**可能stage倒退**（如 `SEEK` → `GREET`）
-- **联系方式**: 若获取到微信/电话，调用 `notify_hr_action`（#TODO）并标记 `CONTACT`
-- **状态更新**: 更新 `stage`, `full_resume`, `updated_at`
+- **记录查询**: 通过 `chat_id` 从Zilliz直接获取 record, 如果没有找到，则说明对话来自于推荐牛人，则通过`get_candidate_by_resume` 获取候选人record
+- **AI决策**: `generate_message(..., purpose="plan")` 决定下一步操作，以下为AI决策分支，直到收到`WAIT_ACTION`停止循环:
+    - REQUEST_FULL_RESUME_ACTION: 请求完整简历  
+    - ANALYZE_ACTION: 如果有简历或者对话更新，对候选人进行分析
+        - **联系方式**: 若获取到微信/电话，调用 `notify_hr_action`（#TODO）并标记 `CONTACT`
+    - REQUEST_CONTACT_MESSAGE_ACTION: 请求联系方式`send_message_action`
+    - SEND_MESSAGE_BROWSER_ACTION: 发送消息`send_message_action`
+    - WAIT_ACTION: 等待候选人回复, 如果收到`WAIT_ACTION`则停止循环
+
 
 #### 工作流4: 追结果 (Follow-up Entry)
-- **筛选条件**: Zilliz查询 `updated_at > 1天 AND stage IN ['GREET', 'SEEK', 'WAITING_LIST']`
+- **筛选条件**: Zilliz查询 `updated_at > 1天 AND stage IN ['GREET', 'SEEK']`
 - **消息生成**: 利用 `generate_message(..., purpose="followup")` 生成催促消息
 - **消息发送**: 通过 `send_message_action` 发送催促消息
 - **状态更新**: 更新 `updated_at`，可能根据回复更新 `stage`
+
 
 ### 数据流设计
 
 **独立工作流架构**:
 ```
-推荐牛人 Entry → 创建记录 (chat_id=NULL)
-新招呼 Entry   → 查询chat_id → 更新记录 (添加chat_id)
-沟通中 Entry   → 查询chat_id → 更新记录 (更新stage/full_resume)
-追结果 Entry   → 查询stage → 更新记录 (更新updated_at)
+┌──────────────┐      ┌──────────────┐      ┌──────────────┐
+│  Streamlit   │─────▶│   FastAPI    │─────▶│  Playwright  │
+│  (客户端UI)   │ HTTP │  (业务服务)   │ CDP   │ (浏览器控制)  │
+└──────────────┘      └──────────────┘      └──────────────┘
+                             │
+                    ┌────────┴────────┐
+                    ▼                 ▼
+            ┌──────────────┐  ┌──────────────┐
+            │   OpenAI     │  │   Zilliz     │
+            │ (AI分析生成)  │  │ (向量存储)    │
+            └──────────────┘  └──────────────┘
 ```
 
-**Stage转换** (双向):
-```
-任何工作流都可以将候选人在以下stage之间转换:
-PASS ↔ GREET ↔ SEEK ↔ CONTACT
-        ↕
-  WAITING_LIST
-```
+## 核心模块
 
-**查询策略**:
-- 聊天工作流（新招呼、沟通中）: 使用 `chat_id` 直接查询Zilliz
-- 推荐工作流: 创建新记录，`chat_id=NULL`
-- 追结果工作流: 通过 `stage` 和 `updated_at` 过滤
+### 1. boss_service.py
+FastAPI 后端服务，提供 REST API
 
-所有操作都会即时写入 Streamlit 的运行面板，支持操作员逐条复核。服务端仍保留 `BRDWorkScheduler` 以兼容旧流程，但默认不再发起自动 greeting。
+**主要功能**:
+- Playwright 浏览器控制
+- 聊天、简历、推荐操作
+- 统一异常处理（Sentry 集成）
 
-## Thread API架构 (v2.2.0核心设计)
+**关键特性**:
+- CDP 模式连接外部 Chrome
+- 异步操作，锁保护并发
+- HTTP 状态码语义化（400/408/500）
 
-### Thread作为对话记忆
+### 2. src/chat_actions.py
+聊天相关操作
 
-**设计理念**: 使用OpenAI Thread API作为主要对话记忆存储，所有上下文（岗位描述、简历、分析、聊天记录）都保存在thread中。
+**函数**:
+- `get_chat_list_action()` - 获取对话列表
+- `send_message_action()` - 发送消息
+- `request_resume_action()` - 请求完整简历
+- `view_online_resume_action()` - 查看在线简历
+- `view_full_resume_action()` - 查看完整简历
+- `accept_resume_action()` - 接受简历
+- `discard_candidate_action()` - 丢弃候选人
 
-**优势**:
-- **完整上下文**: Thread自动维护完整对话历史
-- **简化调用**: 消息生成只需 `thread_id` + `purpose`，无需重建上下文
-- **自动管理**: OpenAI API自动处理上下文窗口和历史管理
+### 3. src/recommendation_actions.py
+推荐牛人操作
 
-**Thread内容结构**:
-1. 系统消息/用户消息: 岗位描述（job_info）
-2. 用户消息/助手消息: 简历文本（resume_text）
-3. 助手消息: 分析结果（purpose="analyze"）
-4. 用户消息 + 助手消息: 所有聊天对话
-5. 附加上下文: 完整简历（full_resume，当可用时）
+**函数**:
+- `select_recommend_job_action()` - 选择职位
+- `list_recommended_candidates_action()` - 获取推荐列表
+- `view_recommend_candidate_resume_action()` - 查看简历
+- `greet_recommend_candidate_action()` - 打招呼
 
-### Zilliz角色重新定义
+### 4. src/assistant_actions.py
+AI 助手功能
 
-**不是**: 主要对话存储（由Thread承担）  
-**而是**: 阶段追踪器 + 路由器 + 性能缓存
+**函数**:
+- `analyze_candidate()` - 分析候选人匹配度
+- `generate_message()` - 生成定制化消息
+- `upsert_candidate()` - 存储候选人到 Zilliz
+- `get_candidate_by_id()` - 查询候选人
 
-**五大功能**:
-1. **阶段追踪**: 记录候选人当前stage (PASS/GREET/SEEK/CONTACT/WAITING_LIST)
-2. **对话路由**: 链接 `chat_id` ↔ `thread_id`，使聊天工作流能找到对应thread
-3. **简历缓存**: 保存 `resume_text`/`full_resume`，避免10秒浏览器重新抓取
-4. **语义搜索**: 通过 `resume_vector` 查找候选人（当chat_id未知时）
-5. **审计追踪**: 保存 `analysis` JSON用于历史审查和合规
+**集成**:
+- OpenAI Assistant API + Thread
+- Zilliz 向量存储
+- 自动 embedding 生成
 
-### 函数拆分设计
+### 5. src/candidate_store.py
+Zilliz 数据存储
 
-**`init_chat(name, job_info, resume_text, chat_id=None, chat_history=None)`** - 初始化对话
-
-调用时机: **获取简历后、分析前**（推荐工作流、新招呼工作流首次处理）
-
-**重要**: 此函数仅在已获取 `resume_text` 且分析前调用，`resume_text` 为必需参数。
-
-参数:
-- `name`: str (候选人姓名)
-- `job_info`: dict (岗位信息)
-- `resume_text`: str (简历文本 - 必需)
-- `chat_id`: str (可选，聊天工作流使用)
-- `chat_history`: list (可选，现有聊天记录)
-
-功能:
-1. 创建OpenAI thread
-2. 添加岗位描述和简历到thread
-3. 创建Zilliz记录（含thread_id, resume_text, resume_vector）
-4. 返回 thread_id 和 candidate_id
-
-**`generate_message(thread_id, assistant_id, purpose, user_message=None, full_resume=None, instruction=None, format_json=False)`** - 生成消息
-
-调用时机: 任何需要消息生成的场景
-
-参数:
-- `thread_id`: str (OpenAI thread ID - 必需)
-- `assistant_id`: str (OpenAI assistant ID - 必需)
-- `purpose`: str (消息目的 - "analyze", "greet", "chat", "followup")
-- `user_message`: str (候选人的最新消息 - 可选)
-- `full_resume`: str (完整简历文本 - 可选)
-- `instruction`: str (自定义指令 - 可选)
-- `format_json`: bool (是否请求JSON格式 - 可选)
-
-功能:
-1. 如有full_resume，添加到thread
-2. 如有user_message，添加到thread
-3. 根据purpose添加助手请求并运行thread
-4. purpose="analyze"时，解析结果并更新Zilliz的stage和analysis
-5. 返回生成的消息（及分析结果）
-
-**Purpose参数**:
-- `"analyze"`: 分析简历，返回JSON结构化分析，更新Zilliz stage
-- `"greet"`: 生成打招呼消息
-- `"chat"`: 生成对话回复
-- `"followup"`: 生成催促/跟进消息
-
-## Zilliz schema
-
-### 完整字段结构
-```YAML
-# 主键和向量
-candidate_id: VARCHAR(64) - 主键，UUID生成
-resume_vector: FLOAT_VECTOR - 简历向量嵌入
-
-# 基础信息
-chat_id: VARCHAR(100) - 聊天ID，推荐阶段为NULL，聊天阶段添加
-name: VARCHAR(200) - 候选人姓名
-job_applied: VARCHAR(128) - 申请职位
-last_message: VARCHAR(2048) - 最后消息内容
-
-# 简历内容
-resume_text: VARCHAR(25000) - 在线简历文本
-full_resume: VARCHAR(10000) - 离线完整简历文本
-
-# 阶段管理
-stage: VARCHAR(20) - 候选人阶段状态
-thread_id: VARCHAR(100) - OpenAI Thread ID
-analysis: JSON - AI分析结果和评分
-
-# 元数据
-metadata: JSON - 扩展元数据
-updated_at: VARCHAR(64) - 最后更新时间
-```
-
-### 候选人阶段状态（支持双向转换）
-- **`PASS`**: 不匹配，已拒绝（未达到阈值）
-- **`GREET`**: 表达兴趣，已索要完整简历
-- **`SEEK`**: 强匹配，正在寻求联系方式
-- **`CONTACT`**: 已获得联系方式
-- **`WAITING_LIST`**: （未来）不确定，需要进一步沟通确认
-
-### 数据流特点（基于Thread API）
-- **推荐工作流**: `init_chat(name, job_info, resume_text)` 创建thread和记录，`chat_id=NULL`
-- **聊天工作流**: 通过 `chat_id` 直接查询获取 `thread_id`（无需语义搜索）
-- **对话上下文**: 完全保存在thread中，Zilliz仅存储 `thread_id` 用于路由
-- **Stage转换**: 支持双向转换，`generate_message(purpose="analyze")` 会更新Zilliz的stage
-- **简历缓存**: Zilliz保存 `resume_text`/`full_resume`，命中则跳过Playwright抓取，平均节省~10s
-- **审计追踪**: Zilliz保存 `analysis` JSON用于历史审查
-- **初始化时机**: `init_chat` 仅在获取 `resume_text` 后、分析前调用
-- **参数明确性**: 使用命名参数而非字典，减少猜测和错误
-
-## 系统架构
-
-### 整体架构
-- **服务模式**: FastAPI + Uvicorn ASGI服务器
-- **自动化引擎**: Playwright (Python) + CDP外部浏览器
-- **数据存储**: JSON/JSONL文件 + 内存缓存
-- **配置管理**: Pydantic + 环境变量
-- **开发模式**: 热重载支持，进程隔离
-- **AI集成**: OpenAI API + 本地OCR
-- **消息通知**: DingTalk Webhook
-- **前端界面**: Streamlit (v2.0.2优化) - 会话状态大幅简化
-
-### 核心组件
-
-#### 1. 服务层 (boss_service.py)
+**Schema**:
 ```python
-# FastAPI应用实例
-app = FastAPI(title="Boss直聘机器人服务")
-
-# 生命周期管理
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # 启动时初始化浏览器
-    # 关闭时清理资源
+{
+    "candidate_id": str,      # UUID 主键
+    "chat_id": str,           # Boss直聘 chat_id
+    "name": str,
+    "resume_text": str,       # 在线简历
+    "full_resume": str,       # 完整简历
+    "resume_vector": [float], # Embedding
+    "thread_id": str,         # OpenAI Thread
+    "analysis": str,          # 分析结果 JSON
+    "stage": str,             # 候选人阶段
+    "updated_at": int,        # 时间戳
+}
 ```
 
-#### 2. 登录管理
-- **状态持久化**: 使用Playwright的`storage_state`
-- **自动检测**: 检查登录URL和页面元素
-- **滑块处理**: 检测并等待滑块验证
-- **超时控制**: 10分钟登录等待机制
+### 6. src/config.py
+配置管理
 
-#### 3. 数据提取
-- **选择器策略**: 多层级选择器，支持XPath和CSS
-- **元素定位**: 文本匹配、属性匹配、类名匹配
-- **数据解析**: 结构化信息提取
-- **黑名单过滤**: 自动过滤不合适的公司和职位
+**文件**:
+- `config.yaml` - 非敏感配置（URLs, 端口等）
+- `secrets.yaml` - 敏感配置（API keys, 密码）
 
-#### 4. 简历处理系统
-- **WASM文本提取**: 动态解析网站内部数据结构
-- **Canvas钩子技术**: 拦截绘图API重建文本内容
-- **多策略图像捕获**: toDataURL、分页截图、元素截图
-- **OCR服务**: 本地pytesseract + OpenAI Vision API
-
-#### 5. AI决策系统
-- **YAML配置**: 结构化岗位要求和筛选条件
-- **OpenAI集成**: GPT-4辅助简历分析和匹配
-- **DingTalk通知**: 实时HR通知和推荐
-
-#### 6. 搜索功能
-- **参数映射**: 人类可读参数到网站编码的转换
-- **URL生成**: 动态构建搜索URL
-- **预览功能**: 参数验证和URL预览
-
-## API接口规范
-
-### RESTful API设计
+**加载**:
 ```python
-# 服务状态
-GET /status
-Response: {
-    "status": "running",
-    "logged_in": true,
-    "timestamp": "2025-09-19T16:10:24.370798",
-    "notifications_count": 13
-}
+from src.config import settings
 
-# 候选人列表
-GET /candidates?limit=10
-Response: {
-    "success": true,
-    "candidates": [...],
-    "count": 2,
-    "timestamp": "2025-09-19T16:10:34.013659"
-}
+settings.BASE_URL
+settings.OPENAI_API_KEY
+settings.get_zilliz_config()
+```
 
-# 搜索预览
-GET /search?city=北京&job=Python开发
-Response: {
-    "success": true,
-    "preview": {
-        "base": "https://www.zhipin.com/web/geek/job?",
-        "params": {
-            "city": "101010100",
-            "jobType": "1901",
-            "salary": "0",
-            "experience": "105"
-        }
-    }
-}
+## 数据流
+
+### 推荐牛人流程
+```
+1. 获取推荐列表 → 2. 提取简历 → 3. AI 分析
+                                      ↓
+                            4. 决策 (PASS/GREET/SEEK)
+                                      ↓
+5. 存储到 Zilliz ← 6. 打招呼 ← 7. 生成消息
+```
+
+### 聊天处理流程
+```
+1. 获取对话列表 → 2. 查询 Zilliz (by chat_id)
+                                      ↓
+                            3. 提取简历（如需要）
+                                      ↓
+                            4. AI 生成回复
+                                      ↓
+                            5. 发送消息 + 更新存储
+```
+
+## API 设计 (v2.2.0)
+
+### 响应格式
+
+**成功** (200):
+```json
+true                          // Bool 操作
+{"text": "...", "name": "..."} // 数据对象
+[{...}, {...}]                // 数组
+```
+
+**失败** (400/408/500):
+```json
+{"error": "错误描述"}
 ```
 
 ### 错误处理
+
+| 异常类型 | HTTP 状态 | 场景 |
+|---------|----------|------|
+| ValueError | 400 | 参数错误、业务逻辑错误 |
+| PlaywrightTimeoutError | 408 | 操作超时 |
+| RuntimeError | 500 | 系统错误 |
+| Exception | 500 | 未预期错误 |
+
+所有异常自动发送到 Sentry。
+
+## 简历提取技术
+
+### 方法优先级
+1. **WASM 文本** - 直接解析网站数据（最快）
+2. **Canvas Hook** - 拦截绘图 API（准确）
+3. **截图 + OCR** - 最后手段（最慢）
+
+### 在线简历
 ```python
-# 统一错误响应格式
-{
-    "success": false,
-    "error": "错误描述",
-    "timestamp": "2025-09-19T16:10:24.370798"
-}
+view_online_resume_action(chat_id)
+→ 返回 {"text": "...", "name": "...", "chat_id": "..."}
 ```
 
-## 配置管理
-
-### 环境变量
-```bash
-# 服务配置
-BOSS_SERVICE_HOST=127.0.0.1
-BOSS_SERVICE_PORT=5001
-
-# 登录状态
-BOSS_STORAGE_STATE_FILE=data/state.json
-BOSS_STORAGE_STATE_JSON='{"cookies":[...]}'
-
-# 浏览器配置（CDP模式）
-CDP_URL=http://127.0.0.1:9222
-HEADLESS=false
-BASE_URL=https://www.zhipin.com
-SLOWMO_MS=1000
-
-# AI决策配置
-OPENAI_API_KEY=your_openai_api_key
-DINGTALK_WEBHOOK=your_dingtalk_webhook_url
-```
-
-### 参数映射表
+### 完整简历（附件）
 ```python
-# 城市编码映射
-CITY_CODE = {
-    "北京": "101010100",
-    "上海": "101020100", 
-    "杭州": "101210100",
-    "广州": "101280100",
-    "深圳": "101280600"
-}
-
-# 经验要求映射
-EXPERIENCE = {
-    "在校生": "108",
-    "应届毕业生": "102", 
-    "1-3年": "104",
-    "3-5年": "105",
-    "5-10年": "106"
-}
+view_full_resume_action(chat_id)
+→ 返回 {"text": "...", "pages": ["page1.png", ...]}
 ```
 
-## 选择器策略
+## Playwright 最佳实践
 
-### 多层级选择器
+### 元素检查
 ```python
-def conversation_list_items() -> List[str]:
-    return [
-        # 主要选择器
-        "xpath=//div[contains(@class,'list') or contains(@class,'conversation')]//li",
-        # 备用选择器
-        "xpath=//ul/li[contains(@class,'item')]",
-        # 文本匹配选择器
-        "xpath=//div[contains(.,'年') or contains(.,'经验')]",
-        # CSS选择器
-        "div.chat-list-box ul li.item"
-    ]
-```
+# ✅ 使用 .count()
+if await element.count() == 0:
+    raise ValueError("元素不存在")
 
-### 选择器优先级
-1. **XPath文本匹配** - 最稳定，基于文本内容
-2. **XPath属性匹配** - 基于class/id属性
-3. **CSS选择器** - 性能最好
-4. **文本选择器** - 兜底方案
-
-## 数据流设计
-
-### 候选人数据流
-```
-用户请求 → API接口 → 页面访问 → 元素定位 → 数据提取 → 黑名单过滤 → 结构化输出 → 文件保存
-```
-
-### 消息数据流
-```
-用户请求 → API接口 → 页面访问 → 消息列表定位 → 消息内容提取 → 时间戳处理 → JSON输出
-```
-
-### 搜索数据流
-```
-用户参数 → 参数映射 → 编码转换 → URL构建 → 预览输出
-```
-
-## 错误处理机制
-
-### 页面错误处理
-```python
-# 页面访问失败
+# ❌ 避免 try-except
 try:
-    self.page.goto(url, timeout=60000)
-except Exception as e:
-    self.add_notification(f"页面访问失败: {e}", "error")
-    # 尝试重新创建页面
-    self._recreate_page()
+    await element.click()
+except:
+    pass
 ```
 
-### 元素定位失败
+### 等待策略
 ```python
-# 多选择器尝试
-for selector in selectors:
-    try:
-        elements = self.page.locator(selector).all()
-        if elements:
-            break
-    except Exception:
-        continue
+# 等待元素
+await page.wait_for_selector(selector, timeout=30000)
+
+# 等待函数
+await page.wait_for_function("() => document.readyState === 'complete'")
+
+# 避免固定延迟
+# ❌ time.sleep(2)
 ```
 
-### 网络超时处理
+### 并发控制
 ```python
-# 超时重试机制
-for attempt in range(3):
-    try:
-        result = self.page.wait_for_selector(selector, timeout=10000)
-        break
-    except TimeoutError:
-        if attempt == 2:
-            raise Exception("元素定位超时")
-        time.sleep(1)
+# 使用锁保护共享资源
+async with self._page_lock:
+    await page.goto(url)
 ```
 
 ## 性能优化
 
-### 选择器优化
-- **缓存机制**: 选择器结果缓存
-- **批量操作**: 一次性获取多个元素
-- **智能等待**: 基于网络状态等待
+### 缓存策略
+- Streamlit: `@st.cache_data(ttl=600)`
+- API: LRU cache for expensive operations
+- Zilliz: 向量相似度搜索加速
 
-### 内存管理
-- **资源清理**: 自动关闭页面和上下文
-- **状态持久化**: 避免重复登录
-- **垃圾回收**: 定期清理无用对象
+### 批量操作
+```python
+# ✅ 并发处理
+with ThreadPoolExecutor(max_workers=5) as executor:
+    results = list(executor.map(process_candidate, candidates))
 
-### 并发处理
-- **线程安全**: `browser_lock` 保护 Playwright 同步 API，防止并发访问导致 greenlet 错误
-- **单点控制**: `_ensure_browser_session()` 方法自动序列化所有浏览器操作
-- **FastAPI 支持**: 异步端点通过 lock 自动排队，保证线程安全
-- **Playwright 限制**: 同步 API 不支持多线程，必须串行化执行
+# ❌ 顺序处理
+for candidate in candidates:
+    process_candidate(candidate)
+```
+
+## Streamlit 优化
+
+### 核心原则
+1. 使用 `@st.cache_data` 替代会话状态
+2. 最小化 API 调用
+3. 避免不必要的重新渲染
+
+### 缓存函数
+```python
+# ✅ 缓存 API 结果
+@st.cache_data(ttl=300, show_spinner="加载中...")
+def fetch_dialogs(limit: int):
+    ok, dialogs = call_api("GET", f"/chat/dialogs?limit={limit}")
+    return dialogs
+```
+
+### 表单提交
+```python
+# ✅ 使用表单避免每次输入都重新渲染
+with st.form("message_form"):
+    message = st.text_area("消息")
+    submitted = st.form_submit_button("发送")
+    if submitted:
+        send_message(message)
+```
+
+### 条件渲染
+```python
+# ✅ 延迟加载
+if st.button("查看简历"):
+    st.session_state["show_resume"] = True
+
+if st.session_state.get("show_resume"):
+    resume = fetch_resume()
+    st.text_area("简历", resume)
+```
+
+### 常见陷阱
+```python
+# ❌ 循环中调用 API
+for chat_id in chat_ids:
+    resume = call_api("POST", "/resume/online", json={"chat_id": chat_id})
+
+# ✅ 批量获取或使用并发
+with ThreadPoolExecutor(max_workers=5) as executor:
+    resumes = list(executor.map(fetch_resume, chat_ids))
+```
+
+## 监控和调试
+
+### Sentry 集成
+```yaml
+# secrets.yaml
+sentry:
+  dsn: https://...@sentry.io/...
+  environment: development
+  release: 2.2.0
+```
+
+自动捕获:
+- 所有未处理异常
+- 请求上下文
+- 堆栈跟踪
+
+### 日志
+```python
+from src.global_logger import logger
+
+logger.info("操作成功")
+logger.warning("潜在问题")
+logger.error("操作失败", exc_info=True)
+```
 
 ## 安全考虑
 
-### 反爬虫对策
-- **随机延迟**: 模拟人工操作节奏
-- **用户代理**: 使用真实浏览器标识
-- **Cookie管理**: 保持登录状态
-- **行为模拟**: 鼠标移动、滚动等
+### 敏感数据
+- 所有 API keys 存储在 `secrets.yaml`
+- Git 忽略 `secrets.yaml`
+- 环境变量备用方案
 
-### 数据安全
-- **本地存储**: 数据不离开本地环境
-- **状态加密**: 登录状态文件保护
-- **访问控制**: API接口权限控制
-- **日志审计**: 操作记录和追踪
+### 会话管理
+- 登录状态持久化到 `data/state.json`
+- CDP 连接外部 Chrome（无需重复登录）
+- 自动恢复登录失效
 
-## 监控和日志
+## 测试
 
-### 操作日志
-```python
-# 通知系统
-def add_notification(self, message: str, level: str = "info"):
-    notification = {
-        "id": len(self.notifications) + 1,
-        "message": message,
-        "level": level,
-        "timestamp": datetime.now().isoformat()
-    }
-    self.notifications.append(notification)
-```
-
-### 性能监控
-- **响应时间**: API请求处理时间
-- **成功率**: 操作成功比例
-- **错误率**: 失败操作统计
-- **资源使用**: 内存和CPU使用情况
-
-## 部署架构
-
-### 开发环境
+### 运行测试
 ```bash
-# 热重载开发
-python start_service.py
-# 自动重启和代码更新
-uvicorn boss_service:app --reload
+pytest test/ -v
 ```
+
+### 主要测试
+- `test_decide_pipeline.py` - AI 决策流程
+- `test_resume_capture.py` - 简历提取
+- `test_watcher.py` - 文件监控
+
+## 部署
 
 ### 生产环境
-```bash
-# 多进程部署
-gunicorn boss_service:app -w 4 -k uvicorn.workers.UvicornWorker
-# 负载均衡
-nginx + gunicorn
-```
+1. 修改 `config.yaml` 和 `secrets.yaml`
+2. 设置 `sentry.environment: production`
+3. 启动外部 Chrome (CDP)
+4. 启动服务: `python start_service.py`
 
-### 容器化部署
+### Docker (TODO)
 ```dockerfile
-FROM python:3.9-slim
-COPY requirements.txt .
-RUN pip install -r requirements.txt
-RUN playwright install
-COPY . .
-CMD ["python", "start_service.py"]
+# 待实现
 ```
 
-## Streamlit界面优化 (v2.0.2)
+## 版本历史
 
-### 会话状态重构
-- **状态键减少**: 从20个减少到5个 (75%减少)
-- **缓存机制**: 使用`@st.cache_data`替代会话状态
-- **性能提升**: 页面加载速度提升30%，内存使用减少20%
-- **代码简化**: 移除不必要的状态管理，降低40%复杂度
+- **v2.2.0** (2024-10-11) - API 简化 + Sentry + 配置重构
+- **v2.1.0** (2024-10) - 架构重构 + Thread API
+- **v2.0.2** (2024-10) - Streamlit 优化
+- **v2.0.0** (2024-09) - 初始版本
 
-### 技术实现
-```python
-# 新的缓存函数
-@st.cache_data(ttl=60, show_spinner="加载配置中...")
-def load_config(path: str) -> Dict[str, Any]:
-    """配置数据缓存加载"""
+---
 
-@st.cache_data(ttl=60, show_spinner="加载岗位配置中...")
-def load_jobs() -> List[Dict[str, Any]]:
-    """岗位配置缓存加载"""
-
-def get_selected_job(index: int) -> Optional[Dict[str, Any]]:
-    """选中岗位获取"""
-```
-
-### 保留的核心状态键 (5个)
-1. **`CRITERIA_PATH`** - 配置文件路径
-2. **`SELECTED_JOB_INDEX`** - 选中岗位索引  
-3. **`CACHED_ONLINE_RESUME`** - 在线简历缓存
-4. **`ANALYSIS_RESULTS`** - AI分析结果
-5. **`GENERATED_MESSAGES`** - 生成的消息草稿
-
-### 移除的状态键 (15个)
-- **配置管理**: `CONFIG_DATA`, `CONFIG_LOADED_PATH`, `LAST_SAVED_YAML`
-- **岗位管理**: `SELECTED_JOB`, `JOBS_CACHE`, `RECOMMEND_JOB_SYNCED`
-- **URL管理**: `BASE_URL`, `BASE_URL_OPTIONS`, `BASE_URL_SELECT`, `BASE_URL_NEW`, `BASE_URL_ADD_BTN`
-- **角色管理**: `FIRST_ROLE_POSITION`, `FIRST_ROLE_ID`, `NEW_ROLE_POSITION`, `NEW_ROLE_ID`
-- **消息管理**: `RECOMMEND_GREET_MESSAGE`, `ANALYSIS_NOTES`
-- **其他**: `CONFIG_PATH_SELECT`, `JOB_SELECTOR`
-
-### 页面测试结果
-- ✅ 所有6个Streamlit页面导入成功
-- ✅ 无缺失键错误
-- ✅ 功能完整性验证通过
-- ✅ 性能优化验证通过
-
-## 扩展性设计
-
-### 插件系统
-- **选择器插件**: 自定义页面选择器
-- **数据处理器**: 自定义数据解析逻辑
-- **通知插件**: 自定义通知方式
-
-### API扩展
-- **中间件支持**: 请求/响应处理
-- **认证系统**: API密钥管理
-- **限流控制**: 请求频率限制
-
-### 数据源扩展
-- **多平台支持**: 支持其他招聘网站
-- **数据格式**: 支持多种输出格式
-- **集成接口**: 与外部系统集成
+详细 API 文档: [api/reference.md](api/reference.md)  
+架构图: [architecture/system.mermaid](architecture/system.mermaid)  
+系统架构: [ARCHITECTURE.md](../ARCHITECTURE.md)
