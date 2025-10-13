@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Any, Dict, List
 
 from playwright.async_api import Frame, Locator, Page
@@ -26,7 +27,24 @@ JOB_POPOVER_SELECTOR = "div.ui-dropmenu"
 JOB_SELECTOR = "div.ui-dropmenu >> ul.job-list > li"
 
 
-async def _prepare_recommendation_page(page: Page, *, wait_timeout: int = 8000) -> Frame:
+async def _prepare_recommendation_page(page: Page, job_title: str = None, *, wait_timeout: int = 8000) -> Frame:
+    """
+    Navigates and configures the recommendation page for automated actions.
+
+    This function ensures the recommendation page is ready by:
+    - Closing any overlay dialogs.
+    - Navigating to the recommendation page if not already there.
+    - Switching to the specified job title (if provided), if not already selected.
+    - Waiting for candidate cards to become visible after each navigation step.
+
+    Args:
+        page (Page): The Playwright Page instance.
+        job_title (str, optional): The job title to select from the dropdown.
+        wait_timeout (int, optional): Timeout in milliseconds to wait for visibility. Defaults to 8000.
+
+    Returns:
+        Frame: The configured recommendation iframe Frame object, ready for further actions.
+    """
     await close_overlay_dialogs(page)
     if settings.RECOMMEND_URL not in page.url:
         menu_chat = page.locator("dl.menu-recommend").first
@@ -37,12 +55,45 @@ async def _prepare_recommendation_page(page: Page, *, wait_timeout: int = 8000) 
     if not frame:
         raise RuntimeError("推荐页面 iframe 未找到")
     await frame.wait_for_selector(CANDIDATE_CARD_SELECTOR, timeout=wait_timeout)
+    
+    # Select job title if provided
+    if job_title:
+        job_options = frame.locator(JOB_SELECTOR)
+        count = await job_options.count()
+        if count == 0:
+            raise ValueError("未找到职位下拉菜单")
+
+        dropdown_label = frame.locator(JOB_POPOVER_SELECTOR).first
+        current_selected_job = await dropdown_label.inner_text(timeout=500)
+        if job_title in current_selected_job:
+            return frame
+        # Only change if not already selected
+        job_titles = [await option.inner_text(timeout=500) for option in job_options]
+        job_idx = job_titles.index(job_title)
+        if job_idx == -1:
+            raise ValueError(f"未找到包含'{job_title}'的职位。可用职位: {', '.join(job_titles)}")
+        # click the job option
+        await frame.locator(JOB_POPOVER_SELECTOR).click(timeout=1000)
+        await job_options.nth(job_idx).click(timeout=1000)
+        # Wait for selection to take effect
+        t0 = time.time()
+        while job_title not in current_selected_job:
+            current_selected_job = await dropdown_label.inner_text(timeout=500)
+            await asyncio.sleep(0.2)
+            if time.time() - t0 > wait_timeout:
+                raise ValueError(f"职位选择可能失败。当前选择: {current_selected_job}")
+            
+    
     logger.info("已导航到推荐页面")
     return frame
 
 
 async def select_recommend_job_action(frame: Frame, job_title: str) -> Dict[str, Any]:
-    """Select job from dropdown. Returns dict with 'selected_job' and 'available_jobs'. Raises ValueError on failure."""
+    """
+    DEPRECATED: Use _prepare_recommendation_page(page, job_title=job_title) instead.
+    
+    Select job from dropdown. Returns dict with 'selected_job' and 'available_jobs'. Raises ValueError on failure.
+    """
     job_options = frame.locator(JOB_SELECTOR)
     count = await job_options.count()
     if count == 0:
@@ -74,9 +125,9 @@ async def select_recommend_job_action(frame: Frame, job_title: str) -> Dict[str,
     raise ValueError(f"职位选择可能失败。当前选择: {current_selected_job}")
 
 
-async def list_recommended_candidates_action(page: Page, *, limit: int = 20) -> List[Dict[str, Any]]:
+async def list_recommended_candidates_action(page: Page, *, limit: int = 20, job_title: str = None) -> List[Dict[str, Any]]:
     """List recommended candidates. Returns list of candidate dicts. Raises ValueError if no candidates found."""
-    frame = await _prepare_recommendation_page(page)
+    frame = await _prepare_recommendation_page(page, job_title=job_title)
     candidates: List[Dict[str, Any]] = []
     cards = frame.locator(CANDIDATE_CARD_SELECTOR)
     count = await cards.count()
@@ -89,8 +140,19 @@ async def list_recommended_candidates_action(page: Page, *, limit: int = 20) -> 
         classes = await card.get_attribute("class") or ""
         viewed = "viewed" in classes
         greeted = await card.locator("button:has-text('继续沟通')").count() > 0
-        text = (await card.inner_text()).strip()
-        candidates.append({"viewed": viewed, "greeted": greeted, "text": text})
+        name = await card.locator("span.name").inner_text()
+        text = (await card.inner_text()).replace(name, "")
+        
+        # Create candidate dict with standardized field names for web UI
+        candidates.append({
+            "id": f"recommend_{index}",  # Unique ID for this session
+            "name": name,
+            "job_title": job_title,  # Standardized field name
+            "text": text,
+            "viewed": viewed,
+            "greeted": greeted,
+            "stage": "GREET" if greeted else None  # Map greeted status to stage
+        })
     
     logger.info("成功获取 %d 个推荐候选人", len(candidates))
     return candidates
