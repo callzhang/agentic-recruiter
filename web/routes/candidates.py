@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict
+import json
+from typing import Any, Dict, Optional
 
 import httpx
-from fastapi import APIRouter, Form, Query, Request
-from fastapi.responses import HTMLResponse
+from fastapi import APIRouter, Form, Query, Request, Response
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
 from src.config import settings
@@ -35,6 +36,47 @@ async def call_api(method: str, path: str, timeout: float = 30.0, **kwargs) -> t
         return True, response.text
     except httpx.HTTPError as exc:
         return False, str(exc)
+
+
+def load_jobs() -> list[dict]:
+    """Load job configurations from jobs.yaml."""
+    import yaml
+    with open(settings.BOSS_CRITERIA_PATH, "r", encoding="utf-8") as f:
+        config = yaml.safe_load(f)
+    return config["roles"]
+
+
+def get_job_by_id(job_id: str) -> dict:
+    """Get job info by id or position name from jobs.yaml."""
+    jobs = load_jobs()
+    for job in jobs:
+        if job.get("id") == job_id or job.get("position") == job_id:
+            return job
+    # Fallback: return minimal dict
+    return {"id": job_id, "position": job_id}
+
+
+async def prepare_init_chat_data(mode: str, chat_id: Optional[str], name: str, job_id: str, resume_text: str) -> dict:
+    """Prepare data for init-chat API call by fetching chat_history and job_info."""
+    # Get job info from jobs.yaml
+    job_info = get_job_by_id(job_id)
+    
+    # For recommend candidates, they have no chat history yet
+    if mode == "recommend":
+        chat_history = []
+    else:
+        # Fetch chat history from API for chat candidates
+        ok, chat_history = await call_api("GET", f"/chat/{chat_id}/messages")
+        if not ok or not isinstance(chat_history, list):
+            chat_history = []
+    
+    return {
+        "chat_id": chat_id,  # None for recommend, real ID for chat
+        "name": name,
+        "job_info": job_info,
+        "resume_text": resume_text,
+        "chat_history": chat_history
+    }
 
 
 # ============================================================================
@@ -77,10 +119,11 @@ async def get_candidate_list(
         
         candidates = data
     else:
-        # Fetch recommended candidates (longer timeout - needs browser navigation)
+        # Fetch recommended candidates (no limit - returns all from browser page)
+        # Longer timeout as this requires browser navigation
         ok, data = await call_api("GET", "/recommend/candidates", timeout=20.0, params={
-            "limit": limit,
             "job_title": job_title
+            # No limit parameter - returns all candidates on the page
         })
         
         if not ok or not isinstance(data, list):
@@ -112,11 +155,12 @@ async def get_candidate_list(
 # Candidate detail endpoints
 # ============================================================================
 
-@router.get("/detail/{candidate_id}", response_class=HTMLResponse)
+@router.get("/detail", response_class=HTMLResponse)
 async def get_candidate_detail(
     request: Request,
-    candidate_id: str,
     mode: str = Query("chat", description="Candidate source mode: chat or recommend"),
+    chat_id: Optional[str] = Query(None, description="Chat ID for chat candidates"),
+    index: Optional[int] = Query(None, description="Index for recommend candidates"),
     name: str = Query(None, description="Candidate name from list"),
     job_title: str = Query(None, description="Job title from list"),
     text: str = Query(None, description="Last message/text from list"),
@@ -128,31 +172,28 @@ async def get_candidate_detail(
 ):
     """Get candidate detail view."""
     # For recommend candidates, use data passed from the card
-    if mode == "recommend" and candidate_id.startswith("recommend_"):
-        index = int(candidate_id.split("_")[1])
+    if mode == "recommend":
         candidate_data = {
-            "chat_id": candidate_id,
-            "id": candidate_id,
+            "chat_id": None,  # Recommend candidates don't have chat_id yet
+            "index": index,
             "name": name or "推荐候选人",
             "job_title": job_title,
             "job_applied": job_title,
             "text": text,
             "mode": "recommend",
-            "index": index,
             "viewed": viewed,
             "greeted": greeted,
             "stage": stage
         }
     else:
         # Try to fetch candidate from store
-        ok, candidate_data = await call_api("GET", f"/candidate/{candidate_id}")
+        ok, candidate_data = await call_api("GET", f"/candidate/{chat_id}")
         
         if not ok or not candidate_data:
             # If not in store, use data passed from the card (if available)
             if name or job_title or text:
                 candidate_data = {
-                    "chat_id": candidate_id,
-                    "id": candidate_id,
+                    "chat_id": chat_id,
                     "name": name,
                     "job_title": job_title,
                     "job_applied": job_title,
@@ -162,7 +203,7 @@ async def get_candidate_detail(
                 }
             else:
                 # No data passed, fallback to minimal data
-                candidate_data = {"chat_id": candidate_id, "id": candidate_id, "mode": "chat"}
+                candidate_data = {"chat_id": chat_id, "mode": "chat"}
     
     # Get default assistant and job if not provided
     if not assistant_id:
@@ -170,12 +211,10 @@ async def get_candidate_detail(
         assistant_id = assistants[0]["id"] if ok and assistants else None
     
     if not job_id:
-        # Get first job from config directly
-        import yaml
+        # Get first job ID from jobs.yaml
         try:
-            with open(settings.BOSS_CRITERIA_PATH, "r", encoding="utf-8") as f:
-                jobs_config = yaml.safe_load(f)
-            job_id = list(jobs_config.keys())[0] if jobs_config else None
+            jobs = load_jobs()
+            job_id = jobs[0]["id"] if jobs else None
         except:
             job_id = None
     
@@ -236,34 +275,71 @@ async def get_candidate_history(candidate_id: str):
 # Candidate action endpoints
 # ============================================================================
 
+@router.post("/init-chat")
+async def init_chat(
+    mode: str = Form(...),
+    chat_id: Optional[str] = Form(None),
+    job_id: str = Form(...),
+    name: str = Form(...),
+    resume_text: str = Form(...),
+):
+    """Initialize chat thread with proper data preparation."""
+    # Prepare data with job_info from jobs.yaml and chat_history from API
+    # For recommend candidates: mode="recommend" and chat_id=None
+    init_data = await prepare_init_chat_data(mode, chat_id, name, job_id, resume_text)
+    
+    # Call the backend init-chat endpoint
+    ok, result = await call_api("POST", "/thread/init-chat", json=init_data)
+    
+    if ok:
+        # Return thread_id in response so frontend can use it for subsequent calls
+        # Return as JSON instead of 204 to include thread_id
+        return JSONResponse(content={
+            "thread_id": result.get("thread_id"),
+            "success": result.get("success", True)
+        })
+    else:
+        # Return error with 500 status
+        return JSONResponse(
+            content={"error": str(result)},
+            status_code=500
+        )
+
+
 @router.post("/analyze", response_class=HTMLResponse)
 async def analyze_candidate(
     request: Request,
-    chat_id: str = Form(...),
+    mode: str = Form(...),
+    chat_id: Optional[str] = Form(None),
+    thread_id: Optional[str] = Form(None),
     assistant_id: str = Form(...),
-    job_id: str = Form(None),
 ):
     """Analyze candidate and return updated analysis section."""
-    # Check if candidate exists in store with thread_id
-    ok, candidate = await call_api("GET", f"/candidate/{chat_id}")
-    if not ok or not candidate or not candidate.get("thread_id"):
-        # Candidate needs resume to be fetched first
+    
+    # Use thread_id if available (for both chat and recommend),
+    # otherwise fall back to chat_id (for backward compatibility)
+    if thread_id:
+        # Preferred: use thread_id directly
+        api_chat_id = thread_id
+    elif chat_id:
+        api_chat_id = chat_id
+    else:
         return HTMLResponse(
-            content='''<div class="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-                <p class="font-bold text-yellow-800 mb-2">⚠️ 无法分析候选人</p>
-                <p class="text-yellow-700 mb-2">请先获取候选人简历，系统将自动初始化对话线程。</p>
-                <p class="text-sm text-yellow-600">步骤：<span class="font-mono">简历标签 → 获取简历按钮 → 等待加载完成 → 返回分析标签</span></p>
-            </div>'''
+            content='<div class="text-red-500 p-4">Missing chat_id or thread_id</div>',
+            status_code=400
         )
     
-    # Get chat history
-    ok, history = await call_api("GET", f"/chat/{chat_id}/messages")
-    if not ok:
+    # Get chat history (empty for recommend candidates without chat_id)
+    if mode == "recommend" or not chat_id:
         history = []
+    else:
+        ok, history = await call_api("GET", f"/chat/{chat_id}/messages")
+        if not ok:
+            history = []
     
-    # Call analysis API
+    # Call analysis API with thread_id
     ok, analysis_result = await call_api("POST", "/assistant/generate-message", json={
-        "chat_id": chat_id,
+        "thread_id": api_chat_id,  # Now using thread_id directly
         "assistant_id": assistant_id,
         "chat_history": history,
         "purpose": "analyze"
@@ -275,7 +351,7 @@ async def analyze_candidate(
         )
     
     # Render analysis result
-    candidate_data = {"analysis": analysis_result, "chat_id": chat_id}
+    candidate_data = {"analysis": analysis_result, "chat_id": chat_id or thread_id}
     return templates.TemplateResponse("partials/analysis_result.html", {
         "request": request,
         "candidate": candidate_data,
@@ -285,14 +361,24 @@ async def analyze_candidate(
 
 @router.post("/generate-message", response_class=HTMLResponse)
 async def generate_message(
-    chat_id: str = Form(...),
+    mode: str = Form(...),
+    chat_id: Optional[str] = Form(None),
+    thread_id: Optional[str] = Form(None),
     assistant_id: str = Form(...),
 ):
     """Generate message for candidate."""
-    # Check if candidate exists in store with thread_id
-    ok, candidate = await call_api("GET", f"/candidate/{chat_id}")
-    if not ok or not candidate or not candidate.get("thread_id"):
-        # Candidate needs resume to be fetched first
+    # Use thread_id if available, otherwise look it up by chat_id
+    if not thread_id and chat_id:
+        # Lookup thread_id from Zilliz using chat_id
+        ok, candidate = await call_api("GET", f"/candidate/{chat_id}")
+        if not ok or not candidate:
+            return HTMLResponse(
+                content='<div class="text-red-500 p-4">候选人不存在，请先初始化对话</div>',
+                status_code=404
+            )
+        thread_id = candidate.get("thread_id")
+    
+    if not thread_id:
         return HTMLResponse(
             content='''<div class="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
                 <p class="font-bold text-yellow-800 mb-2">⚠️ 无法生成消息</p>
@@ -301,14 +387,17 @@ async def generate_message(
             </div>'''
         )
     
-    # Get chat history
-    ok, history = await call_api("GET", f"/chat/{chat_id}/messages")
-    if not ok:
+    # Get chat history (empty for recommend candidates)
+    if mode == "recommend" or not chat_id:
         history = []
+    else:
+        ok, history = await call_api("GET", f"/chat/{chat_id}/messages")
+        if not ok:
+            history = []
     
-    # Generate message
+    # Generate message using thread_id
     ok, message = await call_api("POST", "/assistant/generate-message", json={
-        "chat_id": chat_id,
+        "thread_id": thread_id,
         "assistant_id": assistant_id,
         "chat_history": history,
         "purpose": "chat"
@@ -378,89 +467,43 @@ async def request_resume(chat_id: str = Form(...)):
 
 @router.post("/fetch-online-resume", response_class=HTMLResponse)
 async def fetch_online_resume(
-    request: Request,
     chat_id: str = Form(...),
-    mode: str = Form("chat"),
-    assistant_id: str = Form(""),
-    job_id: str = Form(""),
 ):
-    """Fetch online resume for chat candidate (view_online_resume_action)."""
-    if mode != "chat":
-        return HTMLResponse(
-            content='<div class="text-red-500 p-4">推荐候选人不支持在线简历</div>',
-            status_code=400
-        )
-    
+    """Fetch online resume for chat candidate and return textarea."""
     # Call online resume API
     ok, resume_data = await call_api("POST", "/resume/online", json={"chat_id": chat_id})
 
     if not ok:
         return HTMLResponse(
-            content=f'<div class="text-red-500 p-4">无法获取在线简历: {resume_data}</div>',
+            content='<div class="text-red-500 p-4">无法获取在线简历</div>',
             status_code=500
         )
 
-    # Fetch latest candidate metadata for display
-    ok_candidate, candidate_data = await call_api("GET", f"/candidate/{chat_id}")
-    if not ok_candidate or not isinstance(candidate_data, dict):
-        candidate_data = {"chat_id": chat_id}
-
-    # Re-render detail with online resume
-    candidate_data.update({
-        "chat_id": chat_id,
-        "resume_text": resume_data.get("text", ""),
-        "mode": mode
-    })
-
-    return templates.TemplateResponse("partials/candidate_detail.html", {
-        "request": request,
-        "candidate": candidate_data,
-        "assistant_id": assistant_id,
-        "job_id": job_id,
-        "generated_message": None
-    })
+    # Always return textarea for automatic workflow
+    resume_text = resume_data.get("text", "")
+    return HTMLResponse(
+        content=f'<textarea readonly class="w-full h-64 p-4 bg-gray-50 border rounded-lg font-mono text-sm">{resume_text}</textarea>'
+    )
 
 
 @router.post("/fetch-recommend-resume", response_class=HTMLResponse)
 async def fetch_recommend_resume(
-    request: Request,
-    chat_id: str = Form(...),
-    mode: str = Form("recommend"),
-    assistant_id: str = Form(""),
-    job_id: str = Form(""),
+    index: int = Form(...),
 ):
-    """Fetch resume for recommend candidate (view_recommend_candidate_resume_action)."""
-    if mode != "recommend" or not chat_id.startswith("recommend_"):
-        return HTMLResponse(
-            content='<div class="text-red-500 p-4">仅支持推荐候选人</div>',
-            status_code=400
-        )
-    
-    index = int(chat_id.split("_")[1])
+    """Fetch resume for recommend candidate and return textarea."""
     ok, resume_data = await call_api("GET", f"/recommend/candidate/{index}/resume")
     
     if not ok:
         return HTMLResponse(
-            content=f'<div class="text-red-500 p-4">无法获取推荐候选人简历: {resume_data}</div>',
+            content='<div class="text-red-500 p-4">无法获取推荐候选人简历</div>',
             status_code=500
         )
 
-    # For recommend candidates, we don't have persistent storage
-    candidate_data = {
-        "chat_id": chat_id,
-        "id": chat_id,
-        "resume_text": resume_data.get("text", ""),
-        "mode": mode,
-        "index": index
-    }
-
-    return templates.TemplateResponse("partials/candidate_detail.html", {
-        "request": request,
-        "candidate": candidate_data,
-        "assistant_id": assistant_id,
-        "job_id": job_id,
-        "generated_message": None
-    })
+    # Always return textarea for automatic workflow
+    resume_text = resume_data.get("text", "")
+    return HTMLResponse(
+        content=f'<textarea readonly class="w-full h-64 p-4 bg-gray-50 border rounded-lg font-mono text-sm">{resume_text}</textarea>'
+    )
 
 
 @router.post("/fetch-full-resume", response_class=HTMLResponse)
