@@ -1,0 +1,173 @@
+<!-- Candidate detail view -->
+<div class="space-y-6">
+    <!-- Header -->
+    <div class="flex justify-between items-start">
+        <div>
+            <h2 class="text-2xl font-bold text-gray-900">{{ candidate.name or '未知候选人' }}</h2>
+            <p class="text-gray-600">{{ candidate.job_applied or candidate.job_title or '未指定岗位' }}</p>
+        </div>
+        <div class="flex space-x-2">
+            {% if candidate.stage %}
+            <span class="px-4 py-2 rounded-lg font-medium
+                {% if candidate.stage == 'PASS' %}bg-gray-200 text-gray-700
+                {% elif candidate.stage == 'GREET' %}bg-green-200 text-green-700
+                {% elif candidate.stage == 'SEEK' %}bg-yellow-200 text-yellow-700
+                {% elif candidate.stage == 'CONTACT' %}bg-blue-200 text-blue-700
+                {% else %}bg-gray-100 text-gray-600{% endif %}">
+                {{ candidate.stage }}
+            </span>
+            {% endif %}
+        </div>
+    </div>
+    
+    <!-- Tabs for Resume, History, Analysis -->
+    <div x-data="{ activeTab: 'resume' }" class="space-y-4">
+        <div class="flex space-x-4 border-b">
+            <button @click="activeTab = 'resume'" 
+                    :class="activeTab === 'resume' ? 'tab-active' : ''"
+                    class="px-4 py-2 font-medium text-gray-700 hover:text-blue-600">
+                📄 简历
+            </button>
+            <button @click="activeTab = 'history'"
+                    :class="activeTab === 'history' ? 'tab-active' : ''"
+                    class="px-4 py-2 font-medium text-gray-700 hover:text-blue-600">
+                💬 聊天记录
+            </button>
+            <button @click="activeTab = 'analysis'"
+                    :class="activeTab === 'analysis' ? 'tab-active' : ''"
+                    class="px-4 py-2 font-medium text-gray-700 hover:text-blue-600">
+                📊 AI 分析
+            </button>
+        </div>
+        
+        <!-- Resume tab -->
+        <div x-show="activeTab === 'resume'" class="space-y-4">
+            {% if candidate.resume_text or candidate.full_resume %}
+            <div class="bg-gray-50 rounded-lg p-4">
+                <div class="flex justify-between items-center mb-2">
+                    <span class="text-sm font-medium text-gray-700">
+                        简历来源: {{ '附件简历' if candidate.full_resume else '在线简历' }}
+                    </span>
+                    <div class="flex gap-2">
+                        {% if candidate.mode != 'recommend' and not candidate.full_resume %}
+                        <button hx-post="/web/candidates/fetch-full-resume"
+                                hx-include="#candidate-context"
+                                hx-target="#detail-pane"
+                                class="text-sm px-3 py-1 bg-purple-600 text-white rounded hover:bg-purple-700">
+                            📄 获取离线简历
+                        </button>
+                        {% endif %}
+                        <button hx-post="/web/candidates/refresh-resume"
+                                hx-include="#candidate-context"
+                                hx-target="#detail-pane"
+                                class="text-sm px-3 py-1 text-blue-600 hover:text-blue-800 border border-blue-600 rounded">
+                            🔄 刷新
+                        </button>
+                    </div>
+                </div>
+                <textarea readonly class="w-full h-96 p-4 bg-white border rounded-lg resume-text">{{ candidate.full_resume or candidate.resume_text or '暂无简历' }}</textarea>
+            </div>
+            {% else %}
+                <div class="text-center py-12 text-gray-500">
+                    <p class="mb-4">暂无简历数据</p>
+                    <button hx-post="/web/candidates/fetch-resume"
+                            hx-include="#candidate-context"
+                            hx-target="#detail-pane"
+                            class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+                        获取简历
+                    </button>
+            </div>
+            {% endif %}
+        </div>
+        
+        <!-- History tab -->
+        <div x-show="activeTab === 'history'">
+            <div id="chat-history" 
+                 hx-get="/web/candidates/history/{{ candidate.chat_id or candidate.id }}"
+                 hx-trigger="revealed"
+                 hx-swap="innerHTML"
+                 class="space-y-2">
+                <div class="text-center text-gray-500">加载中...</div>
+            </div>
+        </div>
+        
+        <!-- Analysis tab -->
+        <div x-show="activeTab === 'analysis'">
+            <div id="analysis-section">
+                {% if candidate.analysis %}
+                    {% include 'partials/analysis_result.html' %}
+                {% else %}
+                <div class="text-center py-12">
+                    <p class="text-gray-500 mb-4">尚未分析</p>
+                    <button hx-post="/web/candidates/analyze"
+                            hx-include="#candidate-context"
+                            hx-target="#analysis-section"
+                            class="px-6 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700">
+                        🤖 AI 分析候选人
+                    </button>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    
+    <!-- Action buttons -->
+    <div class="bg-gray-50 rounded-lg p-6 space-y-4">
+        <h3 class="font-bold text-gray-800 mb-4">操作</h3>
+
+        <div id="candidate-context" class="hidden">
+            <input type="hidden" name="chat_id" value="{{ candidate.chat_id or candidate.id }}">
+            <input type="hidden" name="mode" value="{{ candidate.mode or 'chat' }}">
+            <input type="hidden" name="assistant_id" value="{{ assistant_id }}">
+            <input type="hidden" name="job_id" value="{{ job_id }}">
+        </div>
+        
+        <!-- Generate message -->
+        <div id="message-section">
+            {% if generated_message %}
+            <div class="mb-4">
+                <label class="block text-sm font-medium text-gray-700 mb-2">生成的消息</label>
+                <textarea id="message-text" name="message" class="w-full h-32 p-4 border rounded-lg">{{ generated_message }}</textarea>
+            </div>
+            {% else %}
+            <button hx-post="/web/candidates/generate-message"
+                    hx-include="#candidate-context"
+                    hx-target="#message-section"
+                    class="w-full px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 mb-4">
+                ✨ 生成消息
+            </button>
+            {% endif %}
+        </div>
+        
+        <!-- Send & Request resume buttons -->
+        <div class="grid grid-cols-2 gap-4">
+            <button hx-post="/web/candidates/send"
+                    hx-include="#candidate-context,#message-text"
+                    hx-target="#detail-pane"
+                    class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700">
+                📤 发送消息
+            </button>
+            <button hx-post="/web/candidates/request-resume"
+                    hx-include="#candidate-context"
+                    class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+                📋 请求完整简历
+            </button>
+        </div>
+        
+        <!-- Pass & Next buttons -->
+        <div class="grid grid-cols-2 gap-4 pt-4 border-t">
+            <button hx-post="/web/candidates/pass"
+                    hx-include="#candidate-context"
+                    hx-target="#candidate-list"
+                    class="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700">
+                ⏭️ PASS 并查看下一个
+            </button>
+            <button hx-post="/web/candidates/next"
+                    hx-include="#candidate-context"
+                    hx-target="#detail-pane"
+                    class="px-4 py-2 bg-yellow-600 text-white rounded-lg hover:bg-yellow-700">
+                ⏩ 查看下一个
+            </button>
+        </div>
+    </div>
+</div>

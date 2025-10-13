@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+
+{% block title %}岗位画像 - BOSS招聘助手{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Page header -->
+    <div class="bg-white rounded-lg shadow p-6">
+        <div class="flex justify-between items-center">
+            <div>
+                <h1 class="text-3xl font-bold text-gray-800">岗位画像</h1>
+                <p class="text-gray-600 mt-2">管理招聘岗位的背景、职责、要求和理想人选画像</p>
+            </div>
+            <button onclick="location.href='/web/jobs/new'"
+                    class="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium">
+                ➕ 创建新岗位
+            </button>
+        </div>
+    </div>
+    
+    <!-- Jobs list and detail -->
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <!-- Jobs list (left sidebar) -->
+        <div class="lg:col-span-1">
+            <div class="bg-white rounded-lg shadow-lg">
+                <div class="p-4 border-b">
+                    <h2 class="font-bold text-gray-800">岗位列表</h2>
+                </div>
+                <div id="jobs-list" 
+                     hx-get="/web/jobs/list" 
+                     hx-trigger="load" 
+                     hx-swap="innerHTML"
+                     class="divide-y">
+                    <!-- Will be populated via HTMX -->
+                    <div class="p-6 text-center text-gray-500">
+                        <div class="animate-pulse">加载岗位列表...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Job detail (right panel) -->
+        <div class="lg:col-span-2">
+            <div id="job-detail" class="bg-white rounded-lg shadow-lg p-6">
+                <div class="text-center text-gray-500 py-24">
+                    <div class="text-6xl mb-4">💼</div>
+                    <p class="text-lg">请从左侧列表中选择岗位</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+

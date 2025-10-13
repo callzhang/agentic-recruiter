@@ -1,0 +1,296 @@
+{% extends "base.html" %}
+
+{% block title %}自动化工作流 - BOSS招聘助手{% endblock %}
+
+{% block content %}
+<div x-data="automationControl()" x-init="initSSE()" class="space-y-6">
+    <!-- Page header -->
+    <div class="bg-white rounded-lg shadow p-6">
+        <h1 class="text-3xl font-bold text-gray-800 mb-2">自动化工作流</h1>
+        <p class="text-gray-600">配置并启动自动化招聘流程，实时监控执行状态</p>
+    </div>
+    
+    <!-- Configuration panel -->
+    <div class="bg-white rounded-lg shadow-lg p-6">
+        <h2 class="text-xl font-bold text-gray-800 mb-4">工作流配置</h2>
+        
+        <form id="automation-form">
+            <!-- Workflow selection -->
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+                <label class="flex items-center space-x-3 p-4 border rounded-lg cursor-pointer hover:bg-blue-50 transition">
+                    <input type="checkbox" name="enable_recommend" value="true" class="w-5 h-5">
+                    <span class="font-medium">⭐ 推荐牛人</span>
+                </label>
+                
+                <label class="flex items-center space-x-3 p-4 border rounded-lg cursor-pointer hover:bg-blue-50 transition">
+                    <input type="checkbox" name="enable_new_chats" value="true" checked class="w-5 h-5">
+                    <span class="font-medium">💬 新招呼</span>
+                </label>
+                
+                <label class="flex items-center space-x-3 p-4 border rounded-lg cursor-pointer hover:bg-blue-50 transition">
+                    <input type="checkbox" name="enable_active_chats" value="true" class="w-5 h-5">
+                    <span class="font-medium">🔥 沟通中</span>
+                </label>
+                
+                <label class="flex items-center space-x-3 p-4 border rounded-lg cursor-pointer hover:bg-blue-50 transition">
+                    <input type="checkbox" name="enable_followups" value="true" class="w-5 h-5">
+                    <span class="font-medium">⏰ 追结果</span>
+                </label>
+            </div>
+            
+            <!-- Job and thresholds -->
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">岗位</label>
+                    <select name="job_id" class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
+                            hx-get="/web/jobs/list-simple" hx-trigger="load" hx-swap="innerHTML">
+                        <option>加载中...</option>
+                    </select>
+                </div>
+                
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">助手</label>
+                    <select name="assistant_id" class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
+                            hx-get="/web/assistants/list-simple" hx-trigger="load" hx-swap="innerHTML">
+                        <option>加载中...</option>
+                    </select>
+                </div>
+                
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">
+                        Borderline (及格线)
+                        <span class="text-xs text-gray-500">≥ 此分数表示兴趣</span>
+                    </label>
+                    <input type="number" name="threshold_borderline" value="7.0" min="1" max="10" step="0.5"
+                           class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500">
+                </div>
+                
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">
+                        Seek (强匹配阈值)
+                        <span class="text-xs text-gray-500">≥ 此分数要求联系方式</span>
+                    </label>
+                    <input type="number" name="threshold_seek" value="9.0" min="1" max="10" step="0.5"
+                           class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500">
+                </div>
+            </div>
+            
+            <!-- Candidate limit -->
+            <div class="mb-6">
+                <label class="block text-sm font-medium text-gray-700 mb-2">处理数量限制</label>
+                <input type="number" name="limit" value="20" min="5" max="100" step="5"
+                       class="w-64 px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500">
+            </div>
+        </form>
+        
+        <!-- Control buttons -->
+        <div class="flex space-x-4">
+            <button @click="startAutomation()"
+                    :disabled="isRunning"
+                    :class="isRunning ? 'bg-gray-400 cursor-not-allowed' : 'bg-green-600 hover:bg-green-700'"
+                    class="px-6 py-3 text-white rounded-lg font-medium transition">
+                ▶️ 启动
+            </button>
+            
+            <button @click="nextStep()"
+                    :disabled="!isRunning || !isPaused"
+                    :class="(!isRunning || !isPaused) ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'"
+                    class="px-6 py-3 text-white rounded-lg font-medium transition">
+                ⏭️ 下一步
+            </button>
+            
+            <button @click="pauseAutomation()"
+                    :disabled="!isRunning || isPaused"
+                    :class="(!isRunning || isPaused) ? 'bg-gray-400 cursor-not-allowed' : 'bg-yellow-600 hover:bg-yellow-700'"
+                    class="px-6 py-3 text-white rounded-lg font-medium transition">
+                ⏸️ 暂停
+            </button>
+            
+            <button @click="stopAutomation()"
+                    :disabled="!isRunning"
+                    :class="!isRunning ? 'bg-gray-400 cursor-not-allowed' : 'bg-red-600 hover:bg-red-700'"
+                    class="px-6 py-3 text-white rounded-lg font-medium transition">
+                ⏹️ 停止
+            </button>
+            
+            <button @click="clearEvents()"
+                    class="px-6 py-3 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-lg font-medium transition">
+                🗑️ 清空日志
+            </button>
+        </div>
+        
+        <!-- Status indicator -->
+        <div class="mt-4 flex items-center space-x-3">
+            <div class="flex items-center space-x-2">
+                <div :class="isRunning ? 'bg-green-500 animate-pulse' : 'bg-gray-400'" 
+                     class="w-3 h-3 rounded-full"></div>
+                <span class="text-sm font-medium text-gray-700">
+                    状态: <span x-text="isRunning ? (isPaused ? '已暂停' : '运行中') : '已停止'"></span>
+                </span>
+            </div>
+            <div class="text-sm text-gray-600">
+                事件数: <span x-text="events.length"></span>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Event stream log -->
+    <div class="bg-gray-900 rounded-lg shadow-lg p-4">
+        <div class="flex justify-between items-center mb-2">
+            <h2 class="text-lg font-bold text-green-400">实时事件日志</h2>
+            <div class="text-sm text-gray-400">自动滚动到底部</div>
+        </div>
+        
+        <div id="event-log" 
+             class="event-log h-96 overflow-y-auto bg-black rounded p-4 font-mono text-sm space-y-1">
+            <template x-for="event in events" :key="event.timestamp">
+                <div :class="getEventClass(event.level)" class="flex space-x-2">
+                    <span class="text-gray-500" x-text="event.timestamp.substring(11, 19)"></span>
+                    <span x-text="event.message"></span>
+                </div>
+            </template>
+            
+            <div x-show="events.length === 0" class="text-gray-500 text-center py-12">
+                等待启动工作流...
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Automation control methods
+function automationControl() {
+    return {
+        events: [],
+        eventSource: null,
+        isRunning: false,
+        isPaused: false,
+        
+        initSSE() {
+            // SSE connection will be established when automation starts
+            console.log('Automation control initialized');
+        },
+        
+        startAutomation() {
+            const form = document.getElementById('automation-form');
+            const formData = new FormData(form);
+            
+            // Post to start endpoint
+            fetch('/web/automation/start', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    this.isRunning = true;
+                    this.isPaused = false;
+                    this.connectSSE();
+                    showToast('工作流已启动', 'success');
+                } else {
+                    showToast('启动失败: ' + data.error, 'error');
+                }
+            })
+            .catch(err => {
+                showToast('启动失败: ' + err.message, 'error');
+            });
+        },
+        
+        connectSSE() {
+            if (this.eventSource) {
+                this.eventSource.close();
+            }
+            
+            this.eventSource = new EventSource('/web/automation/stream');
+            
+            this.eventSource.onmessage = (e) => {
+                const event = JSON.parse(e.data);
+                this.events.push(event);
+                
+                // Auto-scroll to bottom
+                this.$nextTick(() => {
+                    const log = document.getElementById('event-log');
+                    if (log) {
+                        log.scrollTop = log.scrollHeight;
+                    }
+                });
+                
+                // Keep only last 1000 events
+                if (this.events.length > 1000) {
+                    this.events = this.events.slice(-1000);
+                }
+                
+                // Check for completion/stop events
+                if (event.message.includes('工作流已完成') || event.message.includes('工作流已停止')) {
+                    this.isRunning = false;
+                    this.isPaused = false;
+                    this.eventSource.close();
+                }
+            };
+            
+            this.eventSource.onerror = (e) => {
+                console.error('SSE Error:', e);
+                this.isRunning = false;
+                this.isPaused = false;
+                if (this.eventSource) {
+                    this.eventSource.close();
+                }
+            };
+        },
+        
+        pauseAutomation() {
+            fetch('/web/automation/pause', { method: 'POST' })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        this.isPaused = true;
+                        showToast('工作流已暂停', 'info');
+                    }
+                });
+        },
+        
+        nextStep() {
+            fetch('/web/automation/next', { method: 'POST' })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        showToast('处理下一个候选人', 'info');
+                    }
+                });
+        },
+        
+        stopAutomation() {
+            fetch('/web/automation/stop', { method: 'POST' })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        this.isRunning = false;
+                        this.isPaused = false;
+                        if (this.eventSource) {
+                            this.eventSource.close();
+                        }
+                        showToast('工作流已停止', 'warning');
+                    }
+                });
+        },
+        
+        clearEvents() {
+            this.events = [];
+        },
+        
+        getEventClass(level) {
+            const classes = {
+                'info': 'event-info',
+                'warning': 'event-warning',
+                'error': 'event-error',
+                'success': 'event-success'
+            };
+            return classes[level] || 'event-info';
+        }
+    };
+}
+</script>
+{% endblock %}
+

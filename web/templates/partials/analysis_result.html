@@ -1,0 +1,34 @@
+<!-- Analysis result display -->
+<div class="space-y-4">
+    <div class="grid grid-cols-4 gap-4">
+        <div class="bg-white border rounded-lg p-4 text-center">
+            <div class="text-2xl font-bold text-blue-600">{{ candidate.analysis.skill or 0 }}</div>
+            <div class="text-sm text-gray-600 mt-1">技能匹配</div>
+        </div>
+        <div class="bg-white border rounded-lg p-4 text-center">
+            <div class="text-2xl font-bold text-green-600">{{ candidate.analysis.startup_fit or 0 }}</div>
+            <div class="text-sm text-gray-600 mt-1">创业契合</div>
+        </div>
+        <div class="bg-white border rounded-lg p-4 text-center">
+            <div class="text-2xl font-bold text-yellow-600">{{ candidate.analysis.willingness or 0 }}</div>
+            <div class="text-sm text-gray-600 mt-1">加入意愿</div>
+        </div>
+        <div class="bg-white border rounded-lg p-4 text-center">
+            <div class="text-2xl font-bold text-purple-600">{{ candidate.analysis.overall or 0 }}</div>
+            <div class="text-sm text-gray-600 mt-1">综合评分</div>
+        </div>
+    </div>
+    
+    <div class="bg-white border rounded-lg p-4">
+        <h4 class="font-bold text-gray-800 mb-2">分析总结</h4>
+        <p class="text-gray-700 whitespace-pre-wrap">{{ candidate.analysis.summary or '暂无总结' }}</p>
+    </div>
+    
+    <button hx-post="/web/candidates/analyze"
+            hx-vals='{"chat_id": "{{ candidate.chat_id or candidate.id }}", "assistant_id": "{{ assistant_id }}"}'
+            hx-target="#analysis-section"
+            class="w-full px-4 py-2 bg-purple-100 text-purple-700 rounded-lg hover:bg-purple-200">
+        🔄 重新分析
+    </button>
+</div>
+

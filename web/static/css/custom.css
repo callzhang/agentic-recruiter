@@ -1,0 +1,88 @@
+/* Custom styles for BOSS招聘助手 */
+
+/* Scrollbar styling for event log */
+.event-log::-webkit-scrollbar {
+    width: 8px;
+}
+
+.event-log::-webkit-scrollbar-track {
+    background: #1a1a1a;
+}
+
+.event-log::-webkit-scrollbar-thumb {
+    background: #4ade80;
+    border-radius: 4px;
+}
+
+.event-log::-webkit-scrollbar-thumb:hover {
+    background: #22c55e;
+}
+
+/* Loading spinner */
+.htmx-indicator {
+    display: none;
+}
+
+.htmx-request .htmx-indicator {
+    display: inline-block;
+}
+
+.spinner {
+    border: 2px solid #f3f3f3;
+    border-top: 2px solid #3b82f6;
+    border-radius: 50%;
+    width: 20px;
+    height: 20px;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+/* Candidate card hover effect */
+.candidate-card {
+    transition: all 0.2s ease-in-out;
+}
+
+.candidate-card:hover {
+    transform: translateX(4px);
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+}
+
+/* Active tab indicator */
+.tab-active {
+    border-bottom: 3px solid #3b82f6;
+    color: #3b82f6;
+}
+
+/* Resume text area */
+.resume-text {
+    font-family: 'Courier New', monospace;
+    font-size: 0.875rem;
+    line-height: 1.5;
+}
+
+/* Alert messages */
+.alert {
+    animation: slideIn 0.3s ease-out;
+}
+
+@keyframes slideIn {
+    from {
+        transform: translateY(-20px);
+        opacity: 0;
+    }
+    to {
+        transform: translateY(0);
+        opacity: 1;
+    }
+}
+
+/* SSE Event styling */
+.event-info { color: #10b981; }
+.event-warning { color: #f59e0b; }
+.event-error { color: #ef4444; }
+.event-success { color: #22c55e; }
+

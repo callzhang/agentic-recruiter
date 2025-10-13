@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+
+{% block title %}助手管理 - BOSS招聘助手{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Page header -->
+    <div class="bg-white rounded-lg shadow p-6">
+        <div class="flex justify-between items-center">
+            <div>
+                <h1 class="text-3xl font-bold text-gray-800">助手管理</h1>
+                <p class="text-gray-600 mt-2">配置 AI 助手的指令、模型和元数据</p>
+            </div>
+            <button onclick="location.href='/web/assistants/new'" 
+                    class="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium">
+                ➕ 创建新助手
+            </button>
+        </div>
+    </div>
+    
+    <!-- Assistants list -->
+    <div class="bg-white rounded-lg shadow-lg">
+        <div id="assistants-list" 
+             hx-get="/web/assistants/list" 
+             hx-trigger="load" 
+             hx-swap="innerHTML">
+            <!-- Will be populated via HTMX -->
+            <div class="p-12 text-center text-gray-500">
+                <div class="animate-pulse">加载助手列表...</div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
