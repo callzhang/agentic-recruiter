@@ -20,7 +20,7 @@ async def ensure_on_chat_page(page, settings, logger=lambda msg, level: None, ti
     """Ensure we are on the chat page; navigate if necessary. Returns True if ok."""
     if settings.CHAT_URL not in getattr(page, "url", ""):
         await page.goto(settings.CHAT_URL, wait_until="domcontentloaded", timeout=timeout_ms)
-        await page.wait_for_load_state("networkidle", timeout=5000)
+        # await page.wait_for_load_state("networkidle", timeout=5000)
         return True
     return True
 
