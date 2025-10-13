@@ -76,6 +76,15 @@ def confirm_delete_dialog(assistant_name: str, assistant_id: str):
 def main() -> None:
     st.title("助手管理")
     st.info("助手是用于按照制定风格制作的AI模型。您可以创建新的助手或选择现有的助手。")
+    st.markdown(
+        """
+:orange[“指令”用于设置AI模型的沟通风格, 公司信息都保存在“沟通设置里面”，用于回答助手的问题]
+
+**描述** ：用于设置AI模型的描述, 不用于AI运行
+
+**元数据** ：用于保存一些额外信息, 不用于AI模型运行
+        """
+    )
     ensure_state()
     sidebar_controls(include_config_path=False)
 

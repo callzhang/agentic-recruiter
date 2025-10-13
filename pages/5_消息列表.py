@@ -463,7 +463,7 @@ def main() -> None:
         del st.session_state["chat_selector"] 
         # update the candidate with stage=PASS
         ok, payload = call_api("POST", "/candidate/discard", json={"chat_id": chat_id, "stage": "PASS"})
-        if not payload.get("success"):
+        if not ok:
             st.error(f"更新候选人阶段失败: {payload}")
             time.sleep(3)
         else:

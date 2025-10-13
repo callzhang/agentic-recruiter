@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import streamlit as st
 from src.scheduler import BRDWorkScheduler
-from src.assistant_actions import AssistantActions
+from src import assistant_actions
 from src.candidate_store import candidate_store
 from src.config import settings
 import threading
@@ -98,9 +98,6 @@ def main() -> None:
 
         submitted = st.button("启动调度器", disabled=not any_checks)
         if submitted:
-            # Create AssistantActions instance for scheduler
-            assistant = AssistantActions(candidate_store)
-            
             # Build scheduler options
             options = {
                 'job': job,
@@ -109,7 +106,7 @@ def main() -> None:
                 'overall_threshold': match_threshold,
                 'enable_chat_processing': check_new_chats,
                 'enable_followup': check_followups,
-                'assistant': assistant,
+                'assistant': assistant_actions,  # Use module instead of instance
                 'base_url': settings.BOSS_SERVICE_BASE_URL,
             }
             
