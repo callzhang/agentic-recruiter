@@ -12,21 +12,23 @@ from typing import Any, Dict, List, Optional
 
 import sentry_sdk
 from fastapi import Body, FastAPI, Query, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 from playwright.async_api import Browser, BrowserContext, Page, Playwright, TimeoutError as PlaywrightTimeoutError, async_playwright
 
-from src.assistant_actions import assistant_actions
+from src import assistant_actions
 from src.candidate_store import candidate_store
 from src.config import settings
 from src.global_logger import logger
 from src.chat_actions import (
-    accept_resume_action,
+    accept_full_resume_action,
     check_full_resume_available,
     discard_candidate_action,
     get_chat_history_action,
     get_chat_list_action,
     get_chat_stats_action,
-    request_resume_action,
+    request_full_resume_action,
     send_message_action,
     view_full_resume_action,
     view_online_resume_action,
@@ -70,7 +72,6 @@ class BossServiceAsync:
         self.browser_lock = asyncio.Lock()
         self.startup_complete = asyncio.Event()
         self.candidate_store = candidate_store
-        self.assistant_actions = assistant_actions
         self.event_manager = None  # Placeholder for legacy debug endpoint
         self.setup_routes()
         self.setup_exception_handlers()
@@ -100,11 +101,31 @@ class BossServiceAsync:
             raise RuntimeError("Playwright 未初始化")
         user_data_dir = os.path.join(tempfile.gettempdir(), "bosszhipin_playwright_user_data")
         os.makedirs(user_data_dir, exist_ok=True)
-        logger.info("连接 Chrome CDP: %s", settings.CDP_URL)
-        self.browser = await self.playwright.chromium.connect_over_cdp(settings.CDP_URL)
-        self.context = self.browser.contexts[0] if self.browser.contexts else await self.browser.new_context()
-        self.page = await self._ensure_page()
-        logger.info("持久化浏览器会话已建立。")
+        
+        # Connect with timeout and retry to handle page reload deadlock
+        max_retries = 3
+        timeout_ms = 15000  # 15 seconds per attempt
+        
+        for attempt in range(max_retries):
+            try:
+                logger.info("连接 Chrome CDP (尝试 %d/%d): %s", attempt + 1, max_retries, settings.CDP_URL)
+                self.browser = await self.playwright.chromium.connect_over_cdp(
+                    settings.CDP_URL,
+                    timeout=timeout_ms
+                )
+                self.context = self.browser.contexts[0] if self.browser.contexts else await self.browser.new_context()
+                self.page = await self._ensure_page()
+                logger.info("持久化浏览器会话已建立。")
+                return
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
+                    logger.warning("CDP连接失败 (尝试 %d/%d): %s. %d秒后重试...", 
+                                 attempt + 1, max_retries, e, wait_time)
+                    await asyncio.sleep(wait_time)
+                else:
+                    logger.error("CDP连接失败，已达到最大重试次数: %s", e)
+                    raise RuntimeError(f"无法连接到Chrome CDP，已尝试{max_retries}次: {e}") from e
 
     async def _shutdown_async(self) -> None:
         logger.info("正在关闭 Playwright...")
@@ -350,7 +371,7 @@ class BossServiceAsync:
         @self.app.post("/resume/request")
         async def request_resume_api(chat_id: str = Body(..., embed=True)):
             page = await self._ensure_browser_session()
-            return await request_resume_action(page, chat_id)
+            return await request_full_resume_action(page, chat_id)
 
         @self.app.post("/resume/view_full")
         async def view_full_resume(chat_id: str = Body(..., embed=True)):
@@ -371,7 +392,7 @@ class BossServiceAsync:
         @self.app.post("/resume/accept")
         async def accept_resume_api(chat_id: str = Body(..., embed=True)):
             page = await self._ensure_browser_session()
-            return await accept_resume_action(page, chat_id)
+            return await accept_full_resume_action(page, chat_id)
 
         @self.app.post("/candidate/discard")
         async def discard_candidate_api(chat_id: str = Body(..., embed=True)):
@@ -379,9 +400,12 @@ class BossServiceAsync:
             return await discard_candidate_action(page, chat_id)
 
         @self.app.get("/recommend/candidates")
-        async def get_recommended_candidates(limit: int = Query(20, ge=1, le=100)):
+        async def get_recommended_candidates(
+            limit: int = Query(20, ge=1, le=100),
+            job_title: str = Query(None, description="Job title to filter recommendations")
+        ):
             page = await self._ensure_browser_session()
-            return await list_recommended_candidates_action(page, limit=limit)
+            return await list_recommended_candidates_action(page, limit=limit, job_title=job_title)
 
         @self.app.get("/recommend/candidate/{index}/resume")
         async def view_recommended_candidate_resume(index: int):
@@ -409,49 +433,47 @@ class BossServiceAsync:
 
         @self.app.post("/assistant/generate-message")
         def generate_message(data: dict = Body(...)):
-            return self.assistant_actions.generate_message(**data)
+            return assistant_actions.generate_message(**data)
 
         @self.app.get("/candidate/{chat_id}")
         def get_candidate_api(chat_id: str, fields: Optional[List[str]] = ["*"]):
             """Get candidate information from the store."""
-            return self.assistant_actions.store.get_candidate_by_id(chat_id, fields)
+            return candidate_store.get_candidate_by_id(chat_id, fields)
 
         @self.app.post("/thread/init-chat")
         def init_chat_api(data: dict = Body(...)):
-            return self.assistant_actions.init_chat(**data)
+            return assistant_actions.init_chat(**data)
 
         @self.app.get('thread/{thread_id}/messages')
         def get_thread_messages_api(thread_id: str):
-            return self.assistant_actions.get_thread_messages(thread_id)
+            return assistant_actions.get_thread_messages(thread_id)
 
         ##------ OpenAI API ------
         @self.app.get("/assistant/list")
         def list_assistants_api():
             """List openai assistants."""
-            assistants = self.assistant_actions.get_assistants()
+            assistants = assistant_actions.get_assistants()
             return [assistant.model_dump() for assistant in assistants.data]
 
         @self.app.post("/assistant/create")
         def create_assistant_api(payload: dict = Body(...)):
             """Create a new openai assistant."""
-            assistant = self.assistant_actions.client.beta.assistants.create(
-                **payload,
-            )
+            client = assistant_actions.get_openai_client()
+            assistant = client.beta.assistants.create(**payload)
             return assistant.model_dump()
 
         @self.app.post("/assistant/update/{assistant_id}")
         def update_assistant_api(assistant_id: str, payload: dict = Body(...)):
-            assistant = self.assistant_actions.client.beta.assistants.update(
-                assistant_id,
-                **payload,
-            )
-            self.assistant_actions.get_assistants.cache_clear()
+            client = assistant_actions.get_openai_client()
+            assistant = client.beta.assistants.update(assistant_id, **payload)
+            assistant_actions.get_assistants.cache_clear()
             return assistant.model_dump()
 
         @self.app.delete("/assistant/delete/{assistant_id}")
         def delete_assistant_api(assistant_id: str):
-            self.assistant_actions.client.beta.assistants.delete(assistant_id)
-            self.assistant_actions.get_assistants.cache_clear()
+            client = assistant_actions.get_openai_client()
+            client.beta.assistants.delete(assistant_id)
+            assistant_actions.get_assistants.cache_clear()
             return True
 
         # System / debug endpoints
@@ -488,6 +510,88 @@ class BossServiceAsync:
 
 service = BossServiceAsync()
 app = service.app
+
+# ============================================================================
+# Web UI Configuration
+# ============================================================================
+
+# Mount static files
+app.mount("/static", StaticFiles(directory="web/static"), name="static")
+
+# Configure Jinja2 templates
+templates = Jinja2Templates(directory="web/templates")
+
+# Include web UI routers
+from web.routes import candidates, automation, assistants, jobs
+
+app.include_router(candidates.router, prefix="/web/candidates", tags=["web-candidates"])
+app.include_router(automation.router, prefix="/web/automation", tags=["web-automation"])
+app.include_router(assistants.router, prefix="/web/assistants", tags=["web-assistants"])
+app.include_router(jobs.router, prefix="/web/jobs", tags=["web-jobs"])
+
+# Web UI root endpoint
+@app.get("/web", response_class=HTMLResponse, tags=["web"])
+@app.get("/web/", response_class=HTMLResponse, tags=["web"])
+async def web_index(request: Request):
+    """Landing page for web UI."""
+    return templates.TemplateResponse("index.html", {"request": request})
+
+@app.get("/web/stats", response_class=HTMLResponse, tags=["web"])
+async def web_stats():
+    """Get quick stats for dashboard."""
+    # Get message counts from chat stats
+    new_messages = 0
+    new_greets = 0
+    try:
+        page = await service._ensure_browser_session()
+        stats = await get_chat_stats_action(page)
+        new_messages = stats.get("new_message_count", 0)
+        new_greets = stats.get("new_greet_count", 0)
+    except Exception as e:
+        logger.warning(f"Failed to get chat stats: {e}")
+    
+    # Try to get total candidates from store
+    total_candidates = 0
+    try:
+        if candidate_store and candidate_store.collection:
+            total_candidates = candidate_store.collection.num_entities
+    except Exception as e:
+        logger.warning(f"Failed to get candidate count: {e}")
+    
+    # Count running workflows (placeholder - would need actual tracking)
+    running_workflows = 0
+    
+    html = f'''
+    <div class="bg-white rounded-lg shadow p-6">
+        <h3 class="text-sm text-gray-600 mb-2">候选人总数</h3>
+        <p class="text-3xl font-bold text-blue-600">{total_candidates}</p>
+    </div>
+    <div class="bg-white rounded-lg shadow p-6">
+        <h3 class="text-sm text-gray-600 mb-2">新消息</h3>
+        <p class="text-3xl font-bold text-green-600">{new_messages}</p>
+    </div>
+    <div class="bg-white rounded-lg shadow p-6">
+        <h3 class="text-sm text-gray-600 mb-2">新招呼</h3>
+        <p class="text-3xl font-bold text-yellow-600">{new_greets}</p>
+    </div>
+    <div class="bg-white rounded-lg shadow p-6">
+        <h3 class="text-sm text-gray-600 mb-2">运行中工作流</h3>
+        <p class="text-3xl font-bold text-purple-600">{running_workflows}</p>
+    </div>
+    '''
+    return HTMLResponse(content=html)
+
+@app.get("/web/recent-activity", response_class=HTMLResponse, tags=["web"])
+async def web_recent_activity():
+    """Get recent activity for dashboard."""
+    # TODO: Implement actual activity log
+    html = '''
+    <div class="text-gray-600 space-y-2">
+        <p>📊 系统已启动，等待操作...</p>
+        <p class="text-sm text-gray-500">提示：访问「候选人管理」或「自动化工作流」开始使用</p>
+    </div>
+    '''
+    return HTMLResponse(content=html)
 
 if __name__ == "__main__":
     import uvicorn
