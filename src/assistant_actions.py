@@ -67,6 +67,16 @@ MESSAGE_ACTION_PROMPTS = {
     "contact": "请发出一条请求候选人电话或者微信的消息。不要超过50字。且能够直接发送给候选人的文字，不要发模板或者嵌入占位符。请用纯文本回复，不要使用markdown、json格式。",
 }
 
+# Mapping from old lowercase purpose keys to new ACTION keys
+PURPOSE_TO_ACTION = {
+    "greet": "GREET_ACTION",
+    "chat": "ASK_FOR_RESUME_DETAILS_ACTION",
+    "followup": "ASK_FOR_RESUME_DETAILS_ACTION",
+    "analyze": "ANALYZE_ACTION",
+    "plan": "ANALYZE_ACTION",  # Assuming plan also uses analysis
+    "contact": "contact",
+}
+
 def load_openai_key() -> str | None:
     """Load OpenAI API key from settings."""
     return settings.OPENAI_API_KEY
@@ -119,7 +129,15 @@ def _upsert_candidate(**kwargs) -> bool:
     # Generate embedding for new candidates
     candidate_id = kwargs.get("candidate_id")
     chat_id = kwargs.get("chat_id")
-    existing_candidate = candidate_store.get_candidate_by_id(chat_id=chat_id, candidate_id=candidate_id)
+    if chat_id or candidate_id:
+        existing_candidate = candidate_store.get_candidate_by_id(chat_id=chat_id, candidate_id=candidate_id)
+    else:
+        existing_candidate = None
+
+    # Truncate resume text to avoid over limits
+    resume_text = kwargs.get("resume_text")
+    if resume_text:
+        kwargs["resume_text"] = resume_text[:8000]
 
     if not existing_candidate:  # create a new candidate
         resume_text = kwargs.get("resume_text")
@@ -127,10 +145,6 @@ def _upsert_candidate(**kwargs) -> bool:
             embedding = get_embedding(resume_text)
             kwargs["resume_vector"] = embedding
     
-        # Truncate resume text to avoid over limits
-        resume_text = kwargs.get("resume_text")
-        if resume_text:
-            kwargs["resume_text"] = resume_text[:8000]
             
         return candidate_store.insert_candidate(**kwargs)
     else:
@@ -161,7 +175,7 @@ def init_chat(
     name: str,
     job_info: Dict[str, Any],
     resume_text: str,
-    chat_history: List[Dict[str, Any]],
+    chat_history: List[Dict[str, Any]]=[],
     chat_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
@@ -214,7 +228,6 @@ def init_chat(
     logger.info("Added candidate resume to thread %s", thread_id)
     
     # Create/update Zilliz record
-    candidate_id = None
     # Generate embedding for semantic search
     embedding = get_embedding(resume_text)
     
@@ -232,28 +245,32 @@ def init_chat(
     
     return {
         "thread_id": thread_id,
-        "candidate_id": candidate_id,
         "success": success
     }
 
 ## ------------Main Message Generation----------------------------------
 
 def generate_message(
-    chat_id: str,
+    thread_id: str,
     assistant_id: str,
     purpose: str,
     chat_history: List[Dict[str, Any]],
     format_json: Optional[bool] = False,
 ) -> Dict[str, Any]:
     """
-    Generate message using chat_id - thread_id lookup is handled internally.
+    Generate message using thread_id directly.
     
     This method generates the next message in an existing conversation thread.
     It adds any new context (user message, full resume, etc.) to the thread
     and generates an appropriate response based on the purpose.
     
+    Supports three scenarios:
+    1) Recommend candidates: thread_id from init_chat (no chat_id)
+    2) Chat "新招呼": thread_id from init_chat after passing chat_id
+    3) Chat "沟通中/牛人已读未回": thread_id retrieved from Zilliz by chat_id
+    
     Args:
-        chat_id: Chat ID to look up thread (required)
+        thread_id: OpenAI thread ID (required) - universal identifier
         assistant_id: OpenAI assistant ID (required)
         purpose: Message purpose - "analyze", "greet", "chat", "followup"
         chat_history: Complete chat history to sync with thread (required)
@@ -269,14 +286,9 @@ def generate_message(
     
     client = get_openai_client()
     
-    # Get thread_id from Zilliz store using chat_id
-    entity = candidate_store.get_candidate_by_id(chat_id=chat_id)
-    if not entity:
-        raise ValueError(f"Candidate with chat_id={chat_id} not found in store. Please initialize the chat first.")
-    
-    thread_id = entity.get("thread_id")
+    # thread_id is now passed directly, no lookup needed
     if not thread_id:
-        raise ValueError(f"Candidate {chat_id} exists but has no thread_id. Please initialize the chat first.")
+        raise ValueError("thread_id is required for generate_message")
     
     # Get current thread messages for comparison
     thread_messages = get_thread_messages(thread_id)
@@ -286,9 +298,10 @@ def generate_message(
     thread_messages = _sync_thread_with_history(thread_id, thread_messages, history_messages)
     logger.info("Synced chat history to thread %s", thread_id)
     
-    # Get instruction for purpose
-    instruction = MESSAGE_ACTION_PROMPTS.get(purpose)
-    assert instruction, f"prompt for {purpose} is not found"
+    # Get instruction for purpose - map old keys to new ACTION keys
+    action_key = PURPOSE_TO_ACTION.get(purpose, purpose)  # Try mapping first, fallback to original
+    instruction = MESSAGE_ACTION_PROMPTS.get(action_key)
+    assert instruction, f"prompt for {purpose} (mapped to {action_key}) is not found"
     if purpose in ["analyze", "plan"]:
         format_json = True
     # Create a new run
@@ -310,16 +323,20 @@ def generate_message(
     # Parse analysis if purpose is "analyze"
     if purpose == "analyze":
         analysis = json.loads(generated_message)
-        # update candidate record with analysis
-        entity["analysis"] = analysis
-        _upsert_candidate(**entity)
+        # Get candidate entity by thread_id to update with analysis
+        entity = candidate_store.get_candidate_by_id(thread_id=thread_id)
+        if entity:
+            entity["analysis"] = analysis
+            _upsert_candidate(**entity)
         return analysis
     elif purpose == "plan":
         plan = json.loads(generated_message)
-        # update candidate record with plan
-        stage = plan["candidate_stage"]
-        entity['stage'] = stage
-        _upsert_candidate(**entity)
+        # Get candidate entity by thread_id to update with plan
+        entity = candidate_store.get_candidate_by_id(thread_id=thread_id)
+        if entity:
+            stage = plan["candidate_stage"]
+            entity['stage'] = stage
+            _upsert_candidate(**entity)
         return plan
                 
     
