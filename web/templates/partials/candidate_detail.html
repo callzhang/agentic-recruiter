@@ -46,36 +46,62 @@
             <div class="bg-gray-50 rounded-lg p-4">
                 <div class="flex justify-between items-center mb-2">
                     <span class="text-sm font-medium text-gray-700">
-                        简历来源: {{ '附件简历' if candidate.full_resume else '在线简历' }}
+                        简历来源: {{ '离线简历' if candidate.full_resume else '在线简历' }}
                     </span>
+                    {% if candidate.mode != 'recommend' %}
+                    <!-- Chat candidates: Show both online and full resume buttons -->
                     <div class="flex gap-2">
-                        {% if candidate.mode != 'recommend' and not candidate.full_resume %}
+                        <button hx-post="/web/candidates/fetch-online-resume"
+                                hx-include="#candidate-context"
+                                hx-target="#detail-pane"
+                                class="text-sm px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700">
+                            📱 在线简历
+                        </button>
                         <button hx-post="/web/candidates/fetch-full-resume"
                                 hx-include="#candidate-context"
                                 hx-target="#detail-pane"
                                 class="text-sm px-3 py-1 bg-purple-600 text-white rounded hover:bg-purple-700">
-                            📄 获取离线简历
-                        </button>
-                        {% endif %}
-                        <button hx-post="/web/candidates/refresh-resume"
-                                hx-include="#candidate-context"
-                                hx-target="#detail-pane"
-                                class="text-sm px-3 py-1 text-blue-600 hover:text-blue-800 border border-blue-600 rounded">
-                            🔄 刷新
+                            📄 离线简历
                         </button>
                     </div>
+                    {% else %}
+                    <!-- Recommend candidates: Only show recommend resume button -->
+                    <button hx-post="/web/candidates/fetch-recommend-resume"
+                            hx-include="#candidate-context"
+                            hx-target="#detail-pane"
+                            class="text-sm px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700">
+                        📱 查看简历
+                    </button>
+                    {% endif %}
                 </div>
                 <textarea readonly class="w-full h-96 p-4 bg-white border rounded-lg resume-text">{{ candidate.full_resume or candidate.resume_text or '暂无简历' }}</textarea>
             </div>
             {% else %}
                 <div class="text-center py-12 text-gray-500">
                     <p class="mb-4">暂无简历数据</p>
-                    <button hx-post="/web/candidates/fetch-resume"
+                    {% if candidate.mode == 'recommend' %}
+                    <button hx-post="/web/candidates/fetch-recommend-resume"
                             hx-include="#candidate-context"
                             hx-target="#detail-pane"
                             class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
-                        获取简历
+                        📱 获取推荐简历
                     </button>
+                    {% else %}
+                    <div class="flex gap-2 justify-center">
+                        <button hx-post="/web/candidates/fetch-online-resume"
+                                hx-include="#candidate-context"
+                                hx-target="#detail-pane"
+                                class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+                            📱 获取在线简历
+                        </button>
+                        <button hx-post="/web/candidates/fetch-full-resume"
+                                hx-include="#candidate-context"
+                                hx-target="#detail-pane"
+                                class="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700">
+                            📄 获取离线简历
+                        </button>
+                    </div>
+                    {% endif %}
             </div>
             {% endif %}
         </div>

@@ -354,50 +354,83 @@ async def request_resume(chat_id: str = Form(...)):
         )
 
 
-@router.post("/fetch-resume", response_class=HTMLResponse)
-async def fetch_resume(
+@router.post("/fetch-online-resume", response_class=HTMLResponse)
+async def fetch_online_resume(
     request: Request,
     chat_id: str = Form(...),
     mode: str = Form("chat"),
     assistant_id: str = Form(""),
     job_id: str = Form(""),
 ):
-    """Fetch resume for candidate."""
-    # Handle recommend mode differently
-    if mode == "recommend" and chat_id.startswith("recommend_"):
-        index = int(chat_id.split("_")[1])
-        ok, resume_data = await call_api("GET", f"/recommend/candidate/{index}/resume")
-        
-        if not ok:
-            return HTMLResponse(
-                content=f'<div class="text-red-500 p-4">无法获取推荐候选人简历: {resume_data}</div>',
-                status_code=500
-            )
-    else:
-        # Chat mode: Try full resume first
-        ok, resume_data = await call_api("POST", "/resume/view_full", json={"chat_id": chat_id})
+    """Fetch online resume for chat candidate (view_online_resume_action)."""
+    if mode != "chat":
+        return HTMLResponse(
+            content='<div class="text-red-500 p-4">推荐候选人不支持在线简历</div>',
+            status_code=400
+        )
+    
+    # Call online resume API
+    ok, resume_data = await call_api("POST", "/resume/online", json={"chat_id": chat_id})
 
-        if not ok:
-            # Fallback to online resume
-            ok, resume_data = await call_api("POST", "/resume/online", json={"chat_id": chat_id})
-
-        if not ok:
-            return HTMLResponse(
-                content='<div class="text-red-500 p-4">无法获取简历</div>',
-                status_code=500
-            )
+    if not ok:
+        return HTMLResponse(
+            content=f'<div class="text-red-500 p-4">无法获取在线简历: {resume_data}</div>',
+            status_code=500
+        )
 
     # Fetch latest candidate metadata for display
     ok_candidate, candidate_data = await call_api("GET", f"/candidate/{chat_id}")
     if not ok_candidate or not isinstance(candidate_data, dict):
         candidate_data = {"chat_id": chat_id}
 
-    # Re-render detail with resume
+    # Re-render detail with online resume
     candidate_data.update({
         "chat_id": chat_id,
         "resume_text": resume_data.get("text", ""),
-        "full_resume": resume_data.get("text", "")
+        "mode": mode
     })
+
+    return templates.TemplateResponse("partials/candidate_detail.html", {
+        "request": request,
+        "candidate": candidate_data,
+        "assistant_id": assistant_id,
+        "job_id": job_id,
+        "generated_message": None
+    })
+
+
+@router.post("/fetch-recommend-resume", response_class=HTMLResponse)
+async def fetch_recommend_resume(
+    request: Request,
+    chat_id: str = Form(...),
+    mode: str = Form("recommend"),
+    assistant_id: str = Form(""),
+    job_id: str = Form(""),
+):
+    """Fetch resume for recommend candidate (view_recommend_candidate_resume_action)."""
+    if mode != "recommend" or not chat_id.startswith("recommend_"):
+        return HTMLResponse(
+            content='<div class="text-red-500 p-4">仅支持推荐候选人</div>',
+            status_code=400
+        )
+    
+    index = int(chat_id.split("_")[1])
+    ok, resume_data = await call_api("GET", f"/recommend/candidate/{index}/resume")
+    
+    if not ok:
+        return HTMLResponse(
+            content=f'<div class="text-red-500 p-4">无法获取推荐候选人简历: {resume_data}</div>',
+            status_code=500
+        )
+
+    # For recommend candidates, we don't have persistent storage
+    candidate_data = {
+        "chat_id": chat_id,
+        "id": chat_id,
+        "resume_text": resume_data.get("text", ""),
+        "mode": mode,
+        "index": index
+    }
 
     return templates.TemplateResponse("partials/candidate_detail.html", {
         "request": request,
@@ -489,19 +522,3 @@ async def next_candidate(
     )
 
 
-@router.post("/refresh-resume", response_class=HTMLResponse)
-async def refresh_resume(
-    request: Request,
-    chat_id: str = Form(...),
-    mode: str = Form("chat"),
-    assistant_id: str = Form(""),
-    job_id: str = Form(""),
-):
-    """Refresh resume data for candidate."""
-    return await fetch_resume(
-        request,
-        chat_id=chat_id,
-        mode=mode,
-        assistant_id=assistant_id,
-        job_id=job_id,
-    )
