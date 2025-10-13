@@ -1,5 +1,6 @@
-<!-- Candidate detail view -->
+<!-- Candidate detail view with automatic workflow -->
 <div class="space-y-6">
+    
     <!-- Header -->
     <div class="flex justify-between items-start">
         <div>
@@ -19,185 +20,246 @@
             {% endif %}
         </div>
     </div>
-    
-    <!-- Tabs for Resume, History, Analysis -->
-    <div x-data="{ activeTab: 'resume' }" class="space-y-4">
-        <div class="flex space-x-4 border-b">
-            <button @click="activeTab = 'resume'" 
-                    :class="activeTab === 'resume' ? 'tab-active' : ''"
-                    class="px-4 py-2 font-medium text-gray-700 hover:text-blue-600">
-                📄 简历
-            </button>
-            {% if candidate.mode != 'recommend' %}
-            <button @click="activeTab = 'history'"
-                    :class="activeTab === 'history' ? 'tab-active' : ''"
-                    class="px-4 py-2 font-medium text-gray-700 hover:text-blue-600">
-                💬 聊天记录
-            </button>
-            {% endif %}
-            <button @click="activeTab = 'analysis'"
-                    :class="activeTab === 'analysis' ? 'tab-active' : ''"
-                    class="px-4 py-2 font-medium text-gray-700 hover:text-blue-600">
-                📊 AI 分析
-            </button>
-        </div>
-        
-        <!-- Resume tab -->
-        <div x-show="activeTab === 'resume'" class="space-y-4">
-            {% if candidate.resume_text or candidate.full_resume %}
-            <div class="bg-gray-50 rounded-lg p-4">
-                <div class="flex justify-between items-center mb-2">
-                    <span class="text-sm font-medium text-gray-700">
-                        简历来源: {{ '离线简历' if candidate.full_resume else '在线简历' }}
-                    </span>
-                    {% if candidate.mode != 'recommend' %}
-                    <!-- Chat candidates: Show both online and full resume buttons -->
-                    <div class="flex gap-2">
-                        <button hx-post="/web/candidates/fetch-online-resume"
-                                hx-include="#candidate-context"
-                                hx-target="#detail-pane"
-                                class="text-sm px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700">
-                            📱 在线简历
-                        </button>
-                        <button hx-post="/web/candidates/fetch-full-resume"
-                                hx-include="#candidate-context"
-                                hx-target="#detail-pane"
-                                class="text-sm px-3 py-1 bg-purple-600 text-white rounded hover:bg-purple-700">
-                            📄 离线简历
-                        </button>
-                    </div>
-                    {% else %}
-                    <!-- Recommend candidates: Only show recommend resume button -->
-                    <button hx-post="/web/candidates/fetch-recommend-resume"
-                            hx-include="#candidate-context"
-                            hx-target="#detail-pane"
-                            class="text-sm px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700">
-                        📱 查看简历
-                    </button>
-                    {% endif %}
-                </div>
-                <textarea readonly class="w-full h-96 p-4 bg-white border rounded-lg resume-text">{{ candidate.full_resume or candidate.resume_text or '暂无简历' }}</textarea>
-            </div>
-            {% else %}
-                <div class="text-center py-12 text-gray-500">
-                    <p class="mb-4">暂无简历数据</p>
-                    {% if candidate.mode == 'recommend' %}
-                    <button hx-post="/web/candidates/fetch-recommend-resume"
-                            hx-include="#candidate-context"
-                            hx-target="#detail-pane"
-                            class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
-                        📱 获取推荐简历
-                    </button>
-                    {% else %}
-                    <div class="flex gap-2 justify-center">
-                        <button hx-post="/web/candidates/fetch-online-resume"
-                                hx-include="#candidate-context"
-                                hx-target="#detail-pane"
-                                class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
-                            📱 获取在线简历
-                        </button>
-                        <button hx-post="/web/candidates/fetch-full-resume"
-                                hx-include="#candidate-context"
-                                hx-target="#detail-pane"
-                                class="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700">
-                            📄 获取离线简历
-                        </button>
-                    </div>
-                    {% endif %}
-            </div>
-            {% endif %}
-        </div>
-        
-        <!-- History tab (chat candidates only) -->
-        {% if candidate.mode != 'recommend' %}
-        <div x-show="activeTab === 'history'">
-            <div id="chat-history" 
-                 hx-get="/web/candidates/history/{{ candidate.chat_id or candidate.id }}"
-                 hx-trigger="revealed"
-                 hx-swap="innerHTML"
-                 class="space-y-2">
-                <div class="text-center text-gray-500">加载中...</div>
-            </div>
-        </div>
+
+    <!-- Hidden context for HTMX requests -->
+    <div id="candidate-context" class="hidden">
+        {% if candidate.mode == 'recommend' %}
+        <input type="hidden" name="index" value="{{ candidate.index }}">
+        {% else %}
+        <input type="hidden" name="chat_id" value="{{ candidate.chat_id }}">
         {% endif %}
-        
-        <!-- Analysis tab -->
-        <div x-show="activeTab === 'analysis'">
-            <div id="analysis-section">
-                {% if candidate.analysis %}
-                    {% include 'partials/analysis_result.html' %}
-                {% else %}
-                <div class="text-center py-12">
-                    <p class="text-gray-500 mb-4">尚未分析</p>
-                    <button hx-post="/web/candidates/analyze"
-                            hx-include="#candidate-context"
-                            hx-target="#analysis-section"
-                            class="px-6 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700">
-                        🤖 AI 分析候选人
-                    </button>
-                </div>
-                {% endif %}
-            </div>
-        </div>
+        <input type="hidden" name="mode" value="{{ candidate.mode or 'chat' }}">
+        <input type="hidden" name="name" value="{{ candidate.name or '' }}">
+        <input type="hidden" name="resume_text" id="hidden-resume-text" value="{{ candidate.full_resume or candidate.resume_text or '' }}">
+        <input type="hidden" name="assistant_id" value="{{ assistant_id }}">
+        <input type="hidden" name="job_id" value="{{ job_id }}">
     </div>
     
-    <!-- Action buttons -->
-    <div class="bg-gray-50 rounded-lg p-6 space-y-4">
-        <h3 class="font-bold text-gray-800 mb-4">操作</h3>
+    <!-- Automatic workflow after resume is loaded -->
+    <script>
+        // Listen for when resume content is swapped in
+        document.body.addEventListener('htmx:afterSwap', function(event) {
+            // Only trigger for resume content updates
+            if (event.detail.target.id !== 'resume-content') {
+                return;
+            }
+            
+            console.log('Resume swapped! Target:', event.detail.target);
+            console.log('Resume content HTML:', event.detail.target.innerHTML.substring(0, 200));
+            
+            // Extract resume text from the textarea
+            const textarea = document.querySelector('#resume-content textarea');
+            if (!textarea) {
+                console.error('No resume textarea found');
+                return;
+            }
+            
+            const resumeText = textarea.value;
+            console.log('Resume text length:', resumeText.length);
+            
+            if (!resumeText) {
+                console.error('Resume text is empty');
+                showToast('简历为空，无法分析', 'error');
+                return;
+            }
+            
+            // Update hidden context
+            const hiddenInput = document.getElementById('hidden-resume-text');
+            if (hiddenInput) {
+                hiddenInput.value = resumeText;
+                console.log('Updated hidden resume_text');
+            }
+            
+            // Get candidate info
+            const mode = document.querySelector('input[name="mode"]').value;
+            const name = document.querySelector('input[name="name"]').value;
+            const jobId = document.querySelector('input[name="job_id"]').value;
+            
+            // Get chat_id or index based on mode
+            let chatId = null;
+            if (mode === 'recommend') {
+                const indexInput = document.querySelector('input[name="index"]');
+                // For recommend candidates, chat_id is null
+                chatId = null;
+            } else {
+                const chatIdInput = document.querySelector('input[name="chat_id"]');
+                chatId = chatIdInput ? chatIdInput.value : null;
+            }
+            
+            console.log('Candidate info:', { chatId, mode, name, jobId });
+            
+            // Call web-specific init-chat endpoint that handles data preparation
+            console.log('Initializing chat...');
+            showToast('初始化对话线程...', 'info');
+            
+            // Step 1: Init chat via web endpoint (handles job_info loading and chat_history)
+            // Use fetch() to send custom FormData
+            const formData = new FormData();
+            formData.append('mode', mode);
+            if (chatId) formData.append('chat_id', chatId);
+            formData.append('job_id', jobId);
+            formData.append('name', name || (mode === 'recommend' ? '推荐候选人' : '候选人'));
+            formData.append('resume_text', resumeText);
+            
+            fetch('/web/candidates/init-chat', {
+                method: 'POST',
+                body: formData
+            }).then(response => {
+                if (!response.ok) throw new Error('Init chat failed');
+                return response.json();
+            }).then(data => {
+                console.log('Chat initialized:', data);
+                // Store thread_id in hidden context for future requests
+                if (data.thread_id) {
+                    let threadInput = document.querySelector('input[name="thread_id"]');
+                    if (!threadInput) {
+                        threadInput = document.createElement('input');
+                        threadInput.type = 'hidden';
+                        threadInput.name = 'thread_id';
+                        document.getElementById('candidate-context').appendChild(threadInput);
+                    }
+                    threadInput.value = data.thread_id;
+                }
+                return startAnalysis();
+            }).catch(err => {
+                console.error('Init chat error:', err);
+                // Continue to analysis anyway (thread might already exist)
+                return startAnalysis();
+            });
+            
+            function startAnalysis() {
+                console.log('Starting analysis...');
+                showToast('开始分析候选人...', 'info');
+                
+                // Get all required values from context
+                const mode = document.querySelector('input[name="mode"]').value;
+                const assistantId = document.querySelector('input[name="assistant_id"]').value;
+                const threadId = document.querySelector('input[name="thread_id"]')?.value;
+                const chatId = document.querySelector('input[name="chat_id"]')?.value;
+                
+                // Build FormData explicitly
+                const analyzeFormData = new FormData();
+                analyzeFormData.append('mode', mode);
+                analyzeFormData.append('assistant_id', assistantId);
+                if (threadId) analyzeFormData.append('thread_id', threadId);
+                if (chatId) analyzeFormData.append('chat_id', chatId);
+                
+                htmx.ajax('POST', '/web/candidates/analyze', {
+                    target: '#analysis-content',
+                    swap: 'innerHTML',
+                    values: Object.fromEntries(analyzeFormData)
+                });
+            }
+        });
+    </script>
 
-        <div id="candidate-context" class="hidden">
-            <input type="hidden" name="chat_id" value="{{ candidate.chat_id or candidate.id }}">
-            <input type="hidden" name="mode" value="{{ candidate.mode or 'chat' }}">
-            <input type="hidden" name="assistant_id" value="{{ assistant_id }}">
-            <input type="hidden" name="job_id" value="{{ job_id }}">
+    <!-- 1. Resume Section -->
+    <div id="resume-section" class="bg-white rounded-lg border shadow-sm">
+        <div class="p-4 border-b bg-gray-50">
+            <h3 class="font-bold text-gray-800">📄 候选人简历</h3>
         </div>
-        
-        <!-- Generate message -->
-        <div id="message-section">
+        <div id="resume-content" class="p-4">
+            {% if candidate.resume_text or candidate.full_resume %}
+            <textarea readonly class="w-full h-64 p-4 bg-gray-50 border rounded-lg font-mono text-sm">{{ candidate.full_resume or candidate.resume_text }}</textarea>
+            {% else %}
+            <div class="text-center py-8 text-gray-500" 
+                 hx-post="{% if candidate.mode == 'recommend' %}/web/candidates/fetch-recommend-resume{% else %}/web/candidates/fetch-online-resume{% endif %}"
+                 hx-trigger="load"
+                 hx-include="#candidate-context"
+                 hx-target="#resume-content"
+                 hx-swap="innerHTML">
+                ⏳ 正在加载简历...
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- 2. Analysis Section -->
+    <div id="analysis-section" class="bg-white rounded-lg border shadow-sm">
+        <div class="p-4 border-b bg-gray-50">
+            <h3 class="font-bold text-gray-800">📊 AI 分析结果</h3>
+        </div>
+        <div id="analysis-content" class="p-4">
+            {% if candidate.analysis %}
+                {% include 'partials/analysis_result.html' %}
+            {% else %}
+            <div class="text-center py-8 text-gray-500" id="analysis-trigger">
+                ⏳ 等待简历加载完成后自动分析...
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- 3. Generated Message Section (shown only if score >= borderline) -->
+    <div id="message-section" class="bg-white rounded-lg border shadow-sm">
+        <div class="p-4 border-b bg-gray-50">
+            <h3 class="font-bold text-gray-800">✨ 自动生成消息</h3>
+        </div>
+        <div id="message-content" class="p-4">
             {% if generated_message %}
-            <div class="mb-4">
-                <label class="block text-sm font-medium text-gray-700 mb-2">生成的消息</label>
+            <div class="space-y-4">
                 <textarea id="message-text" name="message" class="w-full h-32 p-4 border rounded-lg">{{ generated_message }}</textarea>
+                <div class="flex space-x-2">
+                    <button hx-post="/web/candidates/send"
+                            hx-include="#candidate-context,#message-text"
+                            class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700">
+                        📤 发送消息
+                    </button>
+                    <button hx-post="/web/candidates/pass"
+                            hx-include="#candidate-context"
+                            class="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700">
+                        ⏭️ PASS
+                    </button>
+                </div>
             </div>
             {% else %}
+            <div class="text-center py-8 text-gray-500">分析完成后，如果匹配度达标将自动生成...</div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- 4. Chat History (for chat mode only) -->
+    {% if candidate.mode != 'recommend' %}
+    <div class="bg-white rounded-lg border shadow-sm">
+        <div class="p-4 border-b bg-gray-50">
+            <h3 class="font-bold text-gray-800">💬 聊天记录</h3>
+        </div>
+        <div id="chat-history" 
+             hx-get="/web/candidates/history/{{ candidate.chat_id or candidate.id }}"
+             hx-trigger="load"
+             hx-swap="innerHTML"
+             class="p-4">
+            <div class="text-center text-gray-500">加载中...</div>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Manual Actions (always available) -->
+    <div class="bg-gray-50 rounded-lg p-4 space-y-2">
+        <h3 class="font-bold text-gray-800 mb-2">🔧 手动操作</h3>
+        <div class="flex flex-wrap gap-2">
+            <button hx-post="{% if candidate.mode == 'recommend' %}/web/candidates/fetch-recommend-resume{% else %}/web/candidates/fetch-online-resume{% endif %}"
+                    hx-include="#candidate-context"
+                    hx-target="#resume-content"
+                    hx-swap="innerHTML"
+                    class="px-3 py-1 bg-blue-600 text-white text-sm rounded hover:bg-blue-700">
+                🔄 重新获取简历
+            </button>
+            <button hx-post="/web/candidates/analyze"
+                    hx-include="#candidate-context"
+                    hx-target="#analysis-content"
+                    hx-swap="innerHTML"
+                    class="px-3 py-1 bg-purple-600 text-white text-sm rounded hover:bg-purple-700">
+                🔄 重新分析
+            </button>
             <button hx-post="/web/candidates/generate-message"
                     hx-include="#candidate-context"
-                    hx-target="#message-section"
-                    class="w-full px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 mb-4">
-                ✨ 生成消息
-            </button>
-            {% endif %}
-        </div>
-        
-        <!-- Send & Request resume buttons -->
-        <div class="grid grid-cols-2 gap-4">
-            <button hx-post="/web/candidates/send"
-                    hx-include="#candidate-context,#message-text"
-                    hx-target="#detail-pane"
-                    class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700">
-                📤 发送消息
-            </button>
-            <button hx-post="/web/candidates/request-resume"
-                    hx-include="#candidate-context"
-                    class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
-                📋 请求完整简历
-            </button>
-        </div>
-        
-        <!-- Pass & Next buttons -->
-        <div class="grid grid-cols-2 gap-4 pt-4 border-t">
-            <button hx-post="/web/candidates/pass"
-                    hx-include="#candidate-context"
-                    hx-target="#candidate-list"
-                    class="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700">
-                ⏭️ PASS 并查看下一个
-            </button>
-            <button hx-post="/web/candidates/next"
-                    hx-include="#candidate-context"
-                    hx-target="#detail-pane"
-                    class="px-4 py-2 bg-yellow-600 text-white rounded-lg hover:bg-yellow-700">
-                ⏩ 查看下一个
+                    hx-target="#message-content"
+                    hx-swap="innerHTML"
+                    class="px-3 py-1 bg-indigo-600 text-white text-sm rounded hover:bg-indigo-700">
+                🔄 重新生成消息
             </button>
         </div>
     </div>
+
 </div>
