@@ -6,12 +6,12 @@
 <div x-data="candidateTabs()" class="space-y-6">
     <!-- Page header with controls -->
     <div class="bg-white rounded-lg shadow p-6">
-        <div class="flex justify-between items-center mb-6">
+        <!-- <div class="flex justify-between items-center mb-6">
             <h1 class="text-3xl font-bold text-gray-800">候选人管理</h1>
             <button onclick="location.reload()" class="px-4 py-2 bg-gray-100 hover:bg-gray-200 rounded-lg transition">
                 🔄 刷新
             </button>
-        </div>
+        </div> -->
         
         <!-- Tab switcher -->
         <div class="flex space-x-2 border-b mb-4" id="tab-buttons">
@@ -46,7 +46,7 @@
         </div>
         
         <!-- Filters -->
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
             
             <div>
                 <label class="block text-sm font-medium text-gray-700 mb-2">岗位</label>
@@ -63,23 +63,6 @@
                     <option>加载中...</option>
                 </select>
             </div>
-            
-            <div>
-                <label class="block text-sm font-medium text-gray-700 mb-2">数量限制</label>
-                <input type="number" id="limit" name="limit" value="30" min="5" max="100" 
-                       class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500">
-            </div>
-        </div>
-        
-        <div class="mt-4">
-            <button 
-                @click="loadCandidates()"
-                id="query-btn"
-                :disabled="loading"
-                :class="loading ? 'opacity-50 cursor-not-allowed' : ''"
-                class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition">
-                <span x-text="loading ? '⏳ 加载中...' : '🔍 查询候选人'"></span>
-            </button>
         </div>
     </div>
     
@@ -88,14 +71,24 @@
         <!-- Candidate list (left sidebar) -->
         <div class="lg:col-span-4">
             <div class="bg-white rounded-lg shadow-lg h-screen overflow-y-auto">
-                <div class="sticky top-0 bg-white border-b p-4">
-                    <h2 class="font-bold text-gray-800">候选人列表</h2>
-                </div>
                 <div id="candidate-list" class="p-4 space-y-2">
-                    <!-- Will be populated via HTMX -->
-                    <div class="text-center text-gray-500 py-12">
-                        点击上方"查询候选人"按钮加载数据
+                    <!-- Initial message -->
+                    <div id="initial-message" class="text-center text-gray-500 py-12">
+                        点击下方"查询候选人"按钮加载数据
                     </div>
+                    <!-- Candidates will be appended here -->
+                </div>
+                
+                <!-- Load more button at bottom of list -->
+                <div class="p-4 border-t bg-gray-50">
+                    <button 
+                        @click="loadCandidates()"
+                        id="load-more-btn"
+                        :disabled="loading"
+                        :class="loading ? 'opacity-50 cursor-not-allowed' : ''"
+                        class="w-full px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition">
+                        <span x-text="loading ? '⏳ 加载中...' : '🔍 查询候选人'"></span>
+                    </button>
                 </div>
             </div>
         </div>

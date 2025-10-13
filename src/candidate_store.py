@@ -229,14 +229,16 @@ class CandidateStore:
             return None
 
 
-    def get_candidate_by_id(self, chat_id = None, candidate_id: Optional[str] = None, fields: Optional[List[str]] = ["*"]) -> Optional[Dict[str, Any]]:
+    def get_candidate_by_id(self, chat_id = None, candidate_id = None, thread_id = None, fields: Optional[List[str]] = ["*"]) -> Optional[Dict[str, Any]]:
         """Retrieve a single candidate record by chat_id."""
-        assert chat_id or candidate_id, "chat_id or candidate_id is required"
+        assert chat_id or candidate_id or thread_id, "chat_id or candidate_id or thread_id is required"
 
         if chat_id:
             expr = f"chat_id == {json.dumps(chat_id)}"
         elif candidate_id:
             expr = f"candidate_id == {json.dumps(candidate_id)}"
+        elif thread_id:
+            expr = f"thread_id == {json.dumps(thread_id)}"
 
         results: List[Dict[str, Any]] = self.collection.query(
             expr=expr,

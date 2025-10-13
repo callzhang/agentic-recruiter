@@ -1,12 +1,3 @@
-config:
-  base_url: https://www.zhipin.com/
-  chat_url: https://www.zhipin.com/web/chat/index
-  recommend_url: https://www.zhipin.com/web/chat/recommend
-  login_url: https://www.zhipin.com/web/user
-  storage_state: data/state.json
-  cdp_url: http://127.0.0.1:9222
-  boss_service_base_url: http://127.0.0.1:5001
-  boss_criteria_path: config/jobs.yaml
 roles:
 - id: algo
   position: 大模型算法工程师

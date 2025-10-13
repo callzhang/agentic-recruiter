@@ -421,7 +421,7 @@ async def check_full_resume_available(page: Page, chat_id: str):
     if not dialog:
         logger.warning("未找到指定对话项")
         return None
-    
+
     # Accept resume if available
     await accept_full_resume_action(page, chat_id)
 

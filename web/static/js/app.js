@@ -99,36 +99,29 @@ function automationControl() {
 // Candidate tabs component
 function candidateTabs() {
     return {
-        activeTab: 'greet',
+        activeTab: 'recommend',
         loading: false,
         
         switchTab(tab) {
             this.activeTab = tab;
-            // Tab styling is automatically handled by Alpine.js :class bindings
+            // Clear list when switching tabs
+            const list = document.getElementById('candidate-list');
+            if (list) {
+                list.innerHTML = '';
+            }
         },
         
         loadCandidates() {
             console.log('Loading candidates, activeTab:', this.activeTab);
             
-            const btn = document.getElementById('query-btn');
-            if (btn) {
-                btn.disabled = true;
-                btn.textContent = '⏳ 加载中...';
-            }
-            
             this.loading = true;
             
-            const limit = document.getElementById('limit')?.value || 30;
             const jobSelector = document.getElementById('job-selector');
             const jobTitle = jobSelector?.value || jobSelector?.options[0]?.value;
             
             // Check if job title is valid
             if (!jobTitle || jobTitle === '加载中...') {
                 console.error('Job title not loaded yet');
-                if (btn) {
-                    btn.disabled = false;
-                    btn.textContent = '🔍 查询候选人';
-                }
                 this.loading = false;
                 showToast('请等待岗位列表加载完成后再查询', 'warning');
                 return;
@@ -151,29 +144,31 @@ function candidateTabs() {
             const params = new URLSearchParams({
                 mode: mode,
                 chat_type: chatType,
-                job_title: jobTitle,
-                limit: limit
+                job_title: jobTitle
+                // No limit - load all candidates from browser page
             });
             
             const url = `/web/candidates/list?${params.toString()}`;
             console.log('Fetching:', url);
             
+            // Remove initial message if it exists
+            const initialMsg = document.getElementById('initial-message');
+            if (initialMsg) {
+                initialMsg.remove();
+            }
+            
             htmx.ajax('GET', url, {
                 target: '#candidate-list',
-                swap: 'innerHTML'
-            }).then(() => {
+                swap: 'beforeend'  // Append instead of replace
+            }).then((response) => {
                 console.log('Loaded successfully');
-                if (btn) {
-                    btn.disabled = false;
-                    btn.textContent = '🔍 查询候选人';
-                }
                 this.loading = false;
+                
+                // Count how many candidates were actually loaded
+                const candidateCards = document.querySelectorAll('#candidate-list .candidate-card');
+                showToast(`加载完成，共 ${candidateCards.length} 个候选人`, 'success');
             }).catch((err) => {
                 console.error('Failed:', err);
-                if (btn) {
-                    btn.disabled = false;
-                    btn.textContent = '🔍 查询候选人';
-                }
                 this.loading = false;
                 showToast('加载失败，请重试', 'error');
             });

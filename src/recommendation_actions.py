@@ -48,7 +48,7 @@ async def _prepare_recommendation_page(page: Page, job_title: str = None, *, wai
     await close_overlay_dialogs(page)
     if settings.RECOMMEND_URL not in page.url:
         menu_chat = page.locator("dl.menu-recommend").first
-        await menu_chat.click(timeout=1000)
+        await menu_chat.click(timeout=10000)
 
     iframe = await page.wait_for_selector(IFRAME_OVERLAY_SELECTOR, timeout=wait_timeout)
     frame = await iframe.content_frame()
@@ -68,8 +68,8 @@ async def _prepare_recommendation_page(page: Page, job_title: str = None, *, wai
         if job_title in current_selected_job:
             return frame
         # Only change if not already selected
-        job_titles = [await option.inner_text(timeout=500) for option in job_options]
-        job_idx = job_titles.index(job_title)
+        job_titles = [await option.inner_text(timeout=500) for option in await job_options.all()]
+        job_idx = next(i for i, c in enumerate(job_titles) if job_title in c)
         if job_idx == -1:
             raise ValueError(f"未找到包含'{job_title}'的职位。可用职位: {', '.join(job_titles)}")
         # click the job option
@@ -136,7 +136,7 @@ async def list_recommended_candidates_action(page: Page, *, limit: int = 20, job
 
     for index in range(min(count, limit)):
         card = cards.nth(index)
-        await card.scroll_into_view_if_needed(timeout=1000)
+        await card.hover(timeout=3000)
         classes = await card.get_attribute("class") or ""
         viewed = "viewed" in classes
         greeted = await card.locator("button:has-text('继续沟通')").count() > 0
@@ -145,7 +145,8 @@ async def list_recommended_candidates_action(page: Page, *, limit: int = 20, job
         
         # Create candidate dict with standardized field names for web UI
         candidates.append({
-            "id": f"recommend_{index}",  # Unique ID for this session
+            "index": index,  # Position in the current list
+            "chat_id": None,  # Recommend candidates don't have a chat_id yet
             "name": name,
             "job_title": job_title,  # Standardized field name
             "text": text,
@@ -166,7 +167,7 @@ async def view_recommend_candidate_resume_action(page: Page, index: int) -> Dict
         raise ValueError(f"候选人索引 {index} 超出范围")
 
     card = cards.nth(index)
-    await card.scroll_into_view_if_needed(timeout=1000)
+    await card.hover(timeout=3000)
     await card.click(timeout=800)
 
     await _setup_wasm_route(page.context)
@@ -193,7 +194,7 @@ async def greet_recommend_candidate_action(page: Page, index: int, message: str)
         raise ValueError(f"候选人索引 {index} 超出范围")
 
     card = cards.nth(index)
-    await card.scroll_into_view_if_needed(timeout=1000)
+    await card.hover(timeout=3000)
 
     greet_selectors = [
         "button.btn-greet",
