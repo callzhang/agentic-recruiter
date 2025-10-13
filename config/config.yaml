@@ -19,7 +19,7 @@ service:
 # 浏览器配置
 browser:
   storage_state: data/state.json
-  cdp_url: http://127.0.0.1:9222
+  cdp_url: http://127.0.0.1:9222  # HTTP endpoint for metadata, Playwright will convert to WS automatically
 
 # Zilliz配置（非敏感部分）
 zilliz:
@@ -36,3 +36,7 @@ openai:
   temperature: 0.7
   max_tokens: 2000
 
+analysis:
+  borderline: 7
+  threshold_seek: 8
+  threshold_contact: 9

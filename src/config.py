@@ -59,112 +59,75 @@ class Settings(BaseModel):
         secrets_path: str = "config/secrets.yaml"
     ) -> "Settings":
         """Load settings from config.yaml and secrets.yaml files."""
-        settings_data = {}
         
-        # Load from config.yaml (non-sensitive configuration)
-        config_file = Path(config_path)
-        config = {}
-        if config_file.exists():
-            with open(config_file, "r", encoding="utf-8") as f:
-                config = yaml.safe_load(f) or {}
-            
+        # Load config.yaml (non-sensitive configuration)
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = yaml.safe_load(f)
+        
+        # Load secrets.yaml (sensitive data)
+        with open(secrets_path, "r", encoding="utf-8") as f:
+            secrets = yaml.safe_load(f)
+        
+        # Build settings data
+        boss = config["boss_zhipin"]
+        service = config["service"]
+        browser = config["browser"]
+        config_zilliz = config["zilliz"]
+        config_openai = config["openai"]
+        
+        secrets_zilliz = secrets["zilliz"]
+        secrets_openai = secrets["openai"]
+        dingtalk = secrets["dingtalk"]
+        sentry = secrets["sentry"]
+        
+        settings_data = {
             # Boss Zhipin URLs
-            if "boss_zhipin" in config:
-                boss = config["boss_zhipin"]
-                settings_data.update({
-                    "BASE_URL": boss.get("base_url", ""),
-                    "CHAT_URL": boss.get("chat_url", ""),
-                    "RECOMMEND_URL": boss.get("recommend_url", ""),
-                    "LOGIN_URL": boss.get("login_url", ""),
-                })
+            "BASE_URL": boss["base_url"],
+            "CHAT_URL": boss["chat_url"],
+            "RECOMMEND_URL": boss["recommend_url"],
+            "LOGIN_URL": boss["login_url"],
             
             # Service Configuration
-            if "service" in config:
-                service = config["service"]
-                settings_data.update({
-                    "BOSS_SERVICE_HOST": service.get("host", "127.0.0.1"),
-                    "BOSS_SERVICE_PORT": service.get("port", 5001),
-                    "BOSS_SERVICE_BASE_URL": service.get("base_url", ""),
-                    "BOSS_CRITERIA_PATH": service.get("criteria_path", ""),
-                })
+            "BOSS_SERVICE_HOST": service["host"],
+            "BOSS_SERVICE_PORT": service["port"],
+            "BOSS_SERVICE_BASE_URL": service["base_url"],
+            "BOSS_CRITERIA_PATH": service["criteria_path"],
             
             # Browser Configuration
-            if "browser" in config:
-                browser = config["browser"]
-                settings_data.update({
-                    "STORAGE_STATE": browser.get("storage_state", ""),
-                    "CDP_URL": browser.get("cdp_url", ""),
-                })
+            "STORAGE_STATE": browser["storage_state"],
+            "CDP_URL": browser["cdp_url"],
             
-            # Zilliz Configuration (non-sensitive)
-            if "zilliz" in config:
-                zilliz = config["zilliz"]
-                settings_data.update({
-                    "ZILLIZ_COLLECTION_NAME": zilliz.get("collection_name", "CN_candidates"),
-                    "ZILLIZ_EMBEDDING_MODEL": zilliz.get("embedding_model", "text-embedding-3-small"),
-                    "ZILLIZ_EMBEDDING_DIM": zilliz.get("embedding_dim", 1536),
-                    "ZILLIZ_SIMILARITY_TOP_K": zilliz.get("similarity_top_k", 5),
-                    "ZILLIZ_ENABLE_CACHE": zilliz.get("enable_cache", False),
-                })
+            # Zilliz Configuration
+            "ZILLIZ_ENDPOINT": secrets_zilliz["endpoint"],
+            "ZILLIZ_USER": secrets_zilliz["user"],
+            "ZILLIZ_PASSWORD": secrets_zilliz["password"],
+            "ZILLIZ_COLLECTION_NAME": config_zilliz["collection_name"],
+            "ZILLIZ_EMBEDDING_MODEL": config_zilliz["embedding_model"],
+            "ZILLIZ_EMBEDDING_DIM": config_zilliz["embedding_dim"],
+            "ZILLIZ_SIMILARITY_TOP_K": config_zilliz["similarity_top_k"],
+            "ZILLIZ_ENABLE_CACHE": config_zilliz["enable_cache"],
             
-            # OpenAI Configuration (non-sensitive)
-            if "openai" in config:
-                openai = config["openai"]
-                settings_data.update({
-                    "OPENAI_NAME": openai.get("name", "CN_recruiting_bot"),
-                    "OPENAI_MODEL": openai.get("model", "gpt-4o-mini"),
-                    "OPENAI_TEMPERATURE": openai.get("temperature", 0.7),
-                    "OPENAI_MAX_TOKENS": openai.get("max_tokens", 2000),
-                })
-        
-        # Load from secrets.yaml (sensitive data)
-        secrets_file = Path(secrets_path)
-        secrets = {}
-        if secrets_file.exists():
-            with open(secrets_file, "r", encoding="utf-8") as f:
-                secrets = yaml.safe_load(f) or {}
-            
-            # Zilliz sensitive data
-            if "zilliz" in secrets:
-                zilliz = secrets["zilliz"]
-                settings_data.update({
-                    "ZILLIZ_ENDPOINT": zilliz.get("endpoint", ""),
-                    "ZILLIZ_USER": zilliz.get("user", ""),
-                    "ZILLIZ_PASSWORD": zilliz.get("password", ""),
-                })
-                # Override collection_name if specified in secrets
-                if "collection_name" in zilliz:
-                    settings_data["ZILLIZ_COLLECTION_NAME"] = zilliz["collection_name"]
-            
-            # OpenAI sensitive data
-            if "openai" in secrets:
-                openai = secrets["openai"]
-                settings_data.update({
-                    "OPENAI_API_KEY": openai.get("api_key", ""),
-                })
+            # OpenAI Configuration
+            "OPENAI_API_KEY": secrets_openai["api_key"],
+            "OPENAI_NAME": config_openai["name"],
+            "OPENAI_MODEL": config_openai["model"],
+            "OPENAI_TEMPERATURE": config_openai["temperature"],
+            "OPENAI_MAX_TOKENS": config_openai["max_tokens"],
             
             # DingTalk Configuration
-            if "dingtalk" in secrets:
-                dingtalk = secrets["dingtalk"]
-                settings_data.update({
-                    "DINGTALK_URL": dingtalk.get("url", ""),
-                    "DINGTALK_SECRET": dingtalk.get("secret", ""),
-                })
+            "DINGTALK_URL": dingtalk["url"],
+            "DINGTALK_SECRET": dingtalk["secret"],
             
             # Sentry Configuration
-            if "sentry" in secrets:
-                sentry = secrets["sentry"]
-                settings_data.update({
-                    "SENTRY_DSN": sentry.get("dsn", ""),
-                    "SENTRY_ENVIRONMENT": sentry.get("environment", ""),
-                    "SENTRY_RELEASE": sentry.get("release", ""),
-                })
+            "SENTRY_DSN": sentry["dsn"],
+            "SENTRY_ENVIRONMENT": sentry["environment"],
+            "SENTRY_RELEASE": sentry["release"],
+            
+            # Store original YAML data
+            "SECRETS": secrets,
+            "CONFIG": config,
+        }
         
-        # Store original YAML data
-        settings_data["SECRETS"] = secrets
-        settings_data["CONFIG"] = config
-        
-        # Create settings instance with loaded data
         return cls(**settings_data)
     
     def get_zilliz_config(self) -> Dict[str, Any]:

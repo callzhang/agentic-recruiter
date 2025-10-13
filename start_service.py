@@ -295,6 +295,7 @@ def start_service(*, scheduler_options: Optional[Dict[str, Any]] | None = None):
                 "docs/**",
                 "examples/**",
                 "wasm/**",
+                "web/**",  # Exclude web UI files to prevent unnecessary reloads
                 "streamlit_shared.py",
                 "boss_app.py",
                 "start_service.py",
@@ -302,7 +303,7 @@ def start_service(*, scheduler_options: Optional[Dict[str, Any]] | None = None):
                 "*.md",
                 "__pycache__/**"
             ],
-            reload_delay=3.0
+            reload_delay=5.0  # Increased from 3.0 to reduce rapid reload cycles
         )
         
         # Cleanup after uvicorn stops gracefully (e.g., Ctrl+C)
