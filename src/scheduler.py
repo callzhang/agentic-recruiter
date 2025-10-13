@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import logging
-import os
+import asyncio
 import threading
+from concurrent.futures import Future
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, Optional
 from uuid import NAMESPACE_URL, uuid5
 
 import requests
@@ -48,6 +48,11 @@ class BRDWorkScheduler:
 
         self._running = False
         self._stop_event = threading.Event()
+        self._pause_event = threading.Event()
+        self._pause_event.set()  # Start unpaused
+        self.step_mode = False
+        self.emit_event: Optional[Callable[[str, str], Awaitable[None]]] = None
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
 
         if not self.job_snapshot:
             raise ValueError("Job information must be provided as parameter")
@@ -72,7 +77,10 @@ class BRDWorkScheduler:
             return
         self._running = True
         self._stop_event.clear()
-        logger.info("启动BRD自动化调度：%s", self.job_snapshot.get("position"))
+        self._notify(
+            f"启动BRD自动化调度：{self.job_snapshot.get('position', '未知岗位')}",
+            "info",
+        )
         self._main_thread = threading.Thread(target=self._main_loop, name="brd-main", daemon=True)
         self._main_thread.start()
 
@@ -81,28 +89,74 @@ class BRDWorkScheduler:
         self._running = False
         if hasattr(self, "_main_thread") and self._main_thread:
             self._main_thread.join(timeout=5)
-        logger.info("BRD自动化调度已停止")
+        self._notify("BRD自动化调度已停止", "warning")
+
+    def pause(self) -> None:
+        """Pause the workflow execution."""
+        self._pause_event.clear()
+        self._notify("自动化流程已暂停", "warning")
+
+    def resume(self) -> None:
+        """Resume the workflow execution."""
+        self._pause_event.set()
+        self._notify("自动化流程继续运行", "info")
+
+    def _wait_if_paused(self) -> None:
+        """Wait if workflow is paused."""
+        self._pause_event.wait()
+
+    def attach_event_loop(self, loop: Optional[asyncio.AbstractEventLoop]) -> None:
+        """Attach the FastAPI event loop so background threads can emit SSE events."""
+        self._loop = loop
+
+    def _notify(self, message: str, level: str = "info") -> None:
+        """Emit event to SSE if handler is set."""
+        logger.info(message)
+        if not self.emit_event or not self._loop:
+            return
+        try:
+            future: Future = asyncio.run_coroutine_threadsafe(
+                self.emit_event(message, level),
+                self._loop,
+            )
+
+            def _log_future_result(fut: Future) -> None:
+                try:
+                    fut.result()
+                except Exception as exc:  # pragma: no cover - best effort logging
+                    logger.debug("emit_event callback failed: %s", exc)
+
+            future.add_done_callback(_log_future_result)
+        except RuntimeError as exc:  # Event loop unavailable
+            logger.debug("No event loop available for emit_event: %s", exc)
 
     def get_status(self) -> Dict[str, Any]:
         return {
             "running": self._running,
+            "paused": not self._pause_event.is_set(),
             "status_message": self._status_message,
             "timestamp": datetime.now().isoformat(),
         }
 
     def _main_loop(self) -> None:
-        logger.info("BRD主循环启动")
+        self._notify("BRD主循环启动", "info")
         while not self._stop_event.is_set():
+            # Wait if paused
+            self._wait_if_paused()
+            
             if self.enable_chat_processing:
                 self._status_message = "正在处理新聊天..."
+                self._notify(self._status_message, "info")
                 self._process_inbound_chats()
 
             if self.enable_recommend:
+                self._status_message = "正在处理推荐候选人..."
+                self._notify(self._status_message, "info")
                 self._process_recommendations()
 
             self._status_message = "等待下次检查..."
             self._stop_event.wait(10)
-        logger.info("BRD主循环结束")
+        self._notify("BRD主循环结束", "info")
 
     # ------------------------------------------------------------------
     # Inbound processing via HTTP API
@@ -117,9 +171,11 @@ class BRDWorkScheduler:
             response.raise_for_status()
         except Exception as exc:
             logger.warning("获取聊天列表失败: %s", exc)
+            self._notify(f"获取聊天列表失败: {exc}", "error")
             return
 
         messages = response.json() or []
+        self._notify(f"获取到 {len(messages)} 个聊天会话", "info")
         for entry in messages:
             chat_id = str(entry.get("id") or entry.get("chat_id") or "").strip()
             if not chat_id:
@@ -170,6 +226,8 @@ class BRDWorkScheduler:
             "meta": resume_meta,
         }
         logger.info("[%s] %s 分数 %.1f -> %s", source, chat_id, score * 100, decision)
+        level = "success" if decision in {"resume_requested"} else "warning" if decision in {"manual_review", "request_failed"} else "info"
+        self._notify(f"[{source}] {chat_id} 分数 {score * 100:.1f} -> {decision}", level)
         return record
 
     def _request_resume(self, chat_id: str) -> str:
@@ -205,10 +263,12 @@ class BRDWorkScheduler:
         except Exception as exc:
             logger.warning("获取推荐候选人失败: %s", exc)
             self._status_message = f"获取推荐候选人失败: {exc}"
+            self._notify(self._status_message, "error")
             return
 
         candidates = response.json() or []
         self._status_message = f"找到 {len(candidates)} 个推荐候选人，开始处理..."
+        self._notify(self._status_message, "info")
         for index, entry in enumerate(candidates):
             summary = (entry.get("text") or "").strip() or f"candidate-{index}"
             candidate_id = self._build_candidate_id("recommend", index, summary)
@@ -265,7 +325,8 @@ class BRDWorkScheduler:
                 return bool(payload.get("success"))
         except Exception as exc:
             logger.warning("打招呼失败 #%s: %s", index, exc)
-        return False
+            self._notify(f"打招呼失败 #{index}: {exc}", "error")
+            return False
 
     # ------------------------------------------------------------------
     # Helper utilities
