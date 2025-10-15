@@ -69,9 +69,12 @@ async def _prepare_recommendation_page(page: Page, job_title: str = None, *, wai
             return frame
         # Only change if not already selected
         job_titles = [await option.inner_text(timeout=500) for option in await job_options.all()]
-        job_idx = next(i for i, c in enumerate(job_titles) if job_title in c)
-        if job_idx == -1:
-            raise ValueError(f"未找到包含'{job_title}'的职位。可用职位: {', '.join(job_titles)}")
+        try:
+            job_idx = next(i for i, c in enumerate(job_titles) if job_title in c)
+        except StopIteration:
+            error_msg = f"未找到包含'{job_title}'的职位。可用职位: {', '.join(job_titles)}"
+            logger.error(error_msg)
+            raise ValueError(error_msg)
         # click the job option
         await frame.locator(JOB_POPOVER_SELECTOR).click(timeout=1000)
         await job_options.nth(job_idx).click(timeout=1000)
@@ -225,6 +228,9 @@ async def greet_recommend_candidate_action(page: Page, index: int, message: str)
             await send_btn.click(timeout=1000)
         else:
             await page.keyboard.press("Enter")
+        close_btn = page.locator("div.iboss-close").first
+        if await close_btn.count() > 0:
+            await close_btn.click(timeout=1000)
 
     logger.info("打招呼成功")
     return True
