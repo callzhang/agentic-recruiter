@@ -102,14 +102,22 @@ function candidateTabs() {
         activeTab: 'recommend',
         loading: false,
         
-        switchTab(tab) {
-            this.activeTab = tab;
-            // Clear list when switching tabs
-            const list = document.getElementById('candidate-list');
-            if (list) {
-                list.innerHTML = '';
-            }
-        },
+            switchTab(tab) {
+                this.activeTab = tab;
+                // Reset selected candidate
+                window.selectedCandidateId = null;
+                // Clear list when switching tabs
+                const list = document.getElementById('candidate-list');
+                if (list) {
+                    list.innerHTML = '';
+                    // Re-add initial message
+                    const initialMsg = document.createElement('div');
+                    initialMsg.id = 'initial-message';
+                    initialMsg.className = 'text-center text-gray-500 py-12';
+                    initialMsg.textContent = '点击下方"查询候选人"按钮加载数据';
+                    list.appendChild(initialMsg);
+                }
+            },
         
         loadCandidates() {
             console.log('Loading candidates, activeTab:', this.activeTab);
@@ -117,7 +125,8 @@ function candidateTabs() {
             this.loading = true;
             
             const jobSelector = document.getElementById('job-selector');
-            const jobTitle = jobSelector?.value || jobSelector?.options[0]?.value;
+            const jobId = jobSelector?.value || jobSelector?.options[0]?.value;
+            const jobTitle = jobSelector?.selectedOptions[0]?.getAttribute("data-title");
             
             // Check if job title is valid
             if (!jobTitle || jobTitle === '加载中...') {
@@ -135,8 +144,8 @@ function candidateTabs() {
                 mode = 'chat';
                 const tabMap = {
                     'greet': '新招呼',
-                    'chatting': '沟通中',
-                    'noReply': '牛人已读未回'
+                    'reply': '沟通中',
+                    'followup': '牛人已读未回'
                 };
                 chatType = tabMap[this.activeTab] || '新招呼';
             }
@@ -144,40 +153,87 @@ function candidateTabs() {
             const params = new URLSearchParams({
                 mode: mode,
                 chat_type: chatType,
-                job_title: jobTitle
-                // No limit - load all candidates from browser page
+                job_title: jobTitle,
+                job_id: jobId
             });
             
             const url = `/web/candidates/list?${params.toString()}`;
             console.log('Fetching:', url);
             
-            // Remove initial message if it exists
+            // Remove initial message and empty message if they exist
             const initialMsg = document.getElementById('initial-message');
             if (initialMsg) {
                 initialMsg.remove();
             }
+            const emptyMsg = document.getElementById('empty-message');
+            if (emptyMsg) {
+                emptyMsg.remove();
+            }
             
-            htmx.ajax('GET', url, {
-                target: '#candidate-list',
-                swap: 'beforeend'  // Append instead of replace
-            }).then((response) => {
-                console.log('Loaded successfully');
-                this.loading = false;
-                
-                // Count how many candidates were actually loaded
-                const candidateCards = document.querySelectorAll('#candidate-list .candidate-card');
-                showToast(`加载完成，共 ${candidateCards.length} 个候选人`, 'success');
-            }).catch((err) => {
-                console.error('Failed:', err);
-                this.loading = false;
-                showToast('加载失败，请重试', 'error');
-            });
+            // Use a custom handler to detect errors and handle swap accordingly
+            fetch(url)
+                .then(async (response) => {
+                    const html = await response.text();
+                    const candidateList = document.getElementById('candidate-list');
+                    
+                    // Check if response is an error message
+                    if (!response.ok || html.includes('text-red-500') || html.includes('失败')) {
+                        // Error: replace list content with error message
+                        candidateList.innerHTML = html;
+                        this.loading = false;
+                        showToast('加载失败，请重试', 'error');
+                        return;
+                    }
+                    
+                    // Success: append candidate cards
+                    candidateList.insertAdjacentHTML('beforeend', html);
+                    
+                    // Tell HTMX to process the new content
+                    htmx.process(candidateList);
+                    
+                    this.loading = false;
+                    
+                    // Count how many candidates were actually loaded
+                    const candidateCards = document.querySelectorAll('#candidate-list .candidate-card');
+                    const count = candidateCards.length;
+                    
+                    if (count === 0) {
+                        // Show empty state message
+                        const emptyMsg = document.createElement('div');
+                        emptyMsg.id = 'empty-message';
+                        emptyMsg.className = 'text-center text-gray-500 py-12';
+                        emptyMsg.innerHTML = `
+                            <div class="space-y-2">
+                                <p class="text-lg">😔 未找到符合条件的候选人</p>
+                                <p class="text-sm">请尝试切换标签或岗位</p>
+                            </div>
+                        `;
+                        candidateList.appendChild(emptyMsg);
+                        showToast('未找到候选人', 'warning');
+                    } else {
+                        // Remove empty message if it exists
+                        const emptyMsg = document.getElementById('empty-message');
+                        if (emptyMsg) {
+                            emptyMsg.remove();
+                        }
+                        showToast(`加载完成，共 ${count} 个候选人`, 'success');
+                    }
+                })
+                .catch((err) => {
+                    console.error('Failed:', err);
+                    this.loading = false;
+                    const candidateList = document.getElementById('candidate-list');
+                    candidateList.innerHTML = `
+                        <div class="text-center text-red-500 py-12">
+                            <p class="text-lg">❌ 请求失败</p>
+                            <p class="text-sm mt-2">${err.message}</p>
+                        </div>
+                    `;
+                    showToast('加载失败，请重试', 'error');
+                });
         }
     };
 }
-
-// Note: updateTabStyles is now handled by Alpine.js :class bindings
-// This function is kept for backward compatibility but is no longer needed
 
 // Form validation helper
 function validateForm(formId) {
@@ -233,6 +289,85 @@ function getToastClass(type) {
     return classes[type] || classes['info'];
 }
 
+// ============================================================================
+// Global HTMX Loading & Error Handling
+// ============================================================================
+
+// Show loading indicator before any HTMX request
+document.body.addEventListener('htmx:beforeRequest', function(event) {
+    const loadingIndicator = document.getElementById('global-loading');
+    if (loadingIndicator) {
+        loadingIndicator.classList.add('htmx-request');
+    }
+});
+
+// Hide loading indicator after any HTMX request completes
+document.body.addEventListener('htmx:afterRequest', function(event) {
+    const loadingIndicator = document.getElementById('global-loading');
+    if (loadingIndicator) {
+        loadingIndicator.classList.remove('htmx-request');
+    }
+});
+
+// Handle HTMX errors
+document.body.addEventListener('htmx:responseError', function(event) {
+    const loadingIndicator = document.getElementById('global-loading');
+    if (loadingIndicator) {
+        loadingIndicator.classList.remove('htmx-request');
+    }
+    showToast('请求失败: ' + (event.detail.xhr.status || '网络错误'), 'error');
+});
+
+// ============================================================================
+// Candidate Selection Management
+// ============================================================================
+
+window.selectedCandidateId = null;
+
+// Intercept candidate card clicks to prevent duplicate requests
+document.body.addEventListener('htmx:beforeRequest', function(event) {
+    // Check if this is a candidate card click
+    if (!event.detail.elt.classList.contains('candidate-card')) {
+        return;  // Not a candidate card, allow request normally
+    }
+    
+    const candidateId = event.detail.elt.getAttribute('data-candidate-id');
+    
+    // If clicking the same candidate, prevent redundant fetch
+    if (window.selectedCandidateId === candidateId) {
+        console.log('Same candidate already selected, skipping fetch');
+        event.preventDefault();  // This cancels the HTMX request
+        
+        // Hide loading indicator (since afterRequest won't fire for cancelled requests)
+        const loadingIndicator = document.getElementById('global-loading');
+        if (loadingIndicator) {
+            loadingIndicator.classList.remove('htmx-request');
+        }
+        
+        return;
+    }
+    
+    // Remove selected state from all cards
+    document.querySelectorAll('.candidate-card').forEach(card => {
+        card.classList.remove('bg-blue-50', 'border-blue-500', 'ring-2', 'ring-blue-300');
+        card.classList.add('border-gray-200');
+    });
+    
+    // Add selected state to clicked card
+    event.detail.elt.classList.remove('border-gray-200');
+    event.detail.elt.classList.add('bg-blue-50', 'border-blue-500', 'ring-2', 'ring-blue-300');
+    
+    // Update selected ID
+    window.selectedCandidateId = candidateId;
+    console.log('Selected candidate:', candidateId);
+    
+    // Allow HTMX to proceed
+});
+
+// ============================================================================
+// Global HTMX Event Listeners
+// ============================================================================
+
 // HTMX event listeners for global notifications
 document.body.addEventListener('htmx:afterRequest', (event) => {
     if (event.detail.successful && event.detail.xhr.status === 200) {
@@ -257,3 +392,7 @@ document.body.addEventListener('htmx:afterRequest', (event) => {
 document.body.addEventListener('htmx:responseError', (event) => {
     showToast('请求失败，请重试', 'error');
 });
+
+// ============================================================================
+// Note: All candidate-specific functions moved to candidate_detail.html
+// ============================================================================
