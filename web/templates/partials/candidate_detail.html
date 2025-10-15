@@ -275,11 +275,11 @@ function loadThreadData(threadId) {
             }
             
             // 2. Display analysis if available
-            if (data.analysis && data.analysis.overall) {
+            if (data.analysis) {
                 console.log('Extracted analysis from thread:', data.analysis);
                 displayAnalysis(data.analysis);
             } else {
-                console.warn('No analysis found in thread, triggering new analysis...');
+                console.warn('No analysis found in thread, triggering new analysis...', data.analysis);
                 showToast('提取分析失败，正在重新分析...', 'warning');
                 startAnalysis();
             }
@@ -364,8 +364,8 @@ function displayAnalysis(analysis) {
                     <div class="text-2xl font-bold text-green-700">${analysis.startup_fit}</div>
                 </div>
                 <div class="bg-purple-50 p-4 rounded-lg">
-                    <div class="text-sm text-purple-600 font-medium">加入意愿</div>
-                    <div class="text-2xl font-bold text-purple-600">${analysis.willingness}</div>
+                    <div class="text-sm text-purple-600 font-medium">基础背景</div>
+                    <div class="text-2xl font-bold text-purple-600">${analysis.background}</div>
                 </div>
                 <div class="bg-purple-50 p-4 rounded-lg">
                     <div class="text-sm text-purple-600 font-medium">综合评分</div>
