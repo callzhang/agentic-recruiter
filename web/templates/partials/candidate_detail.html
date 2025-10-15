@@ -22,156 +22,34 @@
     </div>
 
     <!-- Hidden context for HTMX requests -->
-    <div id="candidate-context" class="hidden">
-        {% if candidate.mode == 'recommend' %}
-        <input type="hidden" name="index" value="{{ candidate.index }}">
-        {% else %}
+    <form id="candidate-context" class="hidden">
         <input type="hidden" name="chat_id" value="{{ candidate.chat_id }}">
-        {% endif %}
         <input type="hidden" name="mode" value="{{ candidate.mode or 'chat' }}">
         <input type="hidden" name="name" value="{{ candidate.name or '' }}">
-        <input type="hidden" name="resume_text" id="hidden-resume-text" value="{{ candidate.full_resume or candidate.resume_text or '' }}">
         <input type="hidden" name="assistant_id" value="{{ assistant_id }}">
         <input type="hidden" name="job_id" value="{{ job_id }}">
+        <input type="hidden" name="thread_id" value="{{ candidate.thread_id }}">
+        <input type="hidden" name="index" value="{{ candidate.index or candidate.id }}">
     </div>
     
-    <!-- Automatic workflow after resume is loaded -->
-    <script>
-        // Listen for when resume content is swapped in
-        document.body.addEventListener('htmx:afterSwap', function(event) {
-            // Only trigger for resume content updates
-            if (event.detail.target.id !== 'resume-content') {
-                return;
-            }
-            
-            console.log('Resume swapped! Target:', event.detail.target);
-            console.log('Resume content HTML:', event.detail.target.innerHTML.substring(0, 200));
-            
-            // Extract resume text from the textarea
-            const textarea = document.querySelector('#resume-content textarea');
-            if (!textarea) {
-                console.error('No resume textarea found');
-                return;
-            }
-            
-            const resumeText = textarea.value;
-            console.log('Resume text length:', resumeText.length);
-            
-            if (!resumeText) {
-                console.error('Resume text is empty');
-                showToast('简历为空，无法分析', 'error');
-                return;
-            }
-            
-            // Update hidden context
-            const hiddenInput = document.getElementById('hidden-resume-text');
-            if (hiddenInput) {
-                hiddenInput.value = resumeText;
-                console.log('Updated hidden resume_text');
-            }
-            
-            // Get candidate info
-            const mode = document.querySelector('input[name="mode"]').value;
-            const name = document.querySelector('input[name="name"]').value;
-            const jobId = document.querySelector('input[name="job_id"]').value;
-            
-            // Get chat_id or index based on mode
-            let chatId = null;
-            if (mode === 'recommend') {
-                const indexInput = document.querySelector('input[name="index"]');
-                // For recommend candidates, chat_id is null
-                chatId = null;
-            } else {
-                const chatIdInput = document.querySelector('input[name="chat_id"]');
-                chatId = chatIdInput ? chatIdInput.value : null;
-            }
-            
-            console.log('Candidate info:', { chatId, mode, name, jobId });
-            
-            // Call web-specific init-chat endpoint that handles data preparation
-            console.log('Initializing chat...');
-            showToast('初始化对话线程...', 'info');
-            
-            // Step 1: Init chat via web endpoint (handles job_info loading and chat_history)
-            // Use fetch() to send custom FormData
-            const formData = new FormData();
-            formData.append('mode', mode);
-            if (chatId) formData.append('chat_id', chatId);
-            formData.append('job_id', jobId);
-            formData.append('name', name || (mode === 'recommend' ? '推荐候选人' : '候选人'));
-            formData.append('resume_text', resumeText);
-            
-            fetch('/web/candidates/init-chat', {
-                method: 'POST',
-                body: formData
-            }).then(response => {
-                if (!response.ok) throw new Error('Init chat failed');
-                return response.json();
-            }).then(data => {
-                console.log('Chat initialized:', data);
-                // Store thread_id in hidden context for future requests
-                if (data.thread_id) {
-                    let threadInput = document.querySelector('input[name="thread_id"]');
-                    if (!threadInput) {
-                        threadInput = document.createElement('input');
-                        threadInput.type = 'hidden';
-                        threadInput.name = 'thread_id';
-                        document.getElementById('candidate-context').appendChild(threadInput);
-                    }
-                    threadInput.value = data.thread_id;
-                }
-                return startAnalysis();
-            }).catch(err => {
-                console.error('Init chat error:', err);
-                // Continue to analysis anyway (thread might already exist)
-                return startAnalysis();
-            });
-            
-            function startAnalysis() {
-                console.log('Starting analysis...');
-                showToast('开始分析候选人...', 'info');
-                
-                // Get all required values from context
-                const mode = document.querySelector('input[name="mode"]').value;
-                const assistantId = document.querySelector('input[name="assistant_id"]').value;
-                const threadId = document.querySelector('input[name="thread_id"]')?.value;
-                const chatId = document.querySelector('input[name="chat_id"]')?.value;
-                
-                // Build FormData explicitly
-                const analyzeFormData = new FormData();
-                analyzeFormData.append('mode', mode);
-                analyzeFormData.append('assistant_id', assistantId);
-                if (threadId) analyzeFormData.append('thread_id', threadId);
-                if (chatId) analyzeFormData.append('chat_id', chatId);
-                
-                htmx.ajax('POST', '/web/candidates/analyze', {
-                    target: '#analysis-content',
-                    swap: 'innerHTML',
-                    values: Object.fromEntries(analyzeFormData)
-                });
-            }
-        });
-    </script>
-
     <!-- 1. Resume Section -->
     <div id="resume-section" class="bg-white rounded-lg border shadow-sm">
         <div class="p-4 border-b bg-gray-50">
             <h3 class="font-bold text-gray-800">📄 候选人简历</h3>
         </div>
-        <div id="resume-content" class="p-4">
-            {% if candidate.resume_text or candidate.full_resume %}
-            <textarea readonly class="w-full h-64 p-4 bg-gray-50 border rounded-lg font-mono text-sm">{{ candidate.full_resume or candidate.resume_text }}</textarea>
-            {% else %}
-            <div class="text-center py-8 text-gray-500" 
-                 hx-post="{% if candidate.mode == 'recommend' %}/web/candidates/fetch-recommend-resume{% else %}/web/candidates/fetch-online-resume{% endif %}"
-                 hx-trigger="load"
-                 hx-include="#candidate-context"
-                 hx-target="#resume-content"
-                 hx-swap="innerHTML">
-                ⏳ 正在加载简历...
-            </div>
-            {% endif %}
+        {% if candidate.resume_text or candidate.full_resume %}
+        <textarea readonly class="w-full h-64 p-4 bg-gray-50 border rounded-lg font-mono text-sm">{{ candidate.full_resume or candidate.resume_text }}</textarea>
+        {% else %}
+        <div id="resume-content" class="text-center py-8 text-gray-500" 
+            hx-post="{% if candidate.mode == 'recommend' %}/web/candidates/fetch-recommend-resume{% else %}/web/candidates/fetch-online-resume{% endif %}"
+            hx-trigger="load"
+            hx-include="#candidate-context"
+            hx-target="#resume-content"
+            hx-swap="innerHTML"
+            hx-on::after-swap="handleResumeLoaded()"> <!-- Add handleResumeLoaded function -->
+            ⏳ 正在加载简历...
         </div>
+        {% endif %}
     </div>
 
     <!-- 2. Analysis Section -->
@@ -249,6 +127,7 @@
                     hx-include="#candidate-context"
                     hx-target="#analysis-content"
                     hx-swap="innerHTML"
+                    onclick="this.setAttribute('hx-vals', JSON.stringify({resume_text: document.querySelector('#resume-content textarea')?.value || ''}))"
                     class="px-3 py-1 bg-purple-600 text-white text-sm rounded hover:bg-purple-700">
                 🔄 重新分析
             </button>
@@ -263,3 +142,416 @@
     </div>
 
 </div>
+
+<!-- Mode-specific record check logic -->
+<script>
+(function() {
+    const mode = document.querySelector('input[name="mode"]')?.value;
+    const chatId = document.querySelector('input[name="chat_id"]')?.value;
+    
+    if (mode === 'recommend') {
+        // For recommend: must fetch resume first, then check
+        // Resume fetch is auto-triggered by hx-trigger="load"
+        // After fetch, htmx:afterSwap will handle the check
+    } else if (mode === 'chat' || mode === 'greet' || mode === 'reply' || mode === 'followup') {
+        // For chat: check by chat_id first, before fetching resume
+        if (chatId && typeof checkChatCandidate === 'function') {
+            checkChatCandidate(chatId);
+        }
+    }
+})();
+
+
+function updateFormData(record) {
+    dataElement = document.getElementById('candidate-context');
+    const formData = new FormData(dataElement);
+    for (const [key, value] of Object.entries(record)) {
+        let input = dataElement.querySelector(`input[name="${key}"]`);
+        if (input) {
+            input.value = value;
+        }else{
+            // create a input element
+            let input = document.createElement('input');
+            input.type = 'hidden';
+            input.name = key;
+            input.value = value;
+            dataElement.appendChild(input);
+        }
+    }
+}
+
+// Handle resume loaded event using HTMX's hx-on::after-swap
+function handleResumeLoaded() {
+    const textarea = document.querySelector('#resume-content textarea');
+
+    if (!textarea || !textarea.value) {
+        return;
+    }
+    resumeText = textarea.value;
+    // Add candidate-specific filtering to prevent cross-candidate interference
+    const candidateId = document.querySelector('input[name="index"]')?.value || 
+                       document.querySelector('input[name="chat_id"]')?.value;
+    if (!candidateId) {
+        console.warn('No candidate ID found, skipping resume processing');
+        return;
+    }
+    
+    const mode = document.querySelector('input[name="mode"]')?.value;
+    
+    if (mode === 'recommend') {
+        // For recommend: now check by resume similarity
+        get_candidate_from_resume(resumeText);
+    } else {
+        // For chat: resume was fetched because no existing record
+        // Proceed with init_chat
+        const chatId = document.querySelector('input[name="chat_id"]')?.value;
+        const name = document.querySelector('input[name="name"]')?.value;
+        const jobId = document.querySelector('input[name="job_id"]')?.value;
+        
+        if (typeof initializeNewChat === 'function') {
+            initializeNewChat(mode, chatId, null, jobId, name, resumeText);
+        }
+    }
+}
+
+
+// ============================================================================
+// Candidate-Specific Functions 
+// ============================================================================
+
+/**
+ * Reuse existing candidate record (thread_id, resume, analysis, history)
+ */
+function reuseExistingRecord(existingRecord) {
+    console.log('Reusing existing record:', existingRecord);
+    
+    // 1. Store thread_id (always available)
+    updateFormData({'thread_id': existingRecord.thread_id})
+
+    // 2. Display saved resume (for chat mode only)
+    if (existingRecord.online_resume) {
+        displayResume(existingRecord.online_resume, '✅ 使用已保存的简历');
+    }
+    // Note: For recommend mode, resume was already fetched
+    
+    // 3. Load thread history from OpenAI (not from Zilliz)
+    loadThreadHistory(existingRecord.thread_id);
+    
+    // 4. Extract analysis from thread messages (not from Zilliz)
+    getAnalysisFromThread(existingRecord.thread_id);
+}
+
+/**
+ * Display resume in the resume section
+ */
+function displayResume(resumeText, statusMessage = '') {
+    const resumeContent = document.getElementById('resume-content');
+    if (resumeContent) {
+        resumeContent.innerHTML = `
+            <textarea readonly class="w-full h-64 p-3 border rounded bg-gray-50 text-sm">${resumeText}</textarea>
+            ${statusMessage ? `<div class="mt-2 text-sm text-gray-500">${statusMessage}</div>` : ''}
+        `;
+    }
+}
+
+/**
+ * Load thread history and display it after analysis section
+ */
+function loadThreadHistory(threadId) {
+    fetch(`/web/candidates/thread-history/${threadId}`)
+        .then(response => response.text())
+        .then(html => {
+            // Insert thread history after message section
+            const messageSection = document.getElementById('message-section');
+            if (messageSection) {
+                // Remove old history if exists
+                const oldHistory = document.getElementById('thread-history-section');
+                if (oldHistory) oldHistory.remove();
+                
+                messageSection.insertAdjacentHTML('afterend', html);
+            }
+        })
+        .catch(err => console.error('Failed to load thread history:', err));
+}
+
+/**
+ * Extract analysis from thread messages and display it
+ */
+function getAnalysisFromThread(threadId) {
+    showToast('正在从对话历史提取分析...', 'info');
+    
+    fetch(`/thread/${threadId}/analysis`)
+        .then(response => response.json())
+        .then(analysis => {
+            if (analysis && analysis.overall) {
+                console.log('Extracted analysis from thread:', analysis);
+                displayAnalysis(analysis);
+            } else {
+                console.warn('No analysis found in thread, triggering new analysis...');
+                showToast('提取分析失败，正在重新分析...', 'warning');
+                startAnalysis();
+            }
+        })
+        .catch(err => {
+            console.error('Failed to get analysis from thread:', err);
+            showToast('提取分析失败，正在重新分析...', 'warning');
+            startAnalysis();
+        });
+}
+
+/**
+ * Render and display analysis
+ */
+function displayAnalysis(analysis) {
+    // Build analysis HTML manually
+    const analysisContent = document.getElementById('analysis-content');
+    if (!analysisContent) return;
+    
+    const borderline = 7;
+    
+    const analysisHtml = `
+        <div class="space-y-4">
+            <div class="grid grid-cols-4 gap-4">
+                <div class="bg-blue-50 p-4 rounded-lg">
+                    <div class="text-sm text-blue-600 font-medium">能力匹配度</div>
+                    <div class="text-2xl font-bold text-blue-700">${analysis.skill}</div>
+                </div>
+                <div class="bg-green-50 p-4 rounded-lg">
+                    <div class="text-sm text-green-600 font-medium">创业匹配度</div>
+                    <div class="text-2xl font-bold text-green-700">${analysis.startup_fit}</div>
+                </div>
+                <div class="bg-purple-50 p-4 rounded-lg">
+                    <div class="text-sm text-purple-600 font-medium">加入意愿</div>
+                    <div class="text-2xl font-bold text-purple-600">${analysis.willingness}</div>
+                </div>
+                <div class="bg-purple-50 p-4 rounded-lg">
+                    <div class="text-sm text-purple-600 font-medium">综合评分</div>
+                    <div class="text-2xl font-bold text-purple-600">${analysis.overall}</div>
+                    <span class="inline-block px-2 py-1 text-xs rounded-full ${analysis.overall >= borderline ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}">
+                        ${analysis.overall >= borderline ? '推荐' : '不推荐'}
+                    </span>
+                </div>
+            </div>
+            <div class="bg-gray-50 p-4 rounded-lg">
+                <div class="text-sm text-gray-600 font-medium mb-2">分析理由</div>
+                <div class="text-sm text-gray-700">${analysis.summary}</div>
+            </div>
+        </div>
+    `;
+    
+    analysisContent.innerHTML = analysisHtml;
+    
+    // Trigger message generation if score passes
+    if (analysis.overall >= borderline) {
+        console.log(`Score ${analysis.overall} >= ${borderline}, auto-generating message...`);
+        showToast(`评分 ${analysis.overall} 达标，正在生成消息...`, 'success');
+        generateMessage();
+    } else {
+        console.log(`Score ${analysis.overall} < ${borderline}, showing manual generate button`);
+        showToast(`评分 ${analysis.overall} 未达标，不生成消息`, 'warning');
+        showManualGenerateButton();
+    }
+}
+
+/**
+ * Start analysis (current flow)
+ */
+function startAnalysis() {
+    const analyzeFormData = new FormData(document.getElementById('candidate-context'));
+    messageFormData.append('purpose', 'ANALYZE_ACTION');
+    htmx.ajax('POST', '/web/candidates/analyze', {
+        target: '#analysis-content',
+        swap: 'innerHTML',
+        values: Object.fromEntries(analyzeFormData)
+    });
+}
+
+/**
+ * Generate message
+ */
+function generateMessage() {
+    const messageFormData = new FormData(document.getElementById('candidate-context'));
+    messageFormData.append('purpose', 'GREET_ACTION');
+    htmx.ajax('POST', '/web/candidates/generate-message', {
+        target: '#message-content',
+        swap: 'innerHTML',
+        values: Object.fromEntries(messageFormData)
+    });
+}
+
+/**
+ * Show manual generate button
+ */
+function showManualGenerateButton() {
+    const messageSection = document.getElementById('message-section');
+    if (messageSection) {
+        const mode = document.querySelector('input[name="mode"]')?.value;
+        const assistantId = document.querySelector('input[name="assistant_id"]')?.value;
+        const threadId = document.querySelector('input[name="thread_id"]')?.value;
+        const chatId = document.querySelector('input[name="chat_id"]')?.value;
+        
+        messageSection.innerHTML = `
+            <div class="text-center py-8">
+                <p class="text-gray-600 mb-4">评分未达标，是否手动生成消息？</p>
+                <button onclick="manualGenerateMessage('${mode}', '${assistantId}', '${threadId}', '${chatId}')" 
+                        class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700">
+                    🔄 手动生成消息
+                </button>
+            </div>
+        `;
+    }
+}
+
+/**
+ * Manual message generation function
+ */
+function manualGenerateMessage(mode, assistantId, threadId, chatId) {
+    console.log('Manual message generation triggered');
+    showToast('手动生成消息...', 'info');
+    
+    const messageFormData = new FormData();
+    messageFormData.append('mode', mode);
+    messageFormData.append('assistant_id', assistantId);
+    if (threadId && threadId !== 'null' && threadId !== 'undefined') {
+        messageFormData.append('thread_id', threadId);
+    }
+    if (chatId && chatId !== 'null' && chatId !== 'undefined') {
+        messageFormData.append('chat_id', chatId);
+    }
+    
+    htmx.ajax('POST', '/web/candidates/generate-message', {
+        target: '#message-content',
+        swap: 'innerHTML',
+        values: Object.fromEntries(messageFormData)
+    });
+}
+
+/**
+ * Initialize new chat (current flow)
+ */
+function initializeNewChat(mode, chatId, index, jobId, name, resumeText) {
+    showToast('初始化对话线程...', 'info');
+    
+    const formData = new FormData();
+    formData.append('mode', mode);
+    if (chatId) formData.append('chat_id', chatId);
+    if (index !== null) formData.append('index', index);
+    formData.append('job_id', jobId);
+    formData.append('name', name || (mode === 'recommend' ? '推荐候选人' : '候选人'));
+    formData.append('resume_text', resumeText);
+    
+    fetch('/web/candidates/init-chat', {
+        method: 'POST',
+        body: formData
+    }).then(response => {
+        if (!response.ok) throw new Error('Init chat failed');
+        return response.json();
+    }).then(data => {
+        console.log('Chat initialized:', data);
+        if (data.thread_id) {
+            // Add thread_id to context
+            threadInput.value = data.thread_id;
+            updateFormData({'thread_id': data.thread_id})
+        }
+        
+        // Start analysis
+        startAnalysis();
+    }).catch(err => {
+        console.error('Failed to init chat:', err);
+        showToast('初始化对话失败', 'error');
+    });
+}
+
+/**
+ * Check for existing chat candidate (chat mode)
+ */
+function checkChatCandidate(chatId) {
+    if (!chatId) {
+        console.warn('No chat_id provided for checkChatCandidate');
+        return;
+    }
+    
+    showToast('检查已有记录...', 'info');
+    
+    fetch('/candidate/' + chatId, {
+        method: 'GET'
+    })
+    .then(response => response.json())
+    .then(existingRecord => {
+        if (existingRecord) {
+            if (!existingRecord.thread_id) {
+                // ❌ NOT FOUND: Initialize new chat
+                console.log('❌ No similar record, initializing new chat...'+existingRecord);
+                showToast('no thread_id for fetched candidate: '+existingRecord, 'error');
+                throw new Error('no thread_id for fetched candidate: '+existingRecord);
+            }
+            // ✅ FOUND: Reuse everything, skip resume fetch
+            console.log('✅ Found existing chat candidate, reusing thread:', existingRecord.thread_id);
+            reuseExistingRecord(existingRecord);
+        } else {
+            // ❌ NOT FOUND: Proceed with resume fetch
+            console.log('❌ No existing chat candidate found, fetching resume...');
+            triggerResumeFetch();
+        }
+    })
+    .catch(err => {
+        console.error('Error checking chat candidate:', err);
+        triggerResumeFetch();
+    });
+}
+
+/**
+ * Check for existing recommend candidate (recommend mode, after resume fetch)
+ */
+function get_candidate_from_resume(resumeText) {
+    showToast('搜索相似简历...', 'info');
+    
+    fetch('/candidate/check-by-resume', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            resume_text: resumeText
+        })
+    })
+    .then(response => response.json())
+    .then(existingRecord => {
+        console.log('got similar candidate by resume:', existingRecord);
+        if (existingRecord && existingRecord.thread_id) {
+            // ✅ FOUND: Reuse thread
+            console.log('✅ Found similar candidate, reusing thread:', existingRecord.thread_id);
+            // change the form data
+            reuseExistingRecord(existingRecord);
+        } else {
+            // ❌ NOT FOUND: Initialize new chat
+            console.log('❌ No similar candidate found, initializing new chat...');
+            const mode = document.querySelector('input[name="mode"]')?.value;
+            const name = document.querySelector('input[name="name"]')?.value;
+            const jobId = document.querySelector('input[name="job_id"]')?.value;
+            const index = document.querySelector('input[name="index"]')?.value;
+            
+            initializeNewChat('recommend', null, index, jobId, name, resumeText);
+        }
+    })
+    .catch(err => {
+        console.error('Error checking recommend candidate:', err);
+        // Fallback: initialize new chat
+        const mode = document.querySelector('input[name="mode"]')?.value;
+        const name = document.querySelector('input[name="name"]')?.value;
+        const jobId = document.querySelector('input[name="job_id"]')?.value;
+        const index = document.querySelector('input[name="index"]')?.value;
+        
+        initializeNewChat('recommend', null, index, jobId, name, resumeText);
+    });
+}
+
+/**
+ * Trigger resume fetch (HTMX auto-trigger)
+ */
+function triggerResumeFetch() {
+    // Resume fetch is auto-triggered by hx-trigger="load" on resume-content
+    // This function is just a placeholder for the workflow
+    console.log('Resume fetch will be triggered automatically');
+}
+</script>

@@ -88,23 +88,8 @@
     <!-- Alpine.js global store -->
     <script src="/static/js/app.js"></script>
     
-    <!-- HTMX loading indicator configuration -->
+    <!-- HTMX event handlers -->
     <script>
-        // Show global loading indicator for all HTMX requests
-        document.body.addEventListener('htmx:beforeRequest', function(evt) {
-            document.getElementById('global-loading').classList.add('htmx-request');
-        });
-        
-        document.body.addEventListener('htmx:afterRequest', function(evt) {
-            document.getElementById('global-loading').classList.remove('htmx-request');
-        });
-        
-        // Also handle errors
-        document.body.addEventListener('htmx:responseError', function(evt) {
-            document.getElementById('global-loading').classList.remove('htmx-request');
-            showToast('请求失败: ' + (evt.detail.xhr.status || '网络错误'), 'error');
-        });
-        
         // Handle custom HX-Trigger events for toast notifications
         document.body.addEventListener('showToast', function(evt) {
             if (evt.detail && evt.detail.message) {

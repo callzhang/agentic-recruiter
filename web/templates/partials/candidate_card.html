@@ -1,29 +1,54 @@
 <!-- Candidate card for list view -->
-<div class="candidate-card p-4 border rounded-lg cursor-pointer bg-white hover:bg-blue-50 transition {{ 'bg-blue-50 border-blue-500' if selected else '' }}"
-     hx-get="/web/candidates/detail?mode={{ candidate.mode or 'chat' }}{% if candidate.chat_id %}&chat_id={{ candidate.chat_id }}{% endif %}{% if candidate.index is defined %}&index={{ candidate.index }}{% endif %}&name={{ candidate.name | urlencode }}&job_title={{ (candidate.job_title or candidate.job_applied or '') | urlencode }}&text={{ (candidate.text or candidate.last_message or '') | urlencode }}{% if candidate.stage %}&stage={{ candidate.stage }}{% endif %}{% if candidate.viewed is defined %}&viewed={{ candidate.viewed }}{% endif %}{% if candidate.greeted is defined %}&greeted={{ candidate.greeted }}{% endif %}"
-     hx-target="#detail-pane"
-     hx-include="#job-selector,#assistant-selector">
-    <div class="flex items-start space-x-3">
-        <div class="flex-shrink-0">
-            <div class="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center">
-                <span class="text-lg">👤</span>
-            </div>
-        </div>
-        <div class="flex-1 min-w-0">
-            <h3 class="font-bold text-gray-900 truncate">{{ candidate.name or '未知' }}</h3>
-            <p class="text-sm text-gray-600 truncate">{{ candidate.job_title or candidate.job_applied or '未指定岗位' }}</p>
-            <p class="text-xs text-gray-500 mt-1 line-clamp-2">{{ candidate.text or candidate.last_message or '暂无消息' }}</p>
-            {% if candidate.stage %}
-            <span class="inline-block mt-2 px-2 py-1 text-xs rounded-full 
-                {% if candidate.stage == 'PASS' %}bg-gray-200 text-gray-700
-                {% elif candidate.stage == 'GREET' %}bg-green-200 text-green-700
-                {% elif candidate.stage == 'SEEK' %}bg-yellow-200 text-yellow-700
-                {% elif candidate.stage == 'CONTACT' %}bg-blue-200 text-blue-700
-                {% else %}bg-gray-100 text-gray-600{% endif %}">
-                {{ candidate.stage }}
-            </span>
-            {% endif %}
-        </div>
+<div
+  class="candidate-card p-4 border rounded-lg cursor-pointer bg-white hover:bg-blue-50 transition"
+  data-candidate-id="{% if candidate.chat_id %}{{ candidate.chat_id }}{% else %}recommend_{{ candidate.index }}{% endif %}"
+    hx-get="
+        /web/candidates/detail?mode={{ candidate.mode or 'chat' }}
+        {%- if candidate.chat_id %}&chat_id={{ candidate.chat_id }}{% endif %}
+        {%- if candidate.index is defined %}&index={{ candidate.index }}{% endif %}
+        &name={{ candidate.name | urlencode }}
+        &job_title={{ candidate.job_title | urlencode }}
+        &text={{ (candidate.text or candidate.last_message or '') | urlencode }}
+        {%- if candidate.stage %}&stage={{ candidate.stage }}{% endif %}
+        {% if candidate.viewed is defined %}
+        &viewed={{ candidate.viewed }}{% endif %}
+        {%- if candidate.greeted is defined %}&greeted={{ candidate.greeted }}{% endif %}"
+    hx-target="#detail-pane"
+    hx-include="#job-selector,#assistant-selector"
+>
+  <div class="flex items-start space-x-3">
+    <div class="flex-shrink-0">
+      <div
+        class="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center"
+      >
+        <span class="text-lg">👤</span>
+      </div>
     </div>
+    <div class="flex-1 min-w-0">
+      <h3 class="font-bold text-gray-900 truncate">
+        {{ candidate.name or '未知' }}
+      </h3>
+      <p class="text-sm text-gray-600 truncate">
+        {{ candidate.job_title or candidate.job_applied or '未指定岗位' }}
+      </p>
+      <p class="text-xs text-gray-500 mt-1 line-clamp-2">
+        {{ candidate.text or candidate.last_message or '暂无消息' }}
+      </p>
+      <div class="mt-2 flex flex-wrap gap-1">
+        {% if candidate.viewed %}
+        <span
+          class="inline-block px-2 py-1 text-xs rounded-full bg-purple-100 text-purple-700"
+        >
+          👁️ 已查看
+        </span>
+        {% endif %} {% if candidate.greeted %}
+        <span
+          class="inline-block px-2 py-1 text-xs rounded-full bg-green-100 text-green-700"
+        >
+          👋 已打招呼
+        </span>
+        {% endif %}
+      </div>
+    </div>
+  </div>
 </div>
-

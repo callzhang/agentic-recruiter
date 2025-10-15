@@ -1,0 +1,26 @@
+<div id="thread-history-section" class="bg-white rounded-lg border shadow-sm mt-4">
+    <div class="p-4 border-b bg-gray-50">
+        <h3 class="font-bold text-gray-800">🧵 对话历史 (Thread: {{ thread_id[:12] }}...)</h3>
+    </div>
+    <div class="p-4 space-y-3 max-h-96 overflow-y-auto">
+        {% if messages %}
+            {% for msg in messages %}
+            <div class="flex {{ 'justify-end' if msg.role == 'user' else 'justify-start' }}">
+                <div class="max-w-[80%] {{ 'bg-blue-100' if msg.role == 'user' else 'bg-gray-100' }} rounded-lg p-3">
+                    <div class="text-xs text-gray-500 mb-1">
+                        {% if msg.role == 'user' %}
+                            👤 User
+                        {% else %}
+                            🤖 Assistant
+                        {% endif %}
+                    </div>
+                    <div class="text-sm whitespace-pre-wrap">{{ msg.content }}</div>
+                </div>
+            </div>
+            {% endfor %}
+        {% else %}
+            <div class="text-center text-gray-500 py-8">暂无对话历史</div>
+        {% endif %}
+    </div>
+</div>
+
