@@ -67,10 +67,11 @@ async def list_jobs_simple(job_title: str = Query(None, description="Currently s
     
     html = ""
     for idx, job in enumerate(jobs):
+        job_id = job.get("id", "")
         position = job.get("position", "未知")
         # Auto-select first job if no job_title provided
         selected = ' selected' if (job_title and position == job_title) or (not job_title and idx == 0) else ''
-        html += f'<option value="{position}"{selected}>{position}</option>'
+        html += f'<option value="{job_id}" data-title="{position}"{selected}>{position}</option>'
     
     return HTMLResponse(content=html)
 

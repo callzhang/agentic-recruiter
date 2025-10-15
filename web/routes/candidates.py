@@ -101,6 +101,7 @@ async def get_candidate_list(
     chat_type: str = Query("新招呼", description="Chat type for chat mode"),
     job_title: str = Query(..., description="Job title filter (required)"),
     limit: int = Query(30, ge=5, le=100),
+    job_id: str = Query(..., description="Job id filter (required)"),
 ):
     """Get candidate list as HTML fragments."""
     if mode == "chat":
@@ -109,7 +110,8 @@ async def get_candidate_list(
             "limit": limit,
             "tab": chat_type,
             "status": chat_type,
-            "job_title": job_title
+            "job_title": job_title,
+            "job_id": job_id
         })
         
         if not ok or not isinstance(data, list):
@@ -120,10 +122,10 @@ async def get_candidate_list(
         candidates = data
     else:
         # Fetch recommended candidates (no limit - returns all from browser page)
-        # Longer timeout as this requires browser navigation
-        ok, data = await call_api("GET", "/recommend/candidates", timeout=20.0, params={
-            "job_title": job_title
-            # No limit parameter - returns all candidates on the page
+        # Longer timeout as this requires browser navigation and resume extraction
+        ok, data = await call_api("GET", "/recommend/candidates", timeout=60.0, params={
+            "job_title": job_title,
+            "job_id": job_id
         })
         
         if not ok or not isinstance(data, list):
@@ -133,16 +135,16 @@ async def get_candidate_list(
         
         candidates = data
     
+    # Return empty list if no candidates, let frontend handle the empty state
     if not candidates:
-        return HTMLResponse(
-            content='<div class="text-center text-gray-500 py-12">暂无候选人数据</div>'
-        )
+        candidates = []
     
     # Render candidate cards
     html = ""
-    for candidate in candidates:
+    for i,candidate in enumerate(candidates):
         # Add mode to candidate data for detail view routing
         candidate["mode"] = mode
+        candidate["index"] = i
         html += templates.get_template("partials/candidate_card.html").render({
             "candidate": candidate,
             "selected": False
@@ -162,13 +164,13 @@ async def get_candidate_detail(
     chat_id: Optional[str] = Query(None, description="Chat ID for chat candidates"),
     index: Optional[int] = Query(None, description="Index for recommend candidates"),
     name: str = Query(None, description="Candidate name from list"),
-    job_title: str = Query(None, description="Job title from list"),
+    job_title: str = Query(..., description="Job title from list"),
     text: str = Query(None, description="Last message/text from list"),
     stage: str = Query(None, description="Candidate stage"),
     viewed: bool = Query(None, description="Viewed status (recommend only)"),
     greeted: bool = Query(None, description="Greeted status (recommend only)"),
-    assistant_id: str = Query(None, description="Selected assistant ID"),
-    job_id: str = Query(None, description="Selected job ID"),
+    assistant_id: str = Query(..., description="Selected assistant ID"),
+    job_id: str = Query(..., description="Selected job ID"),
 ):
     """Get candidate detail view."""
     # For recommend candidates, use data passed from the card
@@ -205,24 +207,12 @@ async def get_candidate_detail(
                 # No data passed, fallback to minimal data
                 candidate_data = {"chat_id": chat_id, "mode": "chat"}
     
-    # Get default assistant and job if not provided
-    if not assistant_id:
-        ok, assistants = await call_api("GET", "/assistant/list")
-        assistant_id = assistants[0]["id"] if ok and assistants else None
-    
-    if not job_id:
-        # Get first job ID from jobs.yaml
-        try:
-            jobs = load_jobs()
-            job_id = jobs[0]["id"] if jobs else None
-        except:
-            job_id = None
-    
     return templates.TemplateResponse("partials/candidate_detail.html", {
         "request": request,
         "candidate": candidate_data,
         "assistant_id": assistant_id,
         "job_id": job_id,
+        "job_title": job_title,  # Use job_title from selector, not from candidate data
         "generated_message": None
     })
 
@@ -313,6 +303,7 @@ async def analyze_candidate(
     chat_id: Optional[str] = Form(None),
     thread_id: Optional[str] = Form(None),
     assistant_id: str = Form(...),
+    resume_text: Optional[str] = Form(None),
 ):
     """Analyze candidate and return updated analysis section."""
     
@@ -408,11 +399,29 @@ async def generate_message(
             content=f'<div class="text-red-500 p-4">生成消息失败: {message}</div>'
         )
     
-    # Return textarea with generated message
+    # Return textarea with generated message and send button
     html = f'''
-    <div class="mb-4">
-        <label class="block text-sm font-medium text-gray-700 mb-2">生成的消息</label>
-        <textarea id="message-text" name="message" class="w-full h-32 p-4 border rounded-lg">{message}</textarea>
+    <div class="space-y-4">
+        <div>
+            <label class="block text-sm font-medium text-gray-700 mb-2">生成的消息</label>
+            <textarea id="message-text" name="message" class="w-full h-32 p-4 border rounded-lg">{message}</textarea>
+        </div>
+        <div class="flex space-x-2">
+            <button hx-post="/web/candidates/send"
+                    hx-include="#candidate-context,#message-text"
+                    hx-target="body"
+                    hx-swap="none"
+                    class="flex-1 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700">
+                📤 发送消息
+            </button>
+            <button hx-post="/web/candidates/pass"
+                    hx-include="#candidate-context"
+                    hx-target="body"
+                    hx-swap="none"
+                    class="flex-1 px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300">
+                ❌ PASS
+            </button>
+        </div>
     </div>
     '''
     
@@ -421,31 +430,46 @@ async def generate_message(
 
 @router.post("/send", response_class=HTMLResponse)
 async def send_message(
-    chat_id: str = Form(...),
+    mode: str = Form(...),
+    chat_id: Optional[str] = Form(None),
+    index: Optional[int] = Form(None),
     message: str = Form(...),
 ):
     """Send message to candidate."""
     if not message.strip():
         return HTMLResponse(
-            content='<div class="text-yellow-600 p-4">消息内容不能为空</div>',
-            status_code=400
+            content='',
+            status_code=200,
+            headers={"HX-Trigger": '{"showToast": {"message": "消息内容不能为空", "type": "warning"}}'}
         )
     
-    ok, result = await call_api("POST", f"/chat/{chat_id}/send", json={"message": message})
+    # Handle different modes
+    if mode == "recommend" and index is not None:
+        # For recommend candidates, use greet endpoint
+        ok, result = await call_api("POST", f"/recommend/candidate/{index}/greet", json={"message": message})
+    elif chat_id:
+        # For chat candidates, use send endpoint
+        ok, result = await call_api("POST", f"/chat/{chat_id}/send", json={"message": message})
+    else:
+        return HTMLResponse(
+            content='',
+            status_code=400,
+            headers={"HX-Trigger": '{"showToast": {"message": "缺少候选人ID", "type": "error"}}'}
+        )
     
     if ok and result is True:
         return HTMLResponse(
-            content='<div class="text-green-600 p-4">✅ 消息发送成功</div>',
+            content='',
+            status_code=200,
             headers={
-                "HX-Trigger": "messagesSent",
-                "HX-Trigger-After-Settle": '{"showToast": {"message": "消息发送成功", "type": "success"}}'
+                "HX-Trigger": json.dumps({"showToast": {"message": "消息发送成功！", "type": "success"}}),
             }
         )
     else:
         return HTMLResponse(
-            content=f'<div class="text-red-500 p-4">❌ 发送失败: {result}</div>',
+            content='',
             status_code=500,
-            headers={"HX-Trigger": '{"showToast": {"message": "消息发送失败", "type": "error"}}'}
+            headers={"HX-Trigger": json.dumps({"showToast": {"message": f"发送失败: {result}", "type": "error"}})}
         )
 
 
@@ -585,5 +609,48 @@ async def next_candidate(
     return HTMLResponse(
         content='<div class="text-center text-gray-500 py-24">请从列表中选择下一个候选人</div>'
     )
+
+
+# ============================================================================
+# Record Reuse Endpoints
+# ============================================================================
+
+
+
+@router.get("/thread-history/{thread_id}", response_class=HTMLResponse)
+async def get_thread_history(
+    request: Request,
+    thread_id: str
+):
+    """Get thread history HTML."""
+    ok, messages = await call_api("GET", f"/thread/{thread_id}/messages")
+    
+    if not ok:
+        return HTMLResponse(content='<div class="text-red-500">获取历史失败</div>')
+    
+    # Render thread history template
+    return templates.TemplateResponse("partials/thread_history.html", {
+        "request": request,
+        "messages": messages,
+        "thread_id": thread_id
+    })
+
+
+@router.post("/render-analysis", response_class=HTMLResponse)
+async def render_analysis(
+    request: Request,
+    analysis: dict = Form(...)
+):
+    """Render analysis template."""
+    # Parse JSON if it's a string
+    if isinstance(analysis, str):
+        import json
+        analysis = json.loads(analysis)
+    
+    candidate_data = {"analysis": analysis}
+    return templates.TemplateResponse("partials/analysis_result.html", {
+        "request": request,
+        "candidate": candidate_data
+    })
 
 
