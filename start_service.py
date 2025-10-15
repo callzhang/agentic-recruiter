@@ -295,7 +295,7 @@ def start_service(*, scheduler_options: Optional[Dict[str, Any]] | None = None):
                 "docs/**",
                 "examples/**",
                 "wasm/**",
-                "web/**",  # Exclude web UI files to prevent unnecessary reloads
+                "web/templates/**",  # Exclude web UI files to prevent unnecessary reloads
                 "streamlit_shared.py",
                 "boss_app.py",
                 "start_service.py",

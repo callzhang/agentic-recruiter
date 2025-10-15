@@ -30,14 +30,12 @@ class BRDWorkScheduler:
         enable_chat_processing: Optional[bool] = None,
         enable_followup: Optional[bool] = None,
         assistant: Optional["AssistantActions"] = None,
-        overall_threshold: Optional[float] = None,
-        threshold_greet: Optional[float] = None,
+        threshold_seek: Optional[float] = None,
         threshold_borderline: Optional[float] = None,
         base_url: str = None,
     ) -> None:
         self.recommend_limit = recommend_limit
         self.assistant = assistant
-        self.overall_threshold = overall_threshold or 9.0
         self.dingtalk_webhook = settings.DINGTALK_URL
         self.base_url = base_url or settings.BOSS_SERVICE_BASE_URL
 
@@ -57,16 +55,16 @@ class BRDWorkScheduler:
         if not self.job_snapshot:
             raise ValueError("Job information must be provided as parameter")
 
-        self.threshold_greet = threshold_greet or 0.7
-        self.threshold_borderline = threshold_borderline or 0.6
+        self.threshold_seek = threshold_seek or 9.0
+        self.threshold_borderline = threshold_borderline or 7.0
         self.report_interval = 604800
         self._status_message = "调度器已启动，等待执行..."
 
         logger.debug(
             "BRD scheduler initialised: position=%s, greet>=%.2f, overall>=%.1f, inbound=%s, recommend=%s, followup=%s",
             self.job_snapshot.get("position", "AI岗位"),
-            self.threshold_greet,
-            self.overall_threshold,
+            self.threshold_seek,
+            self.threshold_borderline,
             self.enable_chat_processing,
             self.enable_recommend,
             self.enable_followup,

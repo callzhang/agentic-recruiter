@@ -479,16 +479,32 @@ class BossServiceAsync:
         @self.app.get("/candidate/{chat_id}")
         def get_candidate_api(chat_id: str, fields: Optional[List[str]] = ["*"]):
             """Get candidate information from the store."""
-            return candidate_store.get_candidate_by_id(chat_id, fields)
+            return candidate_store.get_candidate_by_id(chat_id=chat_id, fields=fields)
+
+        @self.app.post("/candidate/check-by-resume")
+        def check_candidate_by_resume_api(resume_text: str = Body(..., embed=True)):
+            """Check if candidate exists by resume similarity."""
+            return assistant_actions.get_candidate_by_resume(
+                chat_id=None,
+                candidate_resume=resume_text
+            )
 
         @self.app.post("/thread/init-chat")
         async def init_chat_api(data: dict = Body(...)):
             """Initialize chat thread."""
             return assistant_actions.init_chat(**data)
 
-        @self.app.get('thread/{thread_id}/messages')
+        @self.app.get("/thread/{thread_id}/messages")
         def get_thread_messages_api(thread_id: str):
-            return assistant_actions.get_thread_messages(thread_id)
+            """Get all messages from a thread."""
+            from src.assistant_utils import get_thread_messages
+            return get_thread_messages(thread_id)
+
+        @self.app.get("/thread/{thread_id}/analysis")
+        def get_thread_analysis_api(thread_id: str):
+            """Get analysis from thread messages."""
+            from src.assistant_utils import get_analysis_from_thread
+            return get_analysis_from_thread(thread_id)
 
         ##------ OpenAI API ------
         @self.app.get("/assistant/list")

@@ -51,31 +51,21 @@ async def find_chat_item(page, chat_id: str):
 async def close_overlay_dialogs(page, timeout_ms: int = 1000) -> bool:
     """Close any overlay dialogs that might be blocking the page."""
     btn = page.locator(CLOSE_BTN)
-    try:
-        if await btn.count() > 0:
-            await btn.click(timeout=timeout_ms)
-            return True
-    except Exception:
-        pass
+    if await btn.count() > 0:
+        await btn.click(timeout=timeout_ms)
+        return True
 
-    try:
-        overlay = await page.wait_for_selector(IFRAME_OVERLAY_SELECTOR, timeout=timeout_ms)
-    except Exception:
-        return False
-
-    try:
-        frame = await overlay.content_frame()
-    except Exception:
-        frame = None
-
-    if frame is None:
-        return False
-
-    try:
+    overlay = page.locator(IFRAME_OVERLAY_SELECTOR)
+    if await overlay.count() > 0:
+        frame = overlay.content_frame
         iframe_btn = frame.locator(CLOSE_BTN)
         if await iframe_btn.count() > 0:
             await iframe_btn.click(timeout=timeout_ms)
             return True
-    except Exception:
-        return False
+
+    # close recommendation page's popup dialog
+    close_btn = page.locator("div.iboss-close").first
+    if await close_btn.count() > 0:
+        await close_btn.click(timeout=1000)
+        return True
     return False
