@@ -1,5 +1,6 @@
 # from __future__ import annotations
 import json
+import re
 import time
 import logging
 from functools import lru_cache
@@ -11,7 +12,7 @@ from openai import OpenAI
 _openai_client = OpenAI(api_key=settings.OPENAI_API_KEY)
 
 
-def get_thread_messages(thread_id: str) -> List[Dict[str, str]]:
+def get_thread_messages(thread_id: str) -> Dict[str, Any]:
     """List all messages in a thread, paginated.
     1.	Fetch the first page (since after is None initially).
     2.	Collect all messages from that batch.
@@ -50,21 +51,37 @@ def get_thread_messages(thread_id: str) -> List[Dict[str, str]]:
         else:
             break
 
-    return messages
+    objects = get_objects_from_thread_messages(messages)
+
+    return {
+        "messages": messages,
+        "analysis": objects.get("analysis"),
+        "action": objects.get("action")
+    }
 
 
-def get_analysis_from_thread(thread_id: str) -> Dict[str, Any]:
+def get_objects_from_thread_messages(messages: list) -> Dict[str, Any]:
     """Get analysis from thread."""
-    messages = get_thread_messages(thread_id)
+    objects = {}
     for message in messages:
         if message["role"] == "assistant":
             # extract json from message["content"] using regex
-            if message["content"][0] == '{':
-                json_obj = json.loads(message["content"])
-                if json_obj.get("skill") and json_obj.get('overall'):
-                    return json_obj
-    return None
+            json_obj = extract_json_from_message(message["content"])
+            if json_obj.get("skill"):
+                objects["analysis"] = json_obj
+            elif json_obj.get("action"):
+                objects["action"] = json_obj
+    return objects
 
+def extract_json_from_message(message: str) -> Dict[str, Any]:
+    """Extract JSON from message."""
+    match = re.search(r'{[\s\S]*?}', message)  # match JSON-like block
+    if match:
+        data = json.loads(match.group(0))
+        return data
+    else:
+        logger.error("No JSON found in message: %s", message)
+        return None
 
 def _normalise_history(chat_history: List[Dict[str, Any]]) -> List[Dict[str, str]]:
     """Convert chat history to thread message format."""

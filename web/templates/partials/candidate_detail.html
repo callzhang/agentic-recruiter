@@ -29,7 +29,7 @@
         <input type="hidden" name="assistant_id" value="{{ assistant_id }}">
         <input type="hidden" name="job_id" value="{{ job_id }}">
         <input type="hidden" name="thread_id" value="{{ candidate.thread_id }}">
-        <input type="hidden" name="index" value="{{ candidate.index or candidate.id }}">
+        <input type="hidden" name="index" value="{{ candidate.index }}">
     </div>
     
     <!-- 1. Resume Section -->
@@ -145,6 +145,10 @@
 
 <!-- Mode-specific record check logic -->
 <script>
+
+dataForm = document.getElementById('candidate-context');
+console.log('candidate-detail.html loaded', dataForm);
+
 (function() {
     const mode = document.querySelector('input[name="mode"]')?.value;
     const chatId = document.querySelector('input[name="chat_id"]')?.value;
@@ -226,19 +230,19 @@ function reuseExistingRecord(existingRecord) {
     console.log('Reusing existing record:', existingRecord);
     
     // 1. Store thread_id (always available)
-    updateFormData({'thread_id': existingRecord.thread_id})
+    updateFormData(existingRecord)
 
     // 2. Display saved resume (for chat mode only)
-    if (existingRecord.online_resume) {
-        displayResume(existingRecord.online_resume, '✅ 使用已保存的简历');
+    const mode = document.querySelector('input[name="mode"]')?.value;
+    if(mode == 'chat') {
+        if (existingRecord.online_resume) {
+                displayResume(existingRecord.online_resume, '✅ 使用已保存的简历');
+        }
     }
     // Note: For recommend mode, resume was already fetched
     
-    // 3. Load thread history from OpenAI (not from Zilliz)
-    loadThreadHistory(existingRecord.thread_id);
-    
-    // 4. Extract analysis from thread messages (not from Zilliz)
-    getAnalysisFromThread(existingRecord.thread_id);
+    // 3. Load all thread data in one call (messages, analysis, action)
+    loadThreadData(existingRecord.thread_id);
 }
 
 /**
@@ -255,49 +259,88 @@ function displayResume(resumeText, statusMessage = '') {
 }
 
 /**
- * Load thread history and display it after analysis section
+ * Load thread data (messages, analysis, action) in one call
  */
-function loadThreadHistory(threadId) {
-    fetch(`/web/candidates/thread-history/${threadId}`)
-        .then(response => response.text())
-        .then(html => {
-            // Insert thread history after message section
-            const messageSection = document.getElementById('message-section');
-            if (messageSection) {
-                // Remove old history if exists
-                const oldHistory = document.getElementById('thread-history-section');
-                if (oldHistory) oldHistory.remove();
-                
-                messageSection.insertAdjacentHTML('afterend', html);
-            }
-        })
-        .catch(err => console.error('Failed to load thread history:', err));
-}
-
-/**
- * Extract analysis from thread messages and display it
- */
-function getAnalysisFromThread(threadId) {
-    showToast('正在从对话历史提取分析...', 'info');
+function loadThreadData(threadId) {
+    showToast('正在加载对话数据...', 'info');
     
-    fetch(`/thread/${threadId}/analysis`)
+    fetch(`/thread/${threadId}/messages`)
         .then(response => response.json())
-        .then(analysis => {
-            if (analysis && analysis.overall) {
-                console.log('Extracted analysis from thread:', analysis);
-                displayAnalysis(analysis);
+        .then(data => {
+            console.log('Thread data loaded:', data);
+            
+            // 1. Display messages if available
+            if (data.messages && data.messages.length > 0) {
+                displayThreadHistory(data.messages);
+            }
+            
+            // 2. Display analysis if available
+            if (data.analysis && data.analysis.overall) {
+                console.log('Extracted analysis from thread:', data.analysis);
+                displayAnalysis(data.analysis);
             } else {
                 console.warn('No analysis found in thread, triggering new analysis...');
                 showToast('提取分析失败，正在重新分析...', 'warning');
                 startAnalysis();
             }
+            
+            // 3. Handle action if available
+            if (data.action) {
+                console.log('Action found in thread:', data.action);
+                // Handle action as needed
+            }
         })
         .catch(err => {
-            console.error('Failed to get analysis from thread:', err);
-            showToast('提取分析失败，正在重新分析...', 'warning');
-            startAnalysis();
+            console.error('Failed to load thread data:', err);
+            showToast('加载对话数据失败', 'error');
         });
 }
+
+/**
+ * Display thread history from messages array
+ */
+function displayThreadHistory(messages) {
+    // Convert messages to HTML and display
+    const messageSection = document.getElementById('message-section');
+    if (messageSection) {
+        // Remove old history if exists
+        const oldHistory = document.getElementById('thread-history-section');
+        if (oldHistory) oldHistory.remove();
+        
+        // Create thread history HTML
+        const historyHtml = createThreadHistoryHtml(messages);
+        messageSection.insertAdjacentHTML('afterend', historyHtml);
+    }
+}
+
+/**
+ * Create HTML for thread history from messages
+ */
+function createThreadHistoryHtml(messages) {
+    let html = `
+    <div id="thread-history-section" class="mt-6 p-4 bg-gray-50 rounded-lg">
+        <h3 class="text-lg font-semibold mb-3">对话历史</h3>
+        <div class="space-y-3">
+    `;
+    
+    messages.forEach(message => {
+        const roleClass = message.role === 'assistant' ? 'bg-blue-100' : 'bg-gray-100';
+        html += `
+            <div class="p-3 rounded ${roleClass}">
+                <div class="font-medium text-sm mb-1">${message.role === 'assistant' ? '助手' : '用户'}</div>
+                <div class="text-sm">${message.content}</div>
+            </div>
+        `;
+    });
+    
+    html += `
+        </div>
+    </div>
+    `;
+    
+    return html;
+}
+
 
 /**
  * Render and display analysis
@@ -357,12 +400,11 @@ function displayAnalysis(analysis) {
  * Start analysis (current flow)
  */
 function startAnalysis() {
-    const analyzeFormData = new FormData(document.getElementById('candidate-context'));
-    messageFormData.append('purpose', 'ANALYZE_ACTION');
+    const messageFormData = new FormData(document.getElementById('candidate-context'));
     htmx.ajax('POST', '/web/candidates/analyze', {
         target: '#analysis-content',
         swap: 'innerHTML',
-        values: Object.fromEntries(analyzeFormData)
+        values: Object.fromEntries(messageFormData)
     });
 }
 
@@ -450,6 +492,7 @@ function initializeNewChat(mode, chatId, index, jobId, name, resumeText) {
         console.log('Chat initialized:', data);
         if (data.thread_id) {
             // Add thread_id to context
+            let threadInput = document.querySelector('input[name="thread_id"]');
             threadInput.value = data.thread_id;
             updateFormData({'thread_id': data.thread_id})
         }
