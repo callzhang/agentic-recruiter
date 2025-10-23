@@ -1,6 +1,8 @@
 # from __future__ import annotations
 import json
-import re
+try: import regex as re
+except: import re
+from numba import njit
 import time
 import logging
 from functools import lru_cache
@@ -75,13 +77,44 @@ def get_objects_from_thread_messages(messages: list) -> Dict[str, Any]:
 
 def extract_json_from_message(message: str) -> Dict[str, Any]:
     """Extract JSON from message."""
-    match = re.search(r'{[\s\S]*?}', message)  # match JSON-like block
+    match = extract_json_block(message)
     if match:
-        data = json.loads(match.group(0))
+        try:
+            match = strip_comments(match)
+            data = json5.loads(match)
+        except Exception as e:
+            logger.error("Error parsing JSON from message: %s", e)
+            return {}
         return data
-    else:
-        logger.error("No JSON found in message: %s", message)
+    return {}
+
+
+def strip_comments(text: str) -> str:
+    """Remove both # and // style comments."""
+    # Remove single-line // comments
+    text = re.sub(r"//.*", "", text)
+    # Remove Python-style # comments (but not in quotes)
+    text = re.sub(r"(?<!['\"])\s#.*", "", text)
+    return text
+
+@njit
+def extract_json_block(text: str) -> str | None:
+    """Greedy search for first {...} block, with brace counting."""
+    start = text.find("{")
+    if start == -1:
         return None
+
+    stack = 0
+    for i in range(start, len(text)):
+        if text[i] == "{":
+            stack += 1
+        elif text[i] == "}":
+            stack -= 1
+            if stack == 0:
+                return text[start:i + 1]
+
+    # If we reached end without full closure, return what we have (partial)
+    return text[start:]
 
 def _normalise_history(chat_history: List[Dict[str, Any]]) -> List[Dict[str, str]]:
     """Convert chat history to thread message format."""

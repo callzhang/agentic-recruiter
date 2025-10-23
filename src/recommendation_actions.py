@@ -91,45 +91,35 @@ async def _prepare_recommendation_page(page: Page, job_title: str = None, *, wai
     return frame
 
 
-async def select_recommend_job_action(frame: Frame, job_title: str) -> Dict[str, Any]:
+async def list_recommended_candidates_action(page: Page, *, limit: int = 40, job_title: str, new_only: bool) -> List[Dict[str, Any]]:
     """
-    DEPRECATED: Use _prepare_recommendation_page(page, job_title=job_title) instead.
-    
-    Select job from dropdown. Returns dict with 'selected_job' and 'available_jobs'. Raises ValueError on failure.
+    List recommended candidates from the Boss直聘推荐页面.
+
+    Navigates to the recommendation iframe and optionally filters by the specified job title. Extracts structured data for each candidate card found, up to the provided limit.
+
+    Args:
+        page (Page): Playwright page object.
+        limit (int, optional): Maximum number of candidates to retrieve. Defaults to 20.
+        job_title (str, optional): Job title to filter candidates by. If provided, the recommendation list will be filtered accordingly.
+        new_only (bool): If True, only include new candidates (not yet viewed/greeted). *(Not currently implemented; reserved for future)*
+
+    Returns:
+        List[Dict[str, Any]]: List of dictionaries, each representing a recommended candidate with standardized fields:
+            - index: Position in the current list
+            - chat_id: None (no chat established yet)
+            - name: Candidate name (str)
+            - job_title: Job title used for filter (str)
+            - text: Resume snippet/summary (str)
+            - viewed: Whether the candidate card has already been viewed (bool)
+            - greeted: Whether greeted (bool)
+            - stage: "GREET" if greeted, else None
+
+    Raises:
+        ValueError: If no candidates are found on the recommendation page, or if page navigation fails.
+
+    Usage:
+        Call this after logging in and loading the Boss直聘推荐页面. Use returned candidate indices for downstream actions (e.g., resume view or greeting).
     """
-    job_options = frame.locator(JOB_SELECTOR)
-    count = await job_options.count()
-    if count == 0:
-        raise ValueError("未找到职位下拉菜单")
-
-    dropdown_label = frame.locator(JOB_POPOVER_SELECTOR).first
-    current_selected_job = await dropdown_label.inner_text(timeout=500)
-    available_jobs: List[str] = []
-    for index in range(count):
-        option = job_options.nth(index)
-        label = (await option.inner_text(timeout=500)).strip()
-        available_jobs.append(label)
-        if job_title in label:
-            await frame.locator(JOB_POPOVER_SELECTOR).click(timeout=1000)
-            await option.click(timeout=1000)
-            break
-    else:
-        raise ValueError(f"未找到包含'{job_title}'的职位。可用职位: {', '.join(available_jobs)}")
-
-    for _ in range(15):
-        current_selected_job = await dropdown_label.inner_text(timeout=500)
-        if job_title in current_selected_job:
-            return {
-                "selected_job": current_selected_job,
-                "available_jobs": available_jobs,
-            }
-        await asyncio.sleep(0.2)
-
-    raise ValueError(f"职位选择可能失败。当前选择: {current_selected_job}")
-
-
-async def list_recommended_candidates_action(page: Page, *, limit: int = 20, job_title: str = None) -> List[Dict[str, Any]]:
-    """List recommended candidates. Returns list of candidate dicts. Raises ValueError if no candidates found."""
     frame = await _prepare_recommendation_page(page, job_title=job_title)
     candidates: List[Dict[str, Any]] = []
     cards = frame.locator(CANDIDATE_CARD_SELECTOR)
@@ -147,16 +137,17 @@ async def list_recommended_candidates_action(page: Page, *, limit: int = 20, job
         text = (await card.inner_text()).replace(name, "")
         
         # Create candidate dict with standardized field names for web UI
-        candidates.append({
-            "index": index,  # Position in the current list
-            "chat_id": None,  # Recommend candidates don't have a chat_id yet
-            "name": name,
-            "job_title": job_title,  # Standardized field name
-            "text": text,
-            "viewed": viewed,
-            "greeted": greeted,
-            "stage": "GREET" if greeted else None  # Map greeted status to stage
-        })
+        if not new_only or not viewed:
+            candidates.append({
+                "index": index,  # Position in the current list
+                "chat_id": None,  # Recommend candidates don't have a chat_id yet
+                "name": name,
+                "job_title": job_title,  # Standardized field name
+                "text": text,
+                "viewed": viewed,
+                "greeted": greeted,
+                "stage": "GREET" if greeted else None  # Map greeted status to stage
+            })
     
     logger.info("成功获取 %d 个推荐候选人", len(candidates))
     return candidates
@@ -204,6 +195,7 @@ async def greet_recommend_candidate_action(page: Page, index: int, message: str)
         "button:has-text('打招呼')",
         "span:has-text('打招呼')",
     ]
+    chat_selectors = "button:has-text('继续沟通')"
     greeted = False
     for selector in greet_selectors:
         target = card.locator(selector).first
@@ -212,10 +204,13 @@ async def greet_recommend_candidate_action(page: Page, index: int, message: str)
             greeted = True
             break
     if not greeted:
-        raise ValueError("未找到打招呼按钮")
+        if await card.locator(chat_selectors).count() > 0:
+            pass
+        else:
+            raise ValueError("未找到打招呼按钮")
 
     if message:
-        chat_btn = card.locator("button:has-text('继续沟通')").first
+        chat_btn = card.locator(chat_selectors).first
         if await chat_btn.count() > 0:
             await chat_btn.click(timeout=1000)
         input_box = page.locator("div.conversation-bd-content").first
@@ -236,13 +231,45 @@ async def greet_recommend_candidate_action(page: Page, index: int, message: str)
     return True
 
 
-async def skip_recommend_candidate_action(page: Page, index: int) -> bool:
-    """Placeholder for skipping a recommendation card without interacting.
-
-    # TODO: 实现推荐卡片跳过/标记逻辑
+async def discard_recommend_candidate_action(page: Page, index: int, reason: str = "过往经历不符") -> bool:
+    """Discard a recommendation candidate.
+    Args:
+        page: The Playwright Page instance.
+        index: The index of the candidate to discard.
+        reason: The reason for discarding the candidate. Can be one of the following:
+            - 求职期望不符
+            - 活跃度低
+            - 不考虑异地牛人
+            - 学历不符
+            - 过往经历不符
+            - 年龄不符
+            - 工作年限不符
+            - 其他原因
+    Returns:
+        True if the candidate is discarded successfully, False otherwise.
     """
-    raise NotImplementedError("TODO: implement skip logic for recommendation cards")
+    frame = await _prepare_recommendation_page(page)
+    cards = frame.locator(CANDIDATE_CARD_SELECTOR)
+    if index >= await cards.count():
+        raise ValueError(f"候选人索引 {index} 超出范围")
 
+    card = cards.nth(index)
+    discard_btn = card.locator("button.btn-quxiao:has-text('不合适')").first
+    if await discard_btn.count() > 0:
+        await discard_btn.click(timeout=1000)
+        await asyncio.sleep(100)
+    else:
+        raise ValueError("未找到不合适按钮")
+    # click the popup dialog's close button
+    reason = card.locator("span.btn-quxiao:has-text('过往经历不符')").first
+    comfirm_btn = card.locator("span.boss-dialog__button:has-text('提交')").first
+    if await reason.count() > 0:
+        await reason.click(timeout=1000)
+        await comfirm_btn.click(timeout=1000)
+        return True
+    else:
+        raise ValueError("未找到不合适原因")
+    return False
 
 __all__ = [
     "_prepare_recommendation_page",
@@ -250,5 +277,5 @@ __all__ = [
     "list_recommended_candidates_action",
     "view_recommend_candidate_resume_action",
     "greet_recommend_candidate_action",
-    "skip_recommend_candidate_action",
+    "discard_recommend_candidate_action",
 ]

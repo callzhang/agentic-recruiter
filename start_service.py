@@ -284,7 +284,7 @@ def start_service(*, scheduler_options: Optional[Dict[str, Any]] | None = None):
             host=host,
             port=int(port),
             reload=True,
-            reload_dirs=["src"],  # Only watch src/ directory
+            reload_dirs=["src", "web/routes/"],  # Only watch src/ directory
             reload_includes=["boss_service.py"],  # Also watch boss_service.py specifically
             reload_excludes=[
                 "pages/**",

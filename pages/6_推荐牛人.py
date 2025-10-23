@@ -138,9 +138,10 @@ def main() -> None:
         cols = st.columns(4)
         cols[0].metric("技能匹配", analysis_result.get("skill", "—"))
         cols[1].metric("创业契合", analysis_result.get("startup_fit", "—"))
-        cols[2].metric("加入意愿", analysis_result.get("willingness", "—"))
+        cols[2].metric("基础背景", analysis_result.get("background", "—"))
         cols[3].metric("综合评分", analysis_result.get("overall", "—"))
         st.markdown(f"**分析总结：** {analysis_result.get('summary', '—')}")
+        st.markdown(f"**后续沟通策略：** {analysis_result.get('followup_tips', '—')}")
 
 
 if __name__ == "__main__":

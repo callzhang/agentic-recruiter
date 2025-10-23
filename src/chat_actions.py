@@ -469,13 +469,27 @@ async def view_full_resume_action(page: Page, chat_id: str) -> Dict[str, Any]:
     }
 
 
-async def mark_candidate_stage_action(page: Page, chat_id: str, stage: str) -> bool:
-    """Placeholder for updating candidate stage in the chat UI.
+async def ask_contact_action(page: Page, chat_id: str) -> bool:
+    """Ask candidate for contact information in chat page. Returns True on success, raises ValueError on failure."""
+    await _prepare_chat_page(page)
+    dialog = await _go_to_chat_dialog(page, chat_id)
+    if not dialog:
+        raise ValueError("未找到指定对话项")
+    
+    clicked_phone, clicked_wechat = False, False
+    ask_phone_button = page.locator("span.operate-btn:has-text('换电话')").first
+    if await ask_phone_button.count() > 0:
+        await ask_phone_button.click(timeout=1000)
+        clicked_phone = True
+    ask_wechat_button = page.locator("span.operate-btn:has-text('换微信')").first
+    if await ask_wechat_button.count() > 0:
+        await ask_wechat_button.click(timeout=1000)
+        clicked_wechat = True
 
-    # TODO: 实现 UI 自动化，标记候选人阶段 (PASS / GREET / SEEK / CONTACT)
-    """
-    raise NotImplementedError("TODO: implement stage tagging in chat UI")
+    if not clicked_phone and not clicked_wechat:
+        raise ValueError("未找到换电话或换微信按钮")
 
+    return True
 
 async def notify_hr_action(page: Page, chat_id: str) -> bool:
     """Placeholder for triggering HR notification workflow.

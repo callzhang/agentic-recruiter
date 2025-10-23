@@ -21,26 +21,8 @@ from src import assistant_actions
 from src.candidate_store import candidate_store
 from src.config import settings
 from src.global_logger import logger
-from src.chat_actions import (
-    accept_full_resume_action,
-    check_full_resume_available,
-    discard_candidate_action,
-    get_chat_history_action,
-    get_chat_list_action,
-    get_chat_stats_action,
-    request_full_resume_action,
-    send_message_action,
-    view_full_resume_action,
-    view_online_resume_action,
-)
-from src.recommendation_actions import (
-    _prepare_recommendation_page,
-    greet_recommend_candidate_action,
-    list_recommended_candidates_action,
-    select_recommend_job_action,
-    view_recommend_candidate_resume_action,
-)
-
+import src.chat_actions as chat_actions
+import src.recommendation_actions as recommendation_actions
 
 class BossServiceAsync:
     """Async Playwright driver exposed as FastAPI service."""
@@ -362,7 +344,7 @@ class BossServiceAsync:
         @self.app.get("/status")
         async def get_status():
             page = await self._ensure_browser_session()
-            stats = await get_chat_stats_action(page)
+            stats = await chat_actions.get_chat_stats_action(page)
             return {
                 "status": "running",
                 "logged_in": self.is_logged_in,
@@ -376,6 +358,7 @@ class BossServiceAsync:
             await self._ensure_browser_session()
             return self.is_logged_in
 
+        # ------------------ Chat API ------------------
         @self.app.get("/chat/dialogs")
         async def get_messages(
             limit: int = Query(10, ge=1, le=100),
@@ -384,17 +367,17 @@ class BossServiceAsync:
             job_title: str = Query('全部', description="Job title filter: 全部 or specific job title")
         ):
             page = await self._ensure_browser_session()
-            return await get_chat_list_action(page, limit, tab, status, job_title)
+            return await chat_actions.get_chat_list_action(page, limit, tab, status, job_title)
 
         @self.app.get("/chat/{chat_id}/messages")
         async def get_message_history(chat_id: str):
             page = await self._ensure_browser_session()
-            return await get_chat_history_action(page, chat_id)
+            return await chat_actions.get_chat_history_action(page, chat_id)
 
-        @self.app.post("/chat/{chat_id}/send")
+        @self.app.post("/chat/{chat_id}/message")
         async def send_message_api(chat_id: str, message: str = Body(..., embed=True)):
             page = await self._ensure_browser_session()
-            return await send_message_action(page, chat_id, message)
+            return await chat_actions.send_message_action(page, chat_id, message)
 
         @self.app.post("/chat/greet")
         async def greet_candidate(
@@ -402,86 +385,77 @@ class BossServiceAsync:
             message: str = Body(..., embed=True)
         ):
             page = await self._ensure_browser_session()
-            return await send_message_action(page, chat_id, message.strip())
+            return await chat_actions.send_message_action(page, chat_id, message.strip())
 
         @self.app.get("/chat/stats")
         async def get_chat_stats():
             page = await self._ensure_browser_session()
-            return await get_chat_stats_action(page)
+            return await chat_actions.get_chat_stats_action(page)
 
-        @self.app.post("/resume/request")
+        @self.app.post("/chat/resume/request")
         async def request_resume_api(chat_id: str = Body(..., embed=True)):
             page = await self._ensure_browser_session()
-            return await request_full_resume_action(page, chat_id)
+            return await chat_actions.request_full_resume_action(page, chat_id)
 
-        @self.app.post("/resume/view_full")
-        async def view_full_resume(chat_id: str = Body(..., embed=True)):
+        @self.app.get("/chat/resume/full/{chat_id}")
+        async def view_full_resume(chat_id: str):
             page = await self._ensure_browser_session()
-            return await view_full_resume_action(page, chat_id)
+            return await chat_actions.view_full_resume_action(page, chat_id)
 
-        @self.app.post("/resume/check_full_resume_available")
+        @self.app.post("/chat/resume/check_full_resume_available")
         async def check_full_resume(chat_id: str = Body(..., embed=True)):
             page = await self._ensure_browser_session()
-            resume_button = await check_full_resume_available(page, chat_id)
+            resume_button = await chat_actions.check_full_resume_available(page, chat_id)
             return resume_button is not None
 
-        @self.app.post("/resume/online")
-        async def view_online_resume_api(chat_id: str = Body(..., embed=True)):
+        @self.app.get("/chat/resume/online/{chat_id}")
+        async def view_online_resume_api(chat_id: str):
             page = await self._ensure_browser_session()
-            return await view_online_resume_action(page, chat_id)
+            return await chat_actions.view_online_resume_action(page, chat_id)
 
-        @self.app.post("/resume/accept")
+        @self.app.post("/chat/resume/accept")
         async def accept_resume_api(chat_id: str = Body(..., embed=True)):
             page = await self._ensure_browser_session()
-            return await accept_full_resume_action(page, chat_id)
+            return await chat_actions.accept_full_resume_action(page, chat_id)
 
-        @self.app.post("/candidate/discard")
+        @self.app.post("/chat/candidate/discard")
         async def discard_candidate_api(chat_id: str = Body(..., embed=True)):
             page = await self._ensure_browser_session()
-            return await discard_candidate_action(page, chat_id)
+            return await chat_actions.discard_candidate_action(page, chat_id)
 
+        @self.app.post("/chat/contact/request")
+        async def ask_contact_api(chat_id: str = Body(..., embed=True)):
+            page = await self._ensure_browser_session()
+            return await chat_actions.ask_contact_action(page, chat_id)
+
+        # ------------------ Recommend API ------------------
         @self.app.get("/recommend/candidates")
         async def get_recommended_candidates(
             limit: int = Query(20, ge=1, le=100),
-            job_title: str = Query(None, description="Job title to filter recommendations")
+            job_title: str = Query(None, description="Job title to filter recommendations"),
+            new_only: bool = Query(False, description="Only include new candidates (not yet viewed/greeted)")
         ):
             page = await self._ensure_browser_session()
-            return await list_recommended_candidates_action(page, limit=limit, job_title=job_title)
+            return await recommendation_actions.list_recommended_candidates_action(page, limit=limit, job_title=job_title, new_only=new_only)
 
         @self.app.get("/recommend/candidate/{index}/resume")
         async def view_recommended_candidate_resume(index: int):
             page = await self._ensure_browser_session()
-            return await view_recommend_candidate_resume_action(page, index)
+            return await recommendation_actions.view_recommend_candidate_resume_action(page, index)
 
         @self.app.post("/recommend/candidate/{index}/greet")
         async def greet_recommended_candidate(index: int, message: str = Body(..., embed=True)):
             page = await self._ensure_browser_session()
-            return await greet_recommend_candidate_action(page, index, message)
-
-        @self.app.post("/recommend/select-job")
-        async def select_recommend_job(job_title: str = Body(..., embed=True)):
-            page = await self._ensure_browser_session()
-            frame = await _prepare_recommendation_page(page)
-            return await select_recommend_job_action(frame, job_title)
+            return await recommendation_actions.greet_recommend_candidate_action(page, index, message)
 
 
-        # Assistant QA endpoints
-        # @self.app.post("/assistant/analyze-candidate")
-        # def analyze_candidate_api(payload: dict = Body(...)):
-        #     return self.assistant_actions.analyze_candidate(**payload)
-
-        # ------------------ Thread API ------------------
-
-        @self.app.post("/assistant/generate-message")
-        def generate_message(data: dict = Body(...)):
-            return assistant_actions.generate_message(**data)
-
-        @self.app.get("/candidate/{chat_id}")
+        # ------------------ Candidate API ------------------
+        @self.app.get("/store/candidate/{chat_id}")
         def get_candidate_api(chat_id: str, fields: Optional[List[str]] = ["*"]):
             """Get candidate information from the store."""
             return candidate_store.get_candidate_by_id(chat_id=chat_id, fields=fields)
 
-        @self.app.post("/candidate/check-by-resume")
+        @self.app.post("/store/candidate/get-by-resume")
         def check_candidate_by_resume_api(resume_text: str = Body(..., embed=True)):
             """Check if candidate exists by resume similarity."""
             return assistant_actions.get_candidate_by_resume(
@@ -489,18 +463,24 @@ class BossServiceAsync:
                 candidate_resume=resume_text
             )
 
-        @self.app.post("/thread/init-chat")
+        # ------------------ Chat API ------------------
+
+        @self.app.post("/chat/generate-message")
+        def generate_message(data: dict = Body(...)):
+            return assistant_actions.generate_message(**data)
+
+        @self.app.post("/chat/init-chat")
         async def init_chat_api(data: dict = Body(...)):
             """Initialize chat thread."""
             return assistant_actions.init_chat(**data)
 
-        @self.app.get("/thread/{thread_id}/messages")
+        @self.app.get("/chat/{thread_id}/messages")
         def get_thread_messages_api(thread_id: str):
             """Get all messages from a thread."""
             from src.assistant_utils import get_thread_messages
             return get_thread_messages(thread_id)
 
-        @self.app.get("/thread/{thread_id}/analysis")
+        @self.app.get("/chat/{thread_id}/analysis")
         def get_thread_analysis_api(thread_id: str):
             """Get analysis from thread messages."""
             from src.assistant_utils import get_analysis_from_thread
@@ -516,20 +496,23 @@ class BossServiceAsync:
         @self.app.post("/assistant/create")
         def create_assistant_api(payload: dict = Body(...)):
             """Create a new openai assistant."""
-            client = assistant_actions.get_openai_client()
+            from openai import OpenAI
+            client = OpenAI(api_key=settings.OPENAI_API_KEY)
             assistant = client.beta.assistants.create(**payload)
             return assistant.model_dump()
 
         @self.app.post("/assistant/update/{assistant_id}")
         def update_assistant_api(assistant_id: str, payload: dict = Body(...)):
-            client = assistant_actions.get_openai_client()
+            from openai import OpenAI
+            client = OpenAI(api_key=settings.OPENAI_API_KEY)
             assistant = client.beta.assistants.update(assistant_id, **payload)
             assistant_actions.get_assistants.cache_clear()
             return assistant.model_dump()
 
         @self.app.delete("/assistant/delete/{assistant_id}")
         def delete_assistant_api(assistant_id: str):
-            client = assistant_actions.get_openai_client()
+            from openai import OpenAI
+            client = OpenAI(api_key=settings.OPENAI_API_KEY)
             client.beta.assistants.delete(assistant_id)
             assistant_actions.get_assistants.cache_clear()
             return True
@@ -602,7 +585,7 @@ async def web_stats():
     new_greets = 0
     try:
         page = await service._ensure_browser_session()
-        stats = await get_chat_stats_action(page)
+        stats = await chat_actions.get_chat_stats_action(page)
         new_messages = stats.get("new_message_count", 0)
         new_greets = stats.get("new_greet_count", 0)
     except Exception as e:

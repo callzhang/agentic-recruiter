@@ -20,7 +20,6 @@ from .assistant_utils import (
 )
 
 # Constants
-MAX_CONTEXT_CHARS = 4000  # Maximum characters for context truncation
 STAGES = [
     "GREET", # 打招呼
     "PASS", # < borderline,不匹配，已拒绝
@@ -28,18 +27,10 @@ STAGES = [
     "SEEK", # >= threshold_seek,寻求联系方式
     "CONTACT", # 已获得联系方式
 ]
-STAGE_MAP = {
-    "GREET": "GREET",
-    "PASS": "PASS",
-    "CHAT": "CHAT",
-    "SEEK": "SEEK",
-    "CONTACT": "CONTACT",
-}
 ACTIONS = {
     # generate message actions
-    "GREET_ACTION": "请生成首次打招呼消息", # 打招呼
+    "CHAT_ACTION": "请根据上述沟通历史，生成下一条跟进消息。重点在于挖掘简历细节，判断候选人是否符合岗位要求，请直接提出问题，让候选人回答经验细节，或者澄清模棱两可的地方", # 打招呼 询问简历细节,
     "ANALYZE_ACTION": "请根据岗位描述，对候选人的简历进行打分，用于决定是否继续推进。", # 分析候选人
-    "ASK_FOR_RESUME_DETAILS_ACTION": "请根据上述沟通历史，生成下一条跟进消息。重点在于挖掘简历细节，判断候选人是否符合岗位要求，请直接提出问题，让候选人回答经验细节，或者澄清模棱两可的地方。不要超过100字，且能够直接发送给候选人的文字，不要发模板或者嵌入占位符。", # 询问简历细节
     "ANSWER_QUESTIONS_ACTION": "请回答候选人提出的问题。", # 回答问题
     "FOLLOWUP_ACTION": "请生成下一条跟进消息，用于吸引候选人回复。", # 跟进消息
     "REQUEST_CONTACT_MESSAGE_ACTION": "请生成下一条跟进消息，用于吸引候选人回复。", # 联系方式
@@ -50,49 +41,40 @@ ACTIONS = {
     # notification actions
     "NOTIFY_HR_ACTION": "请通知HR。", # 通知HR
     # chat actions
-    "WAIT_ACTION": "已经完成所有动作，等待候选人回复。"
+    "FINISH_ACTION": "已经完成所有动作，等待候选人回复。",
+    "PLAN_PROMPTS": "自动化工作流计划动作"
 }
-PLAN_PROMPTS = f"""请根据上述沟通历史，决定下一步操作。输出格式：
-    {{
-        "candidate_stage": <str>, // SEEK, GREET, PASS, CONTACT
-        "action": <str>, // {", ".join(ACTIONS.keys())}
-        "reason": <str>, // 为什么选择这个action, 不要超过100字
-    }}
-    每个action的说明：{json.dumps(ACTIONS, ensure_ascii=False)}"""
-MESSAGE_ACTION_PROMPTS = {
-    "GREET_ACTION": "请生成首次打招呼消息，突出公司与岗位亮点并认可候选人背景，请保持简短，不要超过50字。且能够直接发送给候选人的文字，不要发模板或者嵌入占位符。请用纯文本回复，不要使用markdown、json格式。",
-    "ASK_FOR_RESUME_DETAILS_ACTION": """请根据上述沟通历史，生成下一条跟进消息。
+ACTION_PROMPTS = {
+    "CHAT_ACTION": """请根据上述沟通历史，生成下一条跟进消息。
     重点在于挖掘简历细节，判断候选人是否符合岗位要求，请直接提出问题，让候选人回答经验细节，或者澄清模棱两可的地方。
-    不要超过100字，且能够直接发送给候选人的文字，不要发模板或者嵌入占位符。
+    请直接生成一条可以发送给候选人的自然语言消息，不要超过100字。不要发模板或者嵌入占位符，不要使用任何格式化、引号、JSON或括号。
     """,
     "ANALYZE_ACTION": """请根据岗位描述，对候选人的简历进行打分，用于决定是否继续推进。
 尤其是keyword里面的正负向关键词要进行加分和减分。
 另外也要仔细查看候选人的项目经历，检查是否有言过其词的情况。
 最后，还要查看候选人的过往工作经历，判断是否符合岗位要求。
 
-请给出 1-10 的四个评分：技能匹配度、创业契合度、加入意愿、综合评分，并提供简要分析。
+请给出 1-10 的四个评分：技能匹配度、创业契合度、基础背景、综合评分，并提供简要分析。
 
 输出严格使用 JSON 格式：
 {{
-"skill": <int>,
-"startup_fit": <int>,
-"willingness": <int>,
-"overall": <int>,
-"summary": <str>
+"skill": <int>, // 技能、经验匹配度
+"startup_fit": <int>, // 创业公司契合度，抗压能力、对工作的热情程度
+"background": <int>, // 基础背景、学历优秀程度、逻辑思维能力
+"overall": <int>, // 综合评分
+"summary": <str>, // 分析总结
+"followup_tips": <str>  // 后续招聘顾问跟进的沟通策略
 }}""",
-    "contact": "请发出一条请求候选人电话或者微信的消息。不要超过50字。且能够直接发送给候选人的文字，不要发模板或者嵌入占位符。请用纯文本回复，不要使用markdown、json格式。",
+    "CONTACT_ACTION": "请发出一条请求候选人电话或者微信的消息。不要超过50字。且能够直接发送给候选人的文字，不要发模板或者嵌入占位符。请用纯文本回复，不要使用markdown、json格式。",
+    "FINISH_ACTION": "已经完成所有动作，等待候选人回复。",
+    "PLAN_PROMPTS": f"""请根据上述沟通历史，决定下一步操作。输出格式：
+        {{
+            "candidate_stage": <str>, // SEEK, GREET, PASS, CONTACT
+            "action": <str>, // {", ".join(ACTIONS.keys())}
+            "reason": <str>, // 为什么选择这个action, 不要超过100字
+        }}
+        每个action的说明：{json.dumps(ACTIONS, ensure_ascii=False)}"""
 }
-
-# Mapping from old lowercase purpose keys to new ACTION keys
-PURPOSE_TO_ACTION = {
-    "greet": "GREET_ACTION",
-    "chat": "ASK_FOR_RESUME_DETAILS_ACTION",
-    "followup": "ASK_FOR_RESUME_DETAILS_ACTION",
-    "analyze": "ANALYZE_ACTION",
-    "plan": "ANALYZE_ACTION",  # Assuming plan also uses analysis
-    "contact": "contact",
-}
-
 
 # Global OpenAI client singleton
 _openai_client = OpenAI(api_key=settings.OPENAI_API_KEY)
@@ -247,10 +229,9 @@ def generate_message(
     purpose: str,
     chat_history: List[Dict[str, Any]],
     format_json: Optional[bool] = False,
-    threshold: Optional[dict] = None,
 ) -> Dict[str, Any]:
     """
-    Generate message using thread_id directly.
+    Generate message using openai's assistant api.
     
     This method generates the next message in an existing conversation thread.
     It adds any new context (user message, full resume, etc.) to the thread
@@ -279,18 +260,17 @@ def generate_message(
     # thread_id is now passed directly, no lookup needed
     if not thread_id:
         raise ValueError("thread_id is required for generate_message")
-    
+    assert purpose in ACTION_PROMPTS.keys(), f"purpose {purpose} is not found in MESSAGE_ACTION_PROMPTS"
+    logger.debug(f"Generating message for purpose: {purpose}")
     # Get current thread messages for comparison
-    thread_messages = get_thread_messages(thread_id)
+    thread_messages = get_thread_messages(thread_id)['messages']
     # Sync thread with complete chat history
     history_messages = _normalise_history(chat_history)
     thread_messages = _sync_thread_with_history(thread_id, thread_messages, history_messages)
     logger.info("Synced chat history to thread %s", thread_id)
     # Get instruction for purpose - map old keys to new ACTION keys
-    action_key = PURPOSE_TO_ACTION.get(purpose, purpose)  # Try mapping first, fallback to original
-    instruction = MESSAGE_ACTION_PROMPTS.get(action_key)
-    assert instruction, f"prompt for {purpose} (mapped to {action_key}) is not found"
-    if purpose in ["analyze", "plan"]:
+    instruction = ACTION_PROMPTS.get(purpose)
+    if purpose in ["ANALYZE_ACTION", "PLAN_PROMPTS"]:
         format_json = True
     # Create a new run
     run = _openai_client.beta.threads.runs.create(
@@ -309,12 +289,12 @@ def generate_message(
     generated_message = _extract_latest_assistant_message(thread_id).strip()
     
     # Parse analysis if purpose is "analyze"
-    if purpose == "analyze":
+    if purpose == "ANALYZE_ACTION":
         analysis = json.loads(generated_message)
         # Try to update candidate entity with analysis (non-critical, analysis is in thread)
         try:
-            # First, query to get the candidate_id
-            entity = candidate_store.get_candidate_by_id(thread_id=thread_id)
+            # First, query to get the candidate_id, including the vector field
+            entity = candidate_store.get_candidate_by_id(thread_id=thread_id, fields=["*"]) #TODO: remove vector field
             if entity and entity.get('candidate_id'):
                 # Update with analysis
                 entity['analysis'] = analysis
@@ -323,12 +303,12 @@ def generate_message(
         except Exception as e:
             logger.warning("Failed to update candidate analysis in Zilliz (non-critical): %s", e)
         return analysis
-    elif purpose == "plan":
+    elif purpose == "PLAN_PROMPTS":
         plan = json.loads(generated_message)
         # Try to update candidate entity with plan (non-critical, plan is in thread)
         try:
-            # First, query to get the candidate_id
-            entity = candidate_store.get_candidate_by_id(thread_id=thread_id)
+            # First, query to get the candidate_id, including the vector field
+            entity = candidate_store.get_candidate_by_id(thread_id=thread_id, fields=["*"]) #TODO: remove vector field
             if entity and entity.get('candidate_id'):
                 # Update with plan
                 entity['stage'] = plan["candidate_stage"]

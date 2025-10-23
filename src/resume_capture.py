@@ -1395,7 +1395,7 @@ def extract_pdf_viewer_text(frame: 'Frame') -> Dict[str, Any]:
                   const joined = buffer
                     .join(' ')
                     .replace(/\u00a0/g, ' ')
-                    .replace(/\s+/g, ' ')
+                    .replace(/\\s+/g, ' ')
                     .trim();
                   if (joined) {
                     lines.push(joined);
