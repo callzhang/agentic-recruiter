@@ -301,39 +301,20 @@ async def analyze_candidate(
     request: Request,
     mode: str = Form(...),
     chat_id: Optional[str] = Form(None),
-    thread_id: Optional[str] = Form(None),
+    thread_id: str = Form(...),
     assistant_id: str = Form(...),
     resume_text: Optional[str] = Form(None),
 ):
     """Analyze candidate and return updated analysis section."""
-    
-    # Use thread_id if available (for both chat and recommend),
-    # otherwise fall back to chat_id (for backward compatibility)
-    if thread_id:
-        # Preferred: use thread_id directly
-        api_chat_id = thread_id
-    elif chat_id:
-        api_chat_id = chat_id
-    else:
-        return HTMLResponse(
-            content='<div class="text-red-500 p-4">Missing chat_id or thread_id</div>',
-            status_code=400
-        )
-    
-    # Get chat history (empty for recommend candidates without chat_id)
-    if mode == "recommend" or not chat_id:
-        history = []
-    else:
-        ok, history = await call_api("GET", f"/chat/{chat_id}/messages")
-        if not ok:
-            history = []
-    
+    form_data = await request.form()
+    data = dict(form_data)
+    chat_history = data.get("chat_history", [])
     # Call analysis API with thread_id
     ok, analysis_result = await call_api("POST", "/assistant/generate-message", json={
-        "thread_id": api_chat_id,  # Now using thread_id directly
+        "thread_id": thread_id,  # Now using thread_id directly
         "assistant_id": assistant_id,
-        "chat_history": history,
-        "purpose": "analyze"
+        "purpose": "ANALYZE_ACTION",
+        "chat_history": chat_history
     })
     
     if not ok:
@@ -353,21 +334,11 @@ async def analyze_candidate(
 @router.post("/generate-message", response_class=HTMLResponse)
 async def generate_message(
     mode: str = Form(...),
-    chat_id: Optional[str] = Form(None),
-    thread_id: Optional[str] = Form(None),
+    chat_id: str = Form(None),
+    thread_id: str = Form(None),
     assistant_id: str = Form(...),
 ):
     """Generate message for candidate."""
-    # Use thread_id if available, otherwise look it up by chat_id
-    if not thread_id and chat_id:
-        # Lookup thread_id from Zilliz using chat_id
-        ok, candidate = await call_api("GET", f"/candidate/{chat_id}")
-        if not ok or not candidate:
-            return HTMLResponse(
-                content='<div class="text-red-500 p-4">候选人不存在，请先初始化对话</div>',
-                status_code=404
-            )
-        thread_id = candidate.get("thread_id")
     
     if not thread_id:
         return HTMLResponse(
@@ -379,7 +350,7 @@ async def generate_message(
         )
     
     # Get chat history (empty for recommend candidates)
-    if mode == "recommend" or not chat_id:
+    if mode == "recommend":
         history = []
     else:
         ok, history = await call_api("GET", f"/chat/{chat_id}/messages")
@@ -391,7 +362,7 @@ async def generate_message(
         "thread_id": thread_id,
         "assistant_id": assistant_id,
         "chat_history": history,
-        "purpose": "chat"
+        "purpose": "CHAT_ACTION"
     })
     
     if not ok:

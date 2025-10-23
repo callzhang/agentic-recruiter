@@ -1,0 +1,272 @@
+<!-- Tag Editor Component (similar to st.multiselect) -->
+<div class="tag-editor" data-field="{{ field_name }}">
+    <div class="tag-input-container">
+        <input type="text" 
+               class="tag-input w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent" 
+               placeholder="输入关键词后回车"
+               data-field="{{ field_name }}">
+        <div class="tag-suggestions hidden absolute z-10 w-full bg-white border border-gray-300 rounded-md shadow-lg max-h-40 overflow-y-auto">
+            <!-- Suggestions will be populated here -->
+        </div>
+    </div>
+    <div class="tag-list flex flex-wrap gap-2 mt-2 min-h-[40px] p-2 border border-gray-200 rounded-md bg-gray-50">
+        <!-- Tags will be rendered here -->
+    </div>
+</div>
+
+<style>
+.tag-editor {
+    position: relative;
+}
+
+.tag-input-container {
+    position: relative;
+}
+
+.tag-suggestions {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    margin-top: 2px;
+}
+
+.tag-suggestion {
+    padding: 8px 12px;
+    cursor: pointer;
+    border-bottom: 1px solid #e5e7eb;
+}
+
+.tag-suggestion:hover {
+    background-color: #f3f4f6;
+}
+
+.tag-suggestion:last-child {
+    border-bottom: none;
+}
+
+.tag-item {
+    display: inline-flex;
+    align-items: center;
+    background-color: #3b82f6;
+    color: white;
+    padding: 4px 8px;
+    border-radius: 16px;
+    font-size: 14px;
+    margin: 2px;
+}
+
+.tag-item.negative {
+    background-color: #ef4444;
+}
+
+.tag-remove {
+    margin-left: 6px;
+    cursor: pointer;
+    font-weight: bold;
+    opacity: 0.7;
+}
+
+.tag-remove:hover {
+    opacity: 1;
+}
+
+.tag-list:empty::before {
+    content: "暂无关键词";
+    color: #9ca3af;
+    font-style: italic;
+}
+</style>
+
+<script>
+class TagEditor {
+    constructor(container) {
+        this.container = container;
+        this.fieldName = container.dataset.field;
+        this.input = container.querySelector('.tag-input');
+        this.tagList = container.querySelector('.tag-list');
+        this.suggestions = container.querySelector('.tag-suggestions');
+        this.tags = new Set();
+        
+        this.init();
+    }
+    
+    init() {
+        this.input.addEventListener('keydown', (e) => this.handleKeydown(e));
+        this.input.addEventListener('input', (e) => this.handleInput(e));
+        this.input.addEventListener('blur', () => this.hideSuggestions());
+        
+        // Load existing tags if any
+        this.loadExistingTags();
+    }
+    
+    loadExistingTags() {
+        // Check if there are existing tags in the form
+        const existingTags = this.getExistingTags();
+        existingTags.forEach(tag => this.addTag(tag));
+    }
+    
+    getExistingTags() {
+        // Get existing tags from hidden inputs or form data
+        const hiddenInputs = document.querySelectorAll(`input[name="${this.fieldName}[]"]`);
+        return Array.from(hiddenInputs).map(input => input.value).filter(v => v.trim());
+    }
+    
+    setTags(tags) {
+        // Clear existing tags
+        this.tags.clear();
+        // Add new tags
+        tags.forEach(tag => this.addTag(tag));
+    }
+    
+    handleKeydown(e) {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            this.addCurrentTag();
+        } else if (e.key === 'Backspace' && this.input.value === '') {
+            this.removeLastTag();
+        }
+    }
+    
+    handleInput(e) {
+        const value = e.target.value.trim();
+        if (value) {
+            this.showSuggestions(value);
+        } else {
+            this.hideSuggestions();
+        }
+    }
+    
+    addCurrentTag() {
+        const value = this.input.value.trim();
+        if (value && !this.tags.has(value)) {
+            this.addTag(value);
+            this.input.value = '';
+        }
+        this.hideSuggestions();
+    }
+    
+    addTag(tag) {
+        this.tags.add(tag);
+        this.renderTags();
+        this.updateHiddenInputs();
+    }
+    
+    removeTag(tag) {
+        this.tags.delete(tag);
+        this.renderTags();
+        this.updateHiddenInputs();
+    }
+    
+    removeLastTag() {
+        if (this.tags.size > 0) {
+            const lastTag = Array.from(this.tags).pop();
+            this.removeTag(lastTag);
+        }
+    }
+    
+    renderTags() {
+        this.tagList.innerHTML = '';
+        
+        if (this.tags.size === 0) {
+            return;
+        }
+        
+        Array.from(this.tags).forEach(tag => {
+            const tagElement = document.createElement('div');
+            tagElement.className = `tag-item ${this.fieldName.includes('negative') ? 'negative' : ''}`;
+            tagElement.innerHTML = `
+                <span>${tag}</span>
+                <span class="tag-remove" onclick="this.parentElement.remove(); window.tagEditors['${this.fieldName}'].removeTag('${tag}')">×</span>
+            `;
+            this.tagList.appendChild(tagElement);
+        });
+    }
+    
+    updateHiddenInputs() {
+        // Remove existing hidden inputs
+        const existingInputs = document.querySelectorAll(`input[name="${this.fieldName}[]"]`);
+        existingInputs.forEach(input => input.remove());
+        
+        // Add new hidden inputs for each tag
+        Array.from(this.tags).forEach(tag => {
+            const input = document.createElement('input');
+            input.type = 'hidden';
+            input.name = `${this.fieldName}[]`;
+            input.value = tag;
+            this.container.appendChild(input);
+        });
+    }
+    
+    showSuggestions(value) {
+        // Simple suggestion logic - can be enhanced with actual suggestions
+        const suggestions = this.getSuggestions(value);
+        
+        if (suggestions.length > 0) {
+            this.suggestions.innerHTML = suggestions.map(suggestion => 
+                `<div class="tag-suggestion" onclick="window.tagEditors['${this.fieldName}'].selectSuggestion('${suggestion}')">${suggestion}</div>`
+            ).join('');
+            this.suggestions.classList.remove('hidden');
+        } else {
+            this.hideSuggestions();
+        }
+    }
+    
+    getSuggestions(value) {
+        // Simple suggestions based on common keywords
+        const commonKeywords = [
+            'Python', 'Java', 'JavaScript', 'React', 'Vue', 'Node.js',
+            '机器学习', '深度学习', 'AI', '算法', '数据结构',
+            '微服务', '分布式', '高并发', '高可用', '云原生'
+        ];
+        
+        return commonKeywords.filter(keyword => 
+            keyword.toLowerCase().includes(value.toLowerCase()) && 
+            !this.tags.has(keyword)
+        ).slice(0, 5);
+    }
+    
+    selectSuggestion(suggestion) {
+        this.addTag(suggestion);
+        this.input.value = '';
+        this.hideSuggestions();
+    }
+    
+    hideSuggestions() {
+        this.suggestions.classList.add('hidden');
+    }
+}
+
+// Initialize tag editors when DOM is loaded
+document.addEventListener('DOMContentLoaded', function() {
+    if (!window.tagEditors) {
+        window.tagEditors = {};
+    }
+    
+    document.querySelectorAll('.tag-editor').forEach(container => {
+        const fieldName = container.dataset.field;
+        if (fieldName && !window.tagEditors[fieldName]) {
+            window.tagEditors[fieldName] = new TagEditor(container);
+        }
+    });
+});
+
+// Also initialize on HTMX swaps
+document.addEventListener('htmx:afterSwap', function(event) {
+    if (event.target.querySelector && event.target.querySelector('.tag-editor')) {
+        if (!window.tagEditors) {
+            window.tagEditors = {};
+        }
+        
+        // Wait a bit for the DOM to be ready
+        setTimeout(() => {
+            event.target.querySelectorAll('.tag-editor').forEach(container => {
+                const fieldName = container.dataset.field;
+                if (fieldName && !window.tagEditors[fieldName]) {
+                    window.tagEditors[fieldName] = new TagEditor(container);
+                }
+            });
+        }, 100);
+    }
+});
+</script>

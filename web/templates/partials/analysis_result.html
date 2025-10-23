@@ -10,20 +10,24 @@
             <div class="text-sm text-gray-600 mt-1">创业契合</div>
         </div>
         <div class="bg-white border rounded-lg p-4 text-center">
-            <div class="text-2xl font-bold text-yellow-600">{{ candidate.analysis.willingness or 0 }}</div>
-            <div class="text-sm text-gray-600 mt-1">加入意愿</div>
+            <div class="text-2xl font-bold text-yellow-600">{{ candidate.analysis.background or 0 }}</div>
+            <div class="text-sm text-gray-600 mt-1">基础背景</div>
         </div>
         <div class="bg-white border rounded-lg p-4 text-center">
             <div class="text-2xl font-bold text-purple-600">{{ candidate.analysis.overall or 0 }}</div>
             <div class="text-sm text-gray-600 mt-1">综合评分</div>
         </div>
     </div>
-    
+
     <div class="bg-white border rounded-lg p-4">
         <h4 class="font-bold text-gray-800 mb-2">分析总结</h4>
         <p class="text-gray-700 whitespace-pre-wrap">{{ candidate.analysis.summary or '暂无总结' }}</p>
     </div>
-    
+
+    <div class="bg-white border rounded-lg p-4">
+        <h4 class="font-bold text-gray-800 mb-2">后续沟通策略</h4>
+        <p class="text-gray-700 whitespace-pre-wrap">{{ candidate.analysis.followup_tips or '暂无策略' }}</p>
+    </div>
     <button hx-post="/web/candidates/analyze"
             hx-include="#candidate-context"
             hx-target="#analysis-content"
