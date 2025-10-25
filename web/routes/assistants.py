@@ -155,26 +155,21 @@ async def edit_assistant_page(request: Request, assistant_id: str):
 
 
 @router.post("/create", response_class=JSONResponse)
-async def create_assistant(request: Request):
+async def create_assistant(
+    name: str = Form(...),
+    model: str = Form(...),
+    description: str = Form(""),
+    instructions: str = Form(...),
+    metadata_key: list = Form([]),
+    metadata_value: list = Form([])
+):
     """Create new assistant."""
-    # Get form data
-    form_data = await request.form()
-    
-    # Extract basic fields
-    name = form_data.get("name", "")
-    model = form_data.get("model", "")
-    description = form_data.get("description", "")
-    instructions = form_data.get("instructions", "")
-    
     # Build metadata dict from form data
     metadata = {}
-    metadata_keys = form_data.getlist("metadata_key")
-    metadata_values = form_data.getlist("metadata_value")
-    
-    for i, key in enumerate(metadata_keys):
+    for i, key in enumerate(metadata_key):
         # Only include non-empty keys and values
-        if key and key.strip():
-            value = metadata_values[i] if i < len(metadata_values) else ""
+        if key and key.strip() and i < len(metadata_value):
+            value = metadata_value[i] if i < len(metadata_value) else ""
             if value and value.strip():  # Only include non-empty values
                 metadata[key.strip()] = value.strip()
     

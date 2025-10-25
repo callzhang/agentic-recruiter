@@ -1,0 +1,146 @@
+
+flowchart TD
+    subgraph INIT ["🎯 candidate_detail.html loads"]
+        A[Candidate Card Click] --> B[HTMX Request to /web/candidates/detail]
+        B --> C[candidate_detail.html loads]
+        C --> D[Initial Check - JavaScript IIFE]
+    end
+    
+    subgraph MODE ["🔄 Mode field check"]
+        E{Check mode field}
+        E -->|mode === 'recommend'| F[RECOMMEND FLOW]
+        E -->|mode === 'chat'| G[CHAT FLOW]
+    end
+    
+    subgraph RECOMMEND ["📋 handleResumeLoaded (recommend)"]
+        F --> F1["Resume auto-fetch<br/>hx-trigger=load"]
+        F1 --> F2["htmx:afterSwap"]
+        F2 --> F3["handleResumeLoaded"]
+    end
+    
+    subgraph CHAT ["💬 checkChatCandidate"]
+        G --> G1["checkChatCandidate"]
+        G1 --> G2{"existingRecord &&<br/>existingRecord.thread_id"}
+        G2 -->|if| G3["REUSE EXISTING"]
+        G2 -->|else| G4["FETCH RESUME"]
+        G4 --> G5["Resume auto-fetch<br/>hx-trigger=load"]
+        G5 --> G6["htmx:afterSwap"]
+        G6 --> G7["handleResumeLoaded"]
+        G7 --> G8["initializeNewChat"]
+    end
+    
+    subgraph RESUME_CHECK ["🔍 checkRecommendCandidate"]
+        H{Check mode field}
+        H -->|mode === 'recommend'| I[CHECK BY RESUME]
+        H -->|mode === 'chat'| J[INITIALIZE NEW CHAT]
+        
+        I --> I1["checkRecommendCandidate"]
+        I1 --> I2{"existingRecord &&<br/>existingRecord.thread_id"}
+        I2 -->|if| I3["REUSE EXISTING"]
+        I2 -->|else| I4["INITIALIZE NEW"]
+        
+        J --> J1["initializeNewChat"]
+        I4 --> I5["initializeNewChat"]
+    end
+    
+    subgraph RECORD_MGMT ["📁 reuseExistingRecord"]
+        K[REUSE EXISTING RECORD]
+        K --> K1["updateFormData"]
+        K1 --> K2{"existingRecord.online_resume"}
+        K2 -->|if| K3["DISPLAY SAVED RESUME"]
+        K2 -->|else| K4["SKIP RESUME DISPLAY"]
+        K3 --> K5["displayResume"]
+        K4 --> K6["loadThreadData"]
+        K5 --> K6
+    end
+    
+    subgraph INIT_CHAT ["🚀 initializeNewChat"]
+        L["INITIALIZE NEW CHAT"]
+        L --> L1["POST /web/candidates/init-chat"]
+        L1 --> L2{"response.ok &&<br/>data.thread_id"}
+        L2 -->|if| L3["SUCCESS"]
+        L2 -->|else| L4["FAILURE"]
+        L3 --> L5["Update form with thread_id"]
+        L4 --> L6["showToast: 初始化对话失败"]
+        L5 --> L7["startAnalysis"]
+    end
+    
+    subgraph THREAD_DATA ["📊 loadThreadData"]
+        M[THREAD DATA LOADING]
+        M --> M1["GET /thread/{threadId}/messages"]
+        M1 --> M2{"response.ok"}
+        M2 -->|if| M3["SUCCESS"]
+        M2 -->|else| M4["FAILURE"]
+        M3 --> M5["Check data fields"]
+        M4 --> M6["showToast: 加载对话数据失败"]
+        
+        M5 --> M7{"data.messages &&<br/>data.messages.length > 0"}
+        M7 -->|if| M8["DISPLAY HISTORY"]
+        M7 -->|else| M9["SKIP HISTORY"]
+        M8 --> M10["displayThreadHistory"]
+        M9 --> M11{"data.analysis"}
+        
+        M10 --> M11
+        M11 -->|if| M12["DISPLAY ANALYSIS"]
+        M11 -->|else| M13["TRIGGER NEW ANALYSIS"]
+        M12 --> M14["displayAnalysis"]
+        M13 --> M15["startAnalysis"]
+        
+        M14 --> M16{"data.action"}
+        M16 -->|if| M17["HANDLE ACTION"]
+        M16 -->|else| M18["SKIP ACTION"]
+        M17 --> M19["handleAction"]
+    end
+    
+    %% Connections between subgraphs
+    D --> E
+    F3 --> H
+    G3 --> K
+    I3 --> K
+    J1 --> L
+    I5 --> L
+    K6 --> M
+    L7 --> N
+    M15 --> N
+    M14 --> O
+    O5 --> P
+    O6 --> P1
+    P1 --> P
+    
+    subgraph ANALYSIS ["🔬 startAnalysis"]
+        N[ANALYSIS WORKFLOW]
+        N --> N1["POST /web/candidates/analyze HTMX"]
+        N1 --> N2["Returns analysis_result.html"]
+        N2 --> N3["🚨 PROBLEM: No automatic message generation!"]
+    end
+    
+    subgraph ANALYSIS_DISPLAY ["📈 displayAnalysis"]
+        O["ANALYSIS DISPLAY"]
+        O --> O1["Build analysis HTML"]
+        O1 --> O2{"analysis.overall >= 7"}
+        O2 -->|if| O3["AUTO GENERATE MESSAGE"]
+        O2 -->|else| O4["MANUAL GENERATE BUTTON"]
+        O3 --> O5["generateMessage"]
+        O4 --> O6["showManualGenerateButton"]
+    end
+    
+    subgraph MESSAGE_GEN ["💬 generateMessage"]
+        P["MESSAGE GENERATION"]
+        P --> P2["POST /web/candidates/generate-message"]
+        P2 --> P3{"response.ok"}
+        P3 -->|if| P4["SUCCESS"]
+        P3 -->|else| P5["FAILURE"]
+        P4 --> P6["Display message in #message-content"]
+        P5 --> P7["Show error message"]
+    end
+    
+    %% Styling for dark mode
+    classDef problemNode fill:none,stroke:#ff6b6b,stroke-width:3px,color:#ff6b6b
+    classDef successNode fill:none,stroke:#51cf66,stroke-width:2px,color:#51cf66
+    classDef decisionNode fill:none,stroke:#ffd43b,stroke-width:2px,color:#ffd43b
+    classDef processNode fill:none,stroke:#74c0fc,stroke-width:1px,color:#74c0fc
+    
+    class N3 problemNode
+    class P4,P6 successNode
+    class E,G2,H,I2,K2,L2,M2,M7,M11,M16,O2,P3 decisionNode
+    class A,B,C,D,F,G,I,J,K,L,M,N,O,P processNode

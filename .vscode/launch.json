@@ -39,6 +39,15 @@
       "args": ["run", "boss_app.py", "--server.runOnSave=true"],
       "cwd": "${workspaceFolder}",
       "env": { "PYTHONUNBUFFERED": "1" }
-    }
+    },
+    {
+      "name": "Attach to LangGraph",
+      "type": "debugpy",
+      "request": "attach",
+      "connect": {
+        "host": "0.0.0.0",
+        "port": 5678
+      }
+  }
   ]
 }

@@ -433,7 +433,7 @@ class BossServiceAsync:
         async def get_recommended_candidates(
             limit: int = Query(20, ge=1, le=100),
             job_title: str = Query(None, description="Job title to filter recommendations"),
-            new_only: bool = Query(False, description="Only include new candidates (not yet viewed/greeted)")
+            new_only: bool = Query(True, description="Only include new candidates (not yet viewed/greeted)")
         ):
             page = await self._ensure_browser_session()
             return await recommendation_actions.list_recommended_candidates_action(page, limit=limit, job_title=job_title, new_only=new_only)
@@ -496,23 +496,20 @@ class BossServiceAsync:
         @self.app.post("/assistant/create")
         def create_assistant_api(payload: dict = Body(...)):
             """Create a new openai assistant."""
-            from openai import OpenAI
-            client = OpenAI(api_key=settings.OPENAI_API_KEY)
+            client = assistant_actions._openai_client
             assistant = client.beta.assistants.create(**payload)
             return assistant.model_dump()
 
         @self.app.post("/assistant/update/{assistant_id}")
         def update_assistant_api(assistant_id: str, payload: dict = Body(...)):
-            from openai import OpenAI
-            client = OpenAI(api_key=settings.OPENAI_API_KEY)
+            client = assistant_actions._openai_client
             assistant = client.beta.assistants.update(assistant_id, **payload)
             assistant_actions.get_assistants.cache_clear()
             return assistant.model_dump()
 
         @self.app.delete("/assistant/delete/{assistant_id}")
         def delete_assistant_api(assistant_id: str):
-            from openai import OpenAI
-            client = OpenAI(api_key=settings.OPENAI_API_KEY)
+            client = assistant_actions._openai_client
             client.beta.assistants.delete(assistant_id)
             assistant_actions.get_assistants.cache_clear()
             return True

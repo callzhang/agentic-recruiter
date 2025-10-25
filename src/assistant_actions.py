@@ -76,11 +76,10 @@ ACTION_PROMPTS = {
         每个action的说明：{json.dumps(ACTIONS, ensure_ascii=False)}"""
 }
 
-# Global OpenAI client singleton
-_openai_client = OpenAI(api_key=settings.OPENAI_API_KEY)
-
 
 # Assistants ----------------------------------------------------
+_openai_client = OpenAI(api_key=settings.OPENAI_API_KEY)
+
 @lru_cache(maxsize=1)
 def get_assistants() -> List[Dict[str, Any]]:
     """Get all assistants."""

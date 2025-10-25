@@ -1,0 +1,9 @@
+{
+    "dependencies": ["agent"],
+    "graphs": {
+      "manager_agent": "./agent/graph.py:manager_graph",
+      "recruiter_agent": "./agent/graph.py:recruiter_graph"
+    },
+    "env": ".env"
+  }
+  
