@@ -8,3 +8,6 @@ __pycache__/
 config/secrets.yaml
 data/state.json
 screenshots/
+.DS_Store
+.langgraph_api/
+.env

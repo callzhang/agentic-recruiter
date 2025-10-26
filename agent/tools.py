@@ -4,7 +4,7 @@ import requests
 import json
 from typing import Any, Dict, List, Optional, Callable
 from langgraph.prebuilt import ToolNode
-from langchain_core.tools import tool
+from langchain.tools import tool, ToolRuntime
 from pydantic import BaseModel, Field
 from langchain_core.messages import AnyMessage
 from src.global_logger import logger
@@ -42,7 +42,7 @@ def _call_api(method: str, url: str, data: dict | None = None, timeout: float = 
 # ============================================================================
 
 @tool
-def get_candidates_tool(mode: str, job_title: str, limit: int, context: ContextSchema) -> str:
+def get_candidates_tool(mode: str, job_title: str, limit: int, runtime: ToolRuntime) -> str:
     """
     Navigate to candidates page and get candidate list.
     
@@ -66,7 +66,7 @@ def get_candidates_tool(mode: str, job_title: str, limit: int, context: ContextS
           * "recommend" - Navigate to recommendation page and get recommended candidates
         - Returns candidate data including chat_id for further operations
     """
-    web_portal = context.web_portal
+    web_portal = runtime.context.web_portal
     # Handle recommend mode separately
     if mode == "recommend":
         result = _call_api("GET", f"{web_portal}/recommend/candidates", {"job_title": job_title, "limit": limit})
@@ -90,14 +90,47 @@ def get_candidates_tool(mode: str, job_title: str, limit: int, context: ContextS
     result = _call_api("GET", f"{web_portal}/chat/dialogs{params}")
     return result
 
-
+@tool
+def invoke_recruiter_tool(candidate: dict, job_title: str, assistant_name: str, runtime: ToolRuntime) -> str:
+    """
+    This tool invokes the recruiter agent to process a candidate.
+    Use this to process a candidate with a specific job and assistant.
+    
+    Args:
+        candidate: dict - The candidate information to process(required)
+        job_title: str - The job position to fetch the job description(required)
+        assistant_name: str - The assistant name to process(required)
+        context: ContextSchema - The context schema(required)
+        
+    Returns:
+        str: The result of the recruiter agent
+    """
+    web_portal = runtime.context.web_portal
+    assistants = _call_api("GET", f"{web_portal}/web/assistants/api/list")['data']
+    jobs = _call_api("GET", f"{web_portal}/web/jobs/api/list")['data']
+    job_info = next((job for job in jobs if job_title in job['position']), None)
+    assistant_info = next((assistant for assistant in assistants if assistant_name in assistant['name']), None)
+    if not job_info or not assistant_info:
+        raise ValueError(f"Job or assistant not found: {job_title} or {assistant_name}, available jobs: {[j['position'] for j in jobs]}, available assistants: {[a['name'] for a in assistants]}")
+    from agent.graph import recruiter_graph
+    result = recruiter_graph.invoke({
+        'mode': "chat",
+        'candidate': candidate,
+        'job_info': job_info,
+        'assistant_info': assistant_info
+    })
+    recruiter_messages = [m.dict() for m in result['messages']]
+    return {
+        'recruiter_messages': recruiter_messages,
+        'candidate': result['candidate'],
+    }
 
 # ============================================================================
 # Recruiter Read Tools
 # ============================================================================
 
 @tool
-def send_chat_message_tool(chat_id: str, message: str, context: ContextSchema) -> str:
+def send_chat_message_tool(chat_id: str, message: str, runtime: ToolRuntime) -> str:
     """
     Send message to candidate in chat page
     Note: not working for recommend mode
@@ -117,13 +150,13 @@ def send_chat_message_tool(chat_id: str, message: str, context: ContextSchema) -
         - Message should be natural and professional
         - Keep messages concise and relevant to recruitment context
     """
-    web_portal = context.web_portal
+    web_portal = runtime.context.web_portal
     result = _call_api("POST", f"{web_portal}/chat/{chat_id}/message", {"message": message})
     return result
 
 
 @tool
-def get_chat_messages_tool(chat_id: str, context: ContextSchema) -> str:
+def get_chat_messages_tool(chat_id: str, runtime: ToolRuntime) -> str:
     """
     Read message history from chat page.
     Note: not working for recommend mode
@@ -142,35 +175,10 @@ def get_chat_messages_tool(chat_id: str, context: ContextSchema) -> str:
         - Use to understand candidate's communication style and responses
         - Helpful for generating contextual follow-up messages
     """
-    web_portal = context.web_portal
+    web_portal = runtime.context.web_portal
     result = _call_api("GET", f"{web_portal}/chat/{chat_id}/messages")
     return result
 
-
-@tool
-def ask_contact_tool(chat_id: str, message: str, context: ContextSchema) -> str:
-    """
-    Ask candidate for contact information in chat page.
-    Note: not working for recommend mode
-    
-    This tool sends a message specifically requesting contact details (phone, WeChat, etc.)
-    from the candidate. Use this when the candidate shows interest and you need their contact info.
-    
-    Args:
-        chat_id (str): Unique chat identifier for the candidate
-        message (str): Message requesting contact information
-        
-    Returns:
-        str: Confirmation message if sent successfully, error message otherwise
-        
-    Usage:
-        - Use when candidate shows strong interest in the position
-        - Message should politely request contact information
-        - Typically used after initial screening and positive responses
-    """
-    web_portal = context.web_portal
-    result = _call_api("POST", f"{web_portal}/chat/{chat_id}/message", {"message": message})
-    return result
 
 
 # ============================================================================
@@ -178,7 +186,7 @@ def ask_contact_tool(chat_id: str, message: str, context: ContextSchema) -> str:
 # ============================================================================
 
 @tool
-def request_full_resume_tool(chat_id: str, context: ContextSchema) -> str:
+def request_full_resume_tool(chat_id: str, runtime: ToolRuntime) -> str:
     """
     Request full resume from candidate.
     
@@ -196,13 +204,13 @@ def request_full_resume_tool(chat_id: str, context: ContextSchema) -> str:
         - Typically used after initial screening shows potential
         - Candidate will receive a request for their full resume
     """
-    web_portal = context.web_portal
+    web_portal = runtime.context.web_portal
     result = _call_api("POST", f"{web_portal}/chat/resume/request", {"chat_id": chat_id})
     return result
 
 
 @tool
-def view_online_resume_tool(chat_id: str, index:int, mode: str, context: ContextSchema) -> str:
+def view_online_resume_tool(chat_id: str, index:int, mode: str, runtime: ToolRuntime) -> str:
     """
     View online resume details.
     
@@ -224,7 +232,7 @@ def view_online_resume_tool(chat_id: str, index:int, mode: str, context: Context
           * "chat", "greet", "followup" - Uses /chat/resume/online/{chat_id}
           * "recommend" - Uses /recommend/candidate/{index}/resume
     """
-    web_portal = context.web_portal
+    web_portal = runtime.context.web_portal
     if mode == "recommend":
         # For recommend mode, chat_id is actually the candidate index
         result = _call_api("GET", f"{web_portal}/recommend/candidate/{index}/resume")
@@ -236,7 +244,7 @@ def view_online_resume_tool(chat_id: str, index:int, mode: str, context: Context
 
 
 @tool
-def view_full_resume_tool(chat_id: str, mode:str, context: ContextSchema) -> str:
+def view_full_resume_tool(chat_id: str, mode:str, runtime: ToolRuntime) -> str:
     """
     View full resume details in chat page only. Not working for recommend mode.
     
@@ -259,14 +267,14 @@ def view_full_resume_tool(chat_id: str, mode:str, context: ContextSchema) -> str
           * "recommend" - Uses /recommend/candidate/{index}/resume (same as online for recommend)
     """
     assert mode != "recommend", "Full resume is not available for recommend mode"
-    web_portal = context.web_portal
+    web_portal = runtime.context.web_portal
     result = _call_api("GET", f"{web_portal}/chat/resume/full/{chat_id}")
     return result
 
 
 
 @tool
-def check_resume_availability_tool(chat_id: str, context: ContextSchema) -> str:
+def check_resume_availability_tool(chat_id: str, runtime: ToolRuntime) -> str:
     """
     Check if full resume is available for candidate.
     
@@ -284,14 +292,14 @@ def check_resume_availability_tool(chat_id: str, context: ContextSchema) -> str:
         - Returns true if full resume is available, false otherwise
         - Helps determine next steps in the recruitment process
     """
-    web_portal = context.web_portal
+    web_portal = runtime.context.web_portal
     result = _call_api("POST", f"{web_portal}/chat/resume/check_full_resume_available", {"chat_id": chat_id})
     return result
 
 
 
 @tool
-def accept_resume_tool(chat_id: str, context: ContextSchema) -> str:
+def accept_resume_tool(chat_id: str, runtime: ToolRuntime) -> str:
     """
     Accept candidate's resume.
     
@@ -309,7 +317,7 @@ def accept_resume_tool(chat_id: str, context: ContextSchema) -> str:
         - This confirms acceptance of the candidate's resume
         - Typically used after reviewing the resume
     """
-    web_portal = context.web_portal
+    web_portal = runtime.context.web_portal
     result = _call_api("POST", f"{web_portal}/chat/resume/accept", {"chat_id": chat_id})
     return result
 
@@ -319,7 +327,7 @@ def accept_resume_tool(chat_id: str, context: ContextSchema) -> str:
 # ============================================================================
 
 @tool
-def greet_candidate_tool(identifier: str, message: str, mode: str, context: ContextSchema) -> str:
+def greet_candidate_tool(identifier: str, message: str, mode: str, runtime: ToolRuntime) -> str:
     """
     Send greeting message to candidate.
     
@@ -343,7 +351,7 @@ def greet_candidate_tool(identifier: str, message: str, mode: str, context: Cont
           * "chat", "greet", "followup" - Uses /chat/greet with chat_id
           * "recommend" - Uses /recommend/candidate/{index}/greet with candidate index
     """
-    web_portal = context.web_portal
+    web_portal = runtime.context.web_portal
     if mode == "recommend":
         # For recommend mode, identifier is the candidate index
         result = _call_api("POST", f"{web_portal}/recommend/candidate/{identifier}/greet", {"message": message})
@@ -354,7 +362,7 @@ def greet_candidate_tool(identifier: str, message: str, mode: str, context: Cont
 
 
 @tool
-def discard_candidate_tool(chat_id: str, context: ContextSchema) -> str:
+def discard_candidate_tool(chat_id: str, runtime: ToolRuntime) -> str:
     """
     Discard candidate from chat.
     
@@ -372,18 +380,17 @@ def discard_candidate_tool(chat_id: str, context: ContextSchema) -> str:
         - This removes the candidate from active consideration
         - Use when candidate doesn't meet requirements
     """
-    web_portal = context.web_portal
+    web_portal = runtime.context.web_portal
     result = _call_api("POST", f"{web_portal}/chat/candidate/discard", {"chat_id": chat_id})
     return result
 
 
 @tool
-def request_contact_tool(chat_id: str, context: ContextSchema) -> str:
+def request_contact_tool(chat_id: str, runtime: ToolRuntime) -> str:
     """
-    Request contact information from candidate.
-    
     This tool sends a request for contact information (phone, WeChat, etc.) to a candidate.
     Use this when the candidate shows interest and you need their contact details.
+    It will also send a dingtalk message to HR.
     
     Args:
         chat_id (str): Unique chat identifier for the candidate
@@ -396,8 +403,9 @@ def request_contact_tool(chat_id: str, context: ContextSchema) -> str:
         - This requests contact information for further communication
         - Typically used after initial screening and positive responses
     """
-    web_portal = context.web_portal
+    web_portal = runtime.context.web_portal
     result = _call_api("POST", f"{web_portal}/chat/contact/request", {"chat_id": chat_id})
+    #TODO: send dingtalk message to HR
     return result
 
 
@@ -406,7 +414,7 @@ def request_contact_tool(chat_id: str, context: ContextSchema) -> str:
 # ============================================================================
 
 @tool
-def get_candidate_from_store_tool(chat_id: str, context: ContextSchema) -> str:
+def get_candidate_from_store_tool(chat_id: str, runtime: ToolRuntime) -> str:
     """
     Get candidate information from store.
     
@@ -424,13 +432,13 @@ def get_candidate_from_store_tool(chat_id: str, context: ContextSchema) -> str:
         - Returns comprehensive candidate information including analysis
         - Useful for checking existing candidate records
     """
-    web_portal = context.web_portal
+    web_portal = runtime.context.web_portal
     result = _call_api("GET", f"{web_portal}/store/candidate/{chat_id}")
     return result
 
 
 @tool
-def find_candidate_by_resume_tool(resume_text: str, context: ContextSchema) -> str:
+def find_candidate_by_resume_tool(resume_text: str, runtime: ToolRuntime) -> str:
     """
     Find candidate by resume similarity.
     
@@ -448,7 +456,7 @@ def find_candidate_by_resume_tool(resume_text: str, context: ContextSchema) -> s
         - Returns similar candidates based on resume content
         - Helps avoid processing the same candidate multiple times
     """
-    web_portal = context.web_portal
+    web_portal = runtime.context.web_portal
     result = _call_api("POST", f"{web_portal}/store/candidate/get-by-resume", {"resume_text": resume_text})
     return result
 
@@ -458,7 +466,7 @@ def find_candidate_by_resume_tool(resume_text: str, context: ContextSchema) -> s
 # ============================================================================
 
 @tool
-def init_chat_thread_tool(candidate_id: str, assistant_id: str, job_id: str, context: ContextSchema) -> str:
+def init_chat_thread_tool(candidate_id: str, assistant_id: str, job_id: str, runtime: ToolRuntime) -> str:
     """
     Initialize chat thread for candidate.
     
@@ -478,7 +486,7 @@ def init_chat_thread_tool(candidate_id: str, assistant_id: str, job_id: str, con
         - Returns thread_id for subsequent operations
         - Required before using AI analysis tools
     """
-    web_portal = context.web_portal
+    web_portal = runtime.context.web_portal
     data = {
         "candidate_id": candidate_id,
         "assistant_id": assistant_id,
@@ -489,7 +497,7 @@ def init_chat_thread_tool(candidate_id: str, assistant_id: str, job_id: str, con
 
 
 @tool
-def get_thread_messages_tool(thread_id: str, context: ContextSchema) -> str:
+def get_thread_messages_tool(thread_id: str, runtime: ToolRuntime) -> str:
     """
     Get messages from chat thread.
     
@@ -507,7 +515,7 @@ def get_thread_messages_tool(thread_id: str, context: ContextSchema) -> str:
         - Returns all messages in chronological order
         - Useful for understanding conversation context
     """
-    web_portal = context.web_portal
+    web_portal = runtime.context.web_portal
     result = _call_api("GET", f"{web_portal}/chat/{thread_id}/messages")
     return result
 
@@ -518,13 +526,13 @@ def get_thread_messages_tool(thread_id: str, context: ContextSchema) -> str:
 # Browser tools
 manager_tools = [
     get_candidates_tool,
+    invoke_recruiter_tool,
 ]
 
 # Communication tools  
 chat_tools: List[Callable[..., Any]] = [
     send_chat_message_tool,
     get_chat_messages_tool,
-    ask_contact_tool,
     greet_candidate_tool,
     # discard_candidate_tool,
     request_contact_tool,
