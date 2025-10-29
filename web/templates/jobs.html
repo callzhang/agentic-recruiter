@@ -406,7 +406,11 @@ async function saveJob(event) {
     };
     
     try {
-        const response = await fetch('/web/jobs/update', {
+        // Determine if this is a new job or an update
+        const isNewJob = currentJobIndex === -1;
+        const endpoint = isNewJob ? '/web/jobs/create' : `/web/jobs/${jobsData[currentJobIndex].id}/update`;
+        
+        const response = await fetch(endpoint, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',

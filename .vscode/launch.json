@@ -48,6 +48,17 @@
         "host": "0.0.0.0",
         "port": 5678
       }
-  }
+    },
+    {
+      "name": "launch LangGraph server",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "/Users/derek/.local/share/uv/envs/global/bin/langgraph",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "subProcess": true,
+      "args": ["dev", "--debug-port", "5678"],
+      "cwd": "${workspaceFolder}",
+    }
   ]
 }

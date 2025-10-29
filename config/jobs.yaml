@@ -5,70 +5,6 @@ roles:
   description: '负责数据中心化大模型平台的核心研发，构建 MorningStar 的训练/评估/部署一体化能力，
 
     包括模型效率优化、推理加速、以及围绕自动驾驶、金融等行业客户的差异化方案。'
-  extra: '关键词与简历筛选标签 (For HR Screening)
-
-    为了帮助我们精准地找到最合适的候选人，请严格按照以下关键词列表进行筛选。目标是提升准确率（Accuracy），而非召回率（Recall）。
-
-
-    负面关键词清单 (Negative Keywords)
-
-    请优先排除个人简介和项目经历中仅包含以下通用或过时词汇，而无更深层次技术细节的简历：
-
-    machine learning, deep learning, AI, CNN, RNN, LSTM
-
-
-    核心技术方向与筛选关键词
-
-    方向一：AI对齐与偏好学习 (Alignment & Preference Learning)
-
-    此方向是构建可信赖AI、解决模型幻觉的基石，旨在让模型真正理解并遵循人类的复杂意图和价值观。
-
-    关键词: RLHF, RLAIF, DPO / GDPO, reward modeling, alignment, Constitutional AI
-
-    筛选建议: 重点关注对偏好数据收集、奖励模型设计与训练有深入理解的候选人。具备 DPO 或 RLAIF 实际项目经验是极强的信号，表明候选人已超越传统 RLHF
-    的认知，处于技术前沿。
-
-
-    方向二：高效微调与架构 (Efficient Tuning & Architectures)
-
-    此方向关注如何在有限的计算资源下，最大化模型的性能与迭代效率，是技术产品化和商业化的关键。
-
-    关键词: PEFT, QLoRA, AdaLoRA, P-Tuning, BitFit, UniPELT, MoE (Mixture of Experts),
-    Sparse Activation
-
-    筛选建议: 候选人应至少精通两种以上的 PEFT 方法，并能阐述其原理和适用场景。对于 MoE，需考察其对路由算法、负载均衡等核心机制的理解深度，而非停留在概念层面。
-
-
-    方向三：高级推理与生成模型 (Advanced Reasoning & Generative Models)
-
-    此方向致力于突破当前LLM线性、浅层推理的瓶颈，探索更强大的认知能力和新一代的生成模型理论。
-
-    关键词: CoT (Chain-of-Thought), Meta-of-Thought, ... of Thoughts (e.g., Tree of Thoughts,
-    Graph of Thoughts), Flow Matching, Consistency Models
-
-    筛选建议: 寻找在复杂问题求解（如数学、代码生成）方面有成功经验的候选人。若其研究涉及到对模型推理过程的结构化探索（如思维树/图），或对 Flow Matching
-    等有深厚数学背景的生成理论有研究，应作为顶级人才重点跟进。
-
-
-    方向四：多模态与推理优化 (Multimodality & Inference Optimization)
-
-    此方向旨在将AI的能力从纯文本扩展到图像、视频等更广阔的世界，并确保模型在生产环境中的高效响应。
-
-    关键词: vision-language models / LVLM, multimodal, CLIP, speculative decoding, distillation
-
-    筛选建议: 需具备 LVLM 的实际训练或微调经验。对于推理优化，应关注候选人是否有通过 speculative decoding 或 distillation
-    等技术显著降低延迟、提升吞吐量的量化成果。
-
-
-    方向五：数据策略与大规模训练 (Data Strategy & Large-Scale Training)
-
-    此方向是所有上层研究的根基，涵盖从数据源头提升模型智能，到驾驭超大规模计算集群的工程挑战。
-
-    关键词: augmentation, synthetic data, active learning, context engineering, parallelism,
-    gradient synchronization
-
-    筛选建议: 考察候选人是否具备“数据中心AI”的思维模式，例如通过 active learning 或 synthetic data 提升模型能力的经验。在大规模训练方面，对
-    parallelism（张量、流水线、数据并行）的理解深度是核心评估点。'
   id: algo
   keywords:
     negative:
@@ -78,6 +14,63 @@ roles:
     - CNN
     - RNN
     - LSTM
+    - artificial intelligence
+    - ML
+    - DL,
+    - neural network
+    - GRU
+    - Transformer
+    - attention,
+    - BERT
+    - GPT
+    - T5
+    - LLM
+    - large language model
+    - foundation model,
+    - fine-tuning
+    - pretraining
+    - training
+    - optimization
+    - gradient descent,
+    - supervised learning
+    - unsupervised learning
+    - reinforcement learning,
+    - NLP
+    - computer vision
+    - CV,
+    - embedding
+    - vector
+    - tensor
+    - matrix
+    - backpropagation,
+    - overfitting
+    - underfitting
+    - regularization
+    - dropout
+    - batch normalization
+    - RAG
+    - retrieval augmented generation
+    - vector database
+    - embedding search,
+    - semantic search
+    - similarity
+    - cosine distance
+    - FAISS,
+    - SFT
+    - supervised fine-tuning
+    - instruction tuning
+    - prompt engineering
+    - prompt design
+    - prompt optimization,
+    - few-shot learning
+    - zero-shot learning
+    - in-context learning,
+    - text generation
+    - language modeling
+    - sequence-to-sequence,
+    - encoder-decoder
+    - autoregressive
+    - generation quality
     positive:
     - PEFT
     - RLHF
@@ -115,44 +108,47 @@ roles:
     - of Thoughts
     - VLM
   position: 大模型算法工程师
-  requirements: '计算机科学、人工智能、运筹学或相关领域的硕士或博士学位，具备深厚的数学功底。
+  requirements: '1. 计算机科学、人工智能、数学、统计学、运筹学或相关领域的硕士或博士学位，具备深厚的数学功底。
+
+    2. 在大语言模型领域有扎实的研究背景，尤其在AI对齐、生成模型或高效模型架构方向有深入实践。
+
+    3. 对解决AI核心技术问题充满热情，能够从基础层面思考和解决问题。
+
+    4. 能够独立完成从算法设计、实现、实验、分析到优化的完整流程
+
+    5. 优秀的英文阅读和写作能力
 
 
-    在大语言模型领域有扎实的研究背景，尤其在AI对齐、生成模型或高效模型架构方向有深入实践。
+    加分项 (Preferred Qualifications)
 
+    ● 发表第一作者论文，担任过会议审稿人
 
-    具备 DPO/GDPO、RLAIF 等先进对齐算法的实践经验，或在 Flow Matching、Consistency Models 等生成模型理论与实现上有深入研究。
+    ● 在实验室的独立研究经历
 
+    ● 开源项目的贡献者或Maintainer
 
-    拥有丰富的 PEFT 实践经验，熟悉 QLoRA、AdaLoRA、P-Tuning、BitFit 或 UniPELT 等至少两种以上技术。
+    ● 有模型可解释性或数据归因经验
 
+    ● 合成数据生成和质量验证
 
-    熟悉 MoE 等稀疏化模型架构，并理解其核心机制。
-
-
-    对解决AI核心技术问题充满热情，能够从 gradient 和 perplexity 等基础层面思考和解决问题。'
-  responsibilities: '前沿对齐研究 (Alignment Research)：负责大语言模型AI对齐（Alignment）的前沿研究，深入探索并实践如
+    ● 对“Data-Centric AI”理念有深入理解和认同。'
+  responsibilities: '- 前沿对齐研究 (Alignment Research)：负责大语言模型AI对齐（Alignment）的前沿研究，深入探索并实践如
     GDPO、RLAIF 及 Constitutional AI 等超越传统 RLHF 的先进对齐技术，构建可信赖AI的核心。
 
-
-    创新范式探索 (Paradigm Exploration)：设计并实现创新的模型训练与评估机制。你将不仅仅是应用，而是要深入研究如 Flow Matching、Consistency
+    - 创新范式探索 (Paradigm Exploration)：设计并实现创新的模型训练与评估机制。你将不仅仅是应用，而是要深入研究如 Flow Matching、Consistency
     Models 等新一代生成模型框架，并探索 CoT (Chain-of-Thought) 到 Meta-of-Thought 等复杂推理结构的潜力。
 
-
-    性能与效率优化 (Performance & Efficiency Optimization)：研究并落地如 QLoRA、AdaLoRA、P-Tuning
+    - 性能与效率优化 (Performance & Efficiency Optimization)：研究并落地如 QLoRA、AdaLoRA、P-Tuning
     等多样化的 PEFT 技术。同时，探索 MoE 架构下的 Sparse Activation 机制、speculative decoding 和 distillation
     等前沿方案，实现极致的训练与推理效率。
 
+    - 多模态能力构建 (Multimodal Capabilities)：负责 vision-language models (LVLM) 的研究与落地，利用
+    CLIP 等模型的思想，构建强大的多模态理解与生成能力。
 
-    多模态能力构建 (Multimodal Capabilities)：负责 vision-language models (LVLM) 的研究与落地，利用 CLIP
-    等模型的思想，构建强大的多模态理解与生成能力。
-
-
-    数据中心AI实践 (Data-Centric AI Practices)：将 active learning、synthetic data augmentation
+    - 数据中心AI实践 (Data-Centric AI Practices)：将 active learning、synthetic data augmentation
     等数据策略与模型训练相结合，通过 context engineering 提升模型在特定领域的表现。
 
-
-    大规模训练 (Large-Scale Training)：深入理解大规模训练中的 parallelism 策略和 gradient synchronization
+    - 大规模训练 (Large-Scale Training)：深入理解大规模训练中的 parallelism 策略和 gradient synchronization
     等核心技术，确保算法在分布式环境下的高效运行。'
   target_profile: '- 对企业级 AI 基建抱有“从 0 到 1”热情，愿意在复杂度极高的系统里持续打磨。
 

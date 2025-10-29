@@ -78,6 +78,15 @@ async def create_job(request: Request):
     positive_keywords = keywords.get("positive", [])
     negative_keywords = keywords.get("negative", [])
     
+    # Extract drill down questions
+    drill_down_questions = json_data.get("drill_down_questions", [])
+    if isinstance(drill_down_questions, str):
+        drill_down_questions = [q.strip() for q in drill_down_questions.splitlines() if q.strip()]
+    elif isinstance(drill_down_questions, list):
+        drill_down_questions = [str(q).strip() for q in drill_down_questions if str(q).strip()]
+    else:
+        drill_down_questions = []
+    
     # Validate required fields
     if not job_id or not position:
         return JSONResponse(
@@ -108,7 +117,8 @@ async def create_job(request: Request):
         "keywords": {
             "positive": positive_keywords,
             "negative": negative_keywords
-        }
+        },
+        "drill_down_questions": drill_down_questions
     }
     
     # Add extra configuration if provided
@@ -148,6 +158,15 @@ async def update_job(job_id: str, request: Request):
     positive_keywords = keywords.get("positive", [])
     negative_keywords = keywords.get("negative", [])
     
+    # Extract drill down questions
+    drill_down_questions = json_data.get("drill_down_questions", [])
+    if isinstance(drill_down_questions, str):
+        drill_down_questions = [q.strip() for q in drill_down_questions.splitlines() if q.strip()]
+    elif isinstance(drill_down_questions, list):
+        drill_down_questions = [str(q).strip() for q in drill_down_questions if str(q).strip()]
+    else:
+        drill_down_questions = []
+    
     # Validate required fields
     if not new_job_id or not position:
         return JSONResponse(
@@ -186,7 +205,8 @@ async def update_job(job_id: str, request: Request):
         "keywords": {
             "positive": positive_keywords,
             "negative": negative_keywords
-        }
+        },
+        "drill_down_questions": drill_down_questions
     }
     
     # Add extra configuration if provided

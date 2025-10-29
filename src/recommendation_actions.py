@@ -142,11 +142,11 @@ async def list_recommended_candidates_action(page: Page, *, limit: int = 40, job
                 "index": index,  # Position in the current list
                 "chat_id": None,  # Recommend candidates don't have a chat_id yet
                 "name": name,
-                "job_title": job_title,  # Standardized field name
-                "text": text,
+                "job_applied": job_title,  # Standardized field name
+                "description": text,
                 "viewed": viewed,
                 "greeted": greeted,
-                "stage": "GREET" if greeted else None  # Map greeted status to stage
+                'mode': 'recommend',
             })
     
     logger.info("成功获取 %d 个推荐候选人", len(candidates))
@@ -210,12 +210,14 @@ async def greet_recommend_candidate_action(page: Page, index: int, message: str)
             raise ValueError("未找到打招呼按钮")
 
     if message:
+        # 点击继续沟通按钮
         chat_btn = card.locator(chat_selectors).first
         if await chat_btn.count() > 0:
             await chat_btn.click(timeout=1000)
-        input_box = page.locator("div.conversation-bd-content").first
-        await input_box.click()
-        input_field = input_box.locator("div.bosschat-chat-input").first
+        # input_box = page.locator("div.conversation-bd-content").first
+        # await input_box.click(timeout=1000)
+        # 点击输入框
+        input_field = page.locator("div.bosschat-chat-input").first
         await input_field.fill("")
         await input_field.type(message)
         send_btn = page.locator("span:has-text('发送')").first

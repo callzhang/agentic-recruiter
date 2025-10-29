@@ -234,8 +234,8 @@ async def get_chat_list_action(page: Page, limit: int = 10, tab: str = '新招�
             {
                 "id": data_id,
                 "name": name.strip(),
-                "job_title": job_title.strip(),
-                "text": text.strip(),
+                "job_applied": job_title.strip(),
+                "last_message": text.strip(),
                 "timestamp": timestamp.strip(),
             }
         )
