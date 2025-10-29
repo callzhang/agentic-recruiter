@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-import yaml
 import re
 from typing import Set
 
@@ -12,29 +10,15 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
 from src.config import settings
+from src.jobs_store import jobs_store
 
 router = APIRouter()
 templates = Jinja2Templates(directory="web/templates")
 
 
 def load_jobs():
-    """Load jobs from config file."""
-    path = Path(settings.BOSS_CRITERIA_PATH)
-    if not path.exists():
-        return []
-    data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    if isinstance(data, dict) and isinstance(data.get("roles"), list):
-        return data["roles"]
-    return []
-
-
-def save_jobs(jobs):
-    """Save jobs to config file."""
-    path = Path(settings.BOSS_CRITERIA_PATH)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    
-    data = {"roles": jobs}
-    path.write_text(yaml.dump(data, allow_unicode=True, default_flow_style=False), encoding="utf-8")
+    """Load jobs from Zilliz Cloud."""
+    return jobs_store.get_all_jobs()
 
 
 def generate_job_id(position: str) -> str:
@@ -78,14 +62,8 @@ async def create_job(request: Request):
     positive_keywords = keywords.get("positive", [])
     negative_keywords = keywords.get("negative", [])
     
-    # Extract drill down questions
-    drill_down_questions = json_data.get("drill_down_questions", [])
-    if isinstance(drill_down_questions, str):
-        drill_down_questions = [q.strip() for q in drill_down_questions.splitlines() if q.strip()]
-    elif isinstance(drill_down_questions, list):
-        drill_down_questions = [str(q).strip() for q in drill_down_questions if str(q).strip()]
-    else:
-        drill_down_questions = []
+    # Extract drill down questions as string
+    drill_down_questions = json_data.get("drill_down_questions", "").strip()
     
     # Validate required fields
     if not job_id or not position:
@@ -94,18 +72,15 @@ async def create_job(request: Request):
             content={"success": False, "error": "岗位ID和岗位名称不能为空"}
         )
     
-    # Load existing jobs
-    jobs = load_jobs()
-    existing_ids = {job.get("id", "") for job in jobs if job.get("id")}
-    
     # Check if job_id already exists
-    if job_id in existing_ids:
+    existing_job = jobs_store.get_job_by_id(job_id)
+    if existing_job:
         return JSONResponse(
             status_code=400,
             content={"success": False, "error": f"岗位ID '{job_id}' 已存在"}
         )
     
-    # Create new job
+    # Create new job data
     new_job = {
         "id": job_id,
         "position": position,
@@ -124,6 +99,7 @@ async def create_job(request: Request):
     # Add extra configuration if provided
     if extra_yaml:
         try:
+            import yaml
             extra_data = yaml.safe_load(extra_yaml)
             if extra_data:
                 new_job.update(extra_data)
@@ -133,10 +109,14 @@ async def create_job(request: Request):
                 content={"success": False, "error": f"YAML格式错误: {str(e)}"}
             )
     
-    jobs.append(new_job)
-    save_jobs(jobs)
-    
-    return JSONResponse(content={"success": True, "data": new_job})
+    # Insert job into Zilliz
+    if jobs_store.insert_job(**new_job):
+        return JSONResponse(content={"success": True, "data": new_job})
+    else:
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": "创建岗位失败"}
+        )
 
 
 @router.post("/{job_id}/update", response_class=JSONResponse)
@@ -158,14 +138,8 @@ async def update_job(job_id: str, request: Request):
     positive_keywords = keywords.get("positive", [])
     negative_keywords = keywords.get("negative", [])
     
-    # Extract drill down questions
-    drill_down_questions = json_data.get("drill_down_questions", [])
-    if isinstance(drill_down_questions, str):
-        drill_down_questions = [q.strip() for q in drill_down_questions.splitlines() if q.strip()]
-    elif isinstance(drill_down_questions, list):
-        drill_down_questions = [str(q).strip() for q in drill_down_questions if str(q).strip()]
-    else:
-        drill_down_questions = []
+    # Extract drill down questions as string
+    drill_down_questions = json_data.get("drill_down_questions", "").strip()
     
     # Validate required fields
     if not new_job_id or not position:
@@ -174,11 +148,9 @@ async def update_job(job_id: str, request: Request):
             content={"success": False, "error": "岗位ID和岗位名称不能为空"}
         )
     
-    # Load existing jobs
-    jobs = load_jobs()
-    job_index = next((i for i, j in enumerate(jobs) if j.get("id") == job_id), None)
-    
-    if job_index is None:
+    # Check if job exists
+    existing_job = jobs_store.get_job_by_id(job_id)
+    if not existing_job:
         return JSONResponse(
             status_code=404,
             content={"success": False, "error": "岗位未找到"}
@@ -186,14 +158,14 @@ async def update_job(job_id: str, request: Request):
     
     # Check if new job_id conflicts with existing jobs (excluding current job)
     if new_job_id != job_id:
-        existing_ids = {j.get("id", "") for i, j in enumerate(jobs) if i != job_index}
-        if new_job_id in existing_ids:
+        existing_job_with_new_id = jobs_store.get_job_by_id(new_job_id)
+        if existing_job_with_new_id:
             return JSONResponse(
                 status_code=400,
                 content={"success": False, "error": f"岗位ID '{new_job_id}' 已存在"}
             )
     
-    # Update job
+    # Update job data
     updated_job = {
         "id": new_job_id,
         "position": position,
@@ -212,6 +184,7 @@ async def update_job(job_id: str, request: Request):
     # Add extra configuration if provided
     if extra_yaml:
         try:
+            import yaml
             extra_data = yaml.safe_load(extra_yaml)
             if extra_data:
                 updated_job.update(extra_data)
@@ -221,31 +194,37 @@ async def update_job(job_id: str, request: Request):
                 content={"success": False, "error": f"YAML格式错误: {str(e)}"}
             )
     
-    jobs[job_index] = updated_job
-    save_jobs(jobs)
-    
-    return JSONResponse(content={"success": True, "data": updated_job})
+    # Update job in Zilliz
+    if jobs_store.update_job(job_id, **updated_job):
+        return JSONResponse(content={"success": True, "data": updated_job})
+    else:
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": "更新岗位失败"}
+        )
 
 
 @router.delete("/{job_id}/delete", response_class=JSONResponse)
 async def delete_job(job_id: str):
     """Delete job."""
-    jobs = load_jobs()
-    
-    job_to_delete = next((j for j in jobs if j.get("id") == job_id), None)
-    if not job_to_delete:
+    # Check if job exists
+    existing_job = jobs_store.get_job_by_id(job_id)
+    if not existing_job:
         return JSONResponse(
             status_code=404,
             content={"success": False, "error": "岗位不存在"}
         )
     
-    updated_jobs = [j for j in jobs if j.get("id") != job_id]
-    
-    save_jobs(updated_jobs)
-    
-    return JSONResponse(
-        content={"success": True, "message": f"岗位 '{job_to_delete.get('position', '')}' 已删除"}
-    )
+    # Delete job from Zilliz
+    if jobs_store.delete_job(job_id):
+        return JSONResponse(
+            content={"success": True, "message": f"岗位 '{existing_job.get('position', '')}' 已删除"}
+        )
+    else:
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": "删除岗位失败"}
+        )
 
 
 @router.get("/api/list", response_class=JSONResponse)
@@ -258,8 +237,7 @@ async def api_list_jobs():
 @router.get("/api/{job_id}", response_class=JSONResponse)
 async def api_get_job(job_id: str):
     """API endpoint to get specific job."""
-    jobs = load_jobs()
-    job = next((j for j in jobs if j.get("id") == job_id), None)
+    job = jobs_store.get_job_by_id(job_id)
     
     if not job:
         return JSONResponse(

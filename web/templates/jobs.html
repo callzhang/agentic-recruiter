@@ -37,16 +37,50 @@
 </div>
 
 <script>
-// Job data - will be populated from server
-let jobsData = {{ jobs | tojson }};
+// Job data - will be loaded dynamically
+let jobsData = [];
 let currentJobIndex = -1;
+
+// Load jobs data from API
+async function loadJobsData() {
+    try {
+        const response = await fetch('/web/jobs/api/list');
+        const result = await response.json();
+        if (result.success) {
+            jobsData = result.data;
+            
+            renderJobTabs();
+            
+            // Check URL for tab parameter
+            const urlParams = new URLSearchParams(window.location.search);
+            const tabParam = urlParams.get('tab');
+            
+            if (tabParam) {
+                // Find job by ID
+                const jobIndex = jobsData.findIndex(job => job.job_id === tabParam);
+                if (jobIndex !== -1) {
+                    
+                    switchToJob(jobIndex);
+                } else {
+                    
+                    switchToJob(0);
+                }
+            } else if (jobsData.length > 0) {
+                switchToJob(0);
+            } else {
+                loadNewJobForm();
+            }
+        } else {
+            
+        }
+    } catch (error) {
+        
+    }
+}
 
 // Initialize the page
 document.addEventListener('DOMContentLoaded', function() {
-    renderJobTabs();
-    if (jobsData.length > 0) {
-        switchToJob(0);
-    }
+    loadJobsData();
 });
 
 // Render job tabs
@@ -60,7 +94,7 @@ function renderJobTabs() {
         tabsHtml += `
             <button class="job-tab px-4 py-2 border-b-2 ${activeClass} hover:bg-blue-50 transition-colors"
                     onclick="switchToJob(${index})">
-                ${job.position}
+                ${job.position || job.job_id || 'Unknown'}
             </button>
         `;
     });
@@ -82,13 +116,18 @@ function switchToJob(jobIndex) {
     currentJobIndex = jobIndex;
     renderJobTabs();
     
+    // Update URL
+    const url = new URL(window.location);
     if (jobIndex < jobsData.length) {
+        url.searchParams.set('tab', jobsData[jobIndex].job_id);
         // Load existing job
         loadJobForm(jobsData[jobIndex]);
     } else {
+        url.searchParams.delete('tab');
         // Load new job form
         loadNewJobForm();
     }
+    window.history.pushState({}, '', url);
 }
 
 // Load job form
@@ -99,7 +138,7 @@ function loadJobForm(job) {
         <div class="max-w-6xl mx-auto space-y-6">
             <div class="bg-white rounded-lg shadow-lg p-6">
                 <form id="job-form" onsubmit="saveJob(event)">
-                    <input type="hidden" name="job_id" value="${job.id}">
+                    <input type="hidden" name="job_id" value="${job.job_id}">
                     
                     <!-- Basic Information -->
                     <div class="space-y-4">
@@ -109,7 +148,7 @@ function loadJobForm(job) {
                             <div>
                                 <label for="job_id" class="block text-sm font-medium text-gray-700 mb-2">岗位 ID *</label>
                                 <input type="text" id="job_id" name="job_id" required
-                                       value="${job.id}"
+                                       value="${job.job_id}"
                                        class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                                        placeholder="例如: python_developer">
                             </div>
@@ -164,6 +203,18 @@ function loadJobForm(job) {
                         </div>
                     </div>
                     
+                    <!-- Drill Down Questions -->
+                    <div class="space-y-4 mt-8">
+                        <h2 class="text-xl font-semibold text-gray-800">追问问题</h2>
+                        <p class="text-sm text-gray-500">用于面试沟通时进一步确认候选人能力与经历。一行一个问题。</p>
+                        <div>
+                            <label for="drill_down_questions_text" class="block text-sm font-medium text-gray-700 mb-2">问题列表</label>
+                            <textarea id="drill_down_questions_text" name="drill_down_questions_text" rows="6"
+                                      class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                                      placeholder="例如：\n请详细描述你在RLHF项目中的具体职责和贡献？\n你如何评估一个对齐算法的有效性？\n在工程实践中你如何权衡推理性能与成本？">${job.drill_down_questions || ''}</textarea>
+                        </div>
+                    </div>
+                    
                     <!-- Keywords -->
                     <div class="space-y-4 mt-8">
                         <h2 class="text-xl font-semibold text-gray-800">关键词</h2>
@@ -176,7 +227,7 @@ function loadJobForm(job) {
                                     <div class="tag-input-container">
                                         <input type="text" 
                                                class="tag-input w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent" 
-                                               placeholder="输入关键词后回车"
+                                               placeholder="输入关键词后回车，或用逗号、分号分隔多个关键词"
                                                data-field="positive_keywords">
                                         <div class="tag-suggestions hidden absolute z-10 w-full bg-white border border-gray-300 rounded-md shadow-lg max-h-40 overflow-y-auto">
                                             <!-- Suggestions will be populated here -->
@@ -194,7 +245,7 @@ function loadJobForm(job) {
                                     <div class="tag-input-container">
                                         <input type="text" 
                                                class="tag-input w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent" 
-                                               placeholder="输入关键词后回车"
+                                               placeholder="输入关键词后回车，或用逗号、分号分隔多个关键词"
                                                data-field="negative_keywords">
                                         <div class="tag-suggestions hidden absolute z-10 w-full bg-white border border-gray-300 rounded-md shadow-lg max-h-40 overflow-y-auto">
                                             <!-- Suggestions will be populated here -->
@@ -215,7 +266,7 @@ function loadJobForm(job) {
                             💾 保存
                         </button>
                         
-                        <button type="button" onclick="deleteJob('${job.id}')" 
+                        <button type="button" onclick="deleteJob('${job.job_id}')" 
                                 class="px-6 py-3 bg-red-600 text-white rounded-lg hover:bg-red-700 font-medium">
                             🗑️ 删除岗位
                         </button>
@@ -228,19 +279,31 @@ function loadJobForm(job) {
     // Initialize tag editors with existing data
     setTimeout(() => {
         initializeTagEditors();
-        if (job.keywords && job.keywords.positive) {
-            const positiveEditor = window.tagEditors['positive_keywords'];
-            if (positiveEditor) {
-                positiveEditor.setTags(job.keywords.positive);
+        
+        // Wait for tag editors to be ready before setting tags
+        const setTagsWhenReady = () => {
+            if (job.keywords && job.keywords.positive) {
+                const positiveEditor = window.tagEditors['positive_keywords'];
+                if (positiveEditor && typeof positiveEditor.setTags === 'function') {
+                    positiveEditor.setTags(job.keywords.positive);
+                } else {
+                    // Retry if not ready yet
+                    setTimeout(setTagsWhenReady, 50);
+                }
             }
-        }
-        if (job.keywords && job.keywords.negative) {
-            const negativeEditor = window.tagEditors['negative_keywords'];
-            if (negativeEditor) {
-                negativeEditor.setTags(job.keywords.negative);
+            if (job.keywords && job.keywords.negative) {
+                const negativeEditor = window.tagEditors['negative_keywords'];
+                if (negativeEditor && typeof negativeEditor.setTags === 'function') {
+                    negativeEditor.setTags(job.keywords.negative);
+                } else {
+                    // Retry if not ready yet
+                    setTimeout(setTagsWhenReady, 50);
+                }
             }
-        }
-    }, 100);
+        };
+        
+        setTagsWhenReady();
+    }, 200);
 }
 
 // Load new job form
@@ -313,6 +376,18 @@ function loadNewJobForm() {
                         </div>
                     </div>
                     
+                    <!-- Drill Down Questions -->
+                    <div class="space-y-4 mt-8">
+                        <h2 class="text-xl font-semibold text-gray-800">追问问题</h2>
+                        <p class="text-sm text-gray-500">用于面试沟通时进一步确认候选人能力与经历。一行一个问题。</p>
+                        <div>
+                            <label for="drill_down_questions_text" class="block text-sm font-medium text-gray-700 mb-2">问题列表</label>
+                            <textarea id="drill_down_questions_text" name="drill_down_questions_text" rows="6"
+                                      class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                                      placeholder="例如：\n请详细描述你在RLHF项目中的具体职责和贡献？\n你如何评估一个对齐算法的有效性？\n在工程实践中你如何权衡推理性能与成本？"></textarea>
+                        </div>
+                    </div>
+                    
                     <!-- Keywords -->
                     <div class="space-y-4 mt-8">
                         <h2 class="text-xl font-semibold text-gray-800">关键词</h2>
@@ -325,7 +400,7 @@ function loadNewJobForm() {
                                     <div class="tag-input-container">
                                         <input type="text" 
                                                class="tag-input w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent" 
-                                               placeholder="输入关键词后回车"
+                                               placeholder="输入关键词后回车，或用逗号、分号分隔多个关键词"
                                                data-field="positive_keywords">
                                         <div class="tag-suggestions hidden absolute z-10 w-full bg-white border border-gray-300 rounded-md shadow-lg max-h-40 overflow-y-auto">
                                             <!-- Suggestions will be populated here -->
@@ -343,7 +418,7 @@ function loadNewJobForm() {
                                     <div class="tag-input-container">
                                         <input type="text" 
                                                class="tag-input w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent" 
-                                               placeholder="输入关键词后回车"
+                                               placeholder="输入关键词后回车，或用逗号、分号分隔多个关键词"
                                                data-field="negative_keywords">
                                         <div class="tag-suggestions hidden absolute z-10 w-full bg-white border border-gray-300 rounded-md shadow-lg max-h-40 overflow-y-auto">
                                             <!-- Suggestions will be populated here -->
@@ -372,7 +447,7 @@ function loadNewJobForm() {
     // Initialize tag editors
     setTimeout(() => {
         initializeTagEditors();
-    }, 100);
+    }, 200);
 }
 
 // Initialize tag editors
@@ -381,11 +456,12 @@ function initializeTagEditors() {
         window.tagEditors = {};
     }
     
+    // Always (re)bind editors to the current DOM containers for this view
     document.querySelectorAll('.tag-editor').forEach(container => {
         const fieldName = container.dataset.field;
-        if (fieldName && !window.tagEditors[fieldName]) {
-            window.tagEditors[fieldName] = new TagEditor(container);
-        }
+        if (!fieldName) return;
+        // Replace any existing instance to avoid stale bindings after tab switch
+        window.tagEditors[fieldName] = new TagEditor(container);
     });
 }
 
@@ -395,6 +471,10 @@ async function saveJob(event) {
     
     const formData = new FormData(event.target);
     const jobData = Object.fromEntries(formData.entries());
+    
+    // Get drill down questions as string
+    const ddqTextEl = document.getElementById('drill_down_questions_text');
+    jobData.drill_down_questions = ddqTextEl ? ddqTextEl.value : '';
     
     // Get keywords from tag editors
     const positiveKeywords = window.tagEditors['positive_keywords'] ? Array.from(window.tagEditors['positive_keywords'].tags) : [];
@@ -408,7 +488,7 @@ async function saveJob(event) {
     try {
         // Determine if this is a new job or an update
         const isNewJob = currentJobIndex === -1;
-        const endpoint = isNewJob ? '/web/jobs/create' : `/web/jobs/${jobsData[currentJobIndex].id}/update`;
+        const endpoint = isNewJob ? '/web/jobs/create' : `/web/jobs/${jobsData[currentJobIndex].job_id}/update`;
         
         const response = await fetch(endpoint, {
             method: 'POST',
@@ -419,21 +499,17 @@ async function saveJob(event) {
         });
         
         const result = await response.json();
-        console.log('Save response:', result);
+        
         
         if (result.success) {
             alert('岗位已保存');
-            // Update local data
-            const jobIndex = jobsData.findIndex(j => j.id === jobData.job_id);
-            if (jobIndex !== -1) {
-                jobsData[jobIndex] = jobData;
-            }
-            renderJobTabs();
+            // Reload jobs data to get fresh data from server
+            await loadJobsData();
         } else {
             alert('保存失败: ' + (result.error || '未知错误'));
         }
     } catch (error) {
-        console.error('Save error:', error);
+        
         alert('保存失败: ' + error.message);
     }
 }
@@ -444,6 +520,10 @@ async function createJob(event) {
     
     const formData = new FormData(event.target);
     const jobData = Object.fromEntries(formData.entries());
+    
+    // Get drill down questions as string
+    const ddqTextEl = document.getElementById('drill_down_questions_text');
+    jobData.drill_down_questions = ddqTextEl ? ddqTextEl.value : '';
     
     // Get keywords from tag editors
     const positiveKeywords = window.tagEditors['positive_keywords'] ? Array.from(window.tagEditors['positive_keywords'].tags) : [];
@@ -464,13 +544,13 @@ async function createJob(event) {
         });
         
         const result = await response.json();
-        console.log('Create response:', result);
+        
         
         if (result.success) {
             alert('岗位已创建');
-            // Add to local data
-            jobsData.push(jobData);
-            renderJobTabs();
+            // Reload jobs data to get fresh data from server
+            await loadJobsData();
+            // Switch to the last job (newly created)
             switchToJob(jobsData.length - 1);
         } else {
             alert('创建失败: ' + (result.error || '未知错误'));
@@ -496,9 +576,8 @@ async function deleteJob(jobId) {
             
             if (result.success) {
                 alert('岗位已删除');
-                // Remove from local data
-                jobsData = jobsData.filter(j => j.id !== jobId);
-                renderJobTabs();
+                // Reload jobs data to get fresh data from server
+                await loadJobsData();
                 if (jobsData.length > 0) {
                     switchToJob(0);
                 } else {
@@ -610,6 +689,9 @@ class TagEditor {
             this.addCurrentTag();
         } else if (e.key === 'Backspace' && this.input.value === '') {
             this.removeLastTag();
+        } else if (e.key === ',' || e.key === ';') {
+            e.preventDefault();
+            this.addCurrentTag();
         }
     }
     
@@ -624,8 +706,14 @@ class TagEditor {
     
     addCurrentTag() {
         const value = this.input.value.trim();
-        if (value && !this.tags.has(value)) {
-            this.addTag(value);
+        if (value) {
+            // Split by comma or semicolon and add each tag
+            const tags = value.split(/[,;]/).map(tag => tag.trim()).filter(tag => tag);
+            tags.forEach(tag => {
+                if (!this.tags.has(tag)) {
+                    this.addTag(tag);
+                }
+            });
             this.input.value = '';
         }
         this.hideSuggestions();

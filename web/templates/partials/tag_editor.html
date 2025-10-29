@@ -125,6 +125,9 @@ class TagEditor {
             this.addCurrentTag();
         } else if (e.key === 'Backspace' && this.input.value === '') {
             this.removeLastTag();
+        } else if (e.key === ',' || e.key === ';') {
+            e.preventDefault();
+            this.addCurrentTag();
         }
     }
     
@@ -139,8 +142,14 @@ class TagEditor {
     
     addCurrentTag() {
         const value = this.input.value.trim();
-        if (value && !this.tags.has(value)) {
-            this.addTag(value);
+        if (value) {
+            // Split by comma or semicolon and add each tag
+            const tags = value.split(/[,;]/).map(tag => tag.trim()).filter(tag => tag);
+            tags.forEach(tag => {
+                if (!this.tags.has(tag)) {
+                    this.addTag(tag);
+                }
+            });
             this.input.value = '';
         }
         this.hideSuggestions();

@@ -193,23 +193,23 @@ def render_history_section(history: List[Dict[str, Any]]) -> None:
 
 @st.cache_data(show_spinner="分析中...")
 def _analyze_candidate(chat_id: str, assistant_id: str, history: list[dict]) -> Dict[str, Any]:
-    context = {
+        context = {
         "chat_id": chat_id,
         "assistant_id": assistant_id,
         "chat_history": history,
         "purpose": "analyze",
         # "instruction": "请根据岗位描述，对候选人的简历进行打分，用于决定是否继续推进。",
     }
-    ok, generated_message = call_api(
-        "POST", "/assistant/generate-message",
-        json=context
-        )
-    if ok:
-        get_thread_messages.clear()
-        st.session_state.setdefault(SessionKeys.ANALYSIS_RESULTS, {})[chat_id] = generated_message
-        return generated_message
-    else:
-        raise ValueError(f"无法解析评分结果: {generated_message}")
+        ok, generated_message = call_api(
+            "POST", "/assistant/generate-message",
+            json=context
+            )
+        if ok:
+            get_thread_messages.clear()
+            st.session_state.setdefault(SessionKeys.ANALYSIS_RESULTS, {})[chat_id] = generated_message
+            return generated_message
+        else:
+            raise ValueError(f"无法解析评分结果: {generated_message}")
 
 @st.cache_data(show_spinner="获取候选人中...")
 def get_candidate_by_id(chat_id: str) -> Dict[str, Any]:
@@ -262,12 +262,12 @@ def stream_message(message: str) -> None:
 def send_message_and_request_full_resume(chat_id: str, message: str) -> None:
     """Send message and request full resume. API now returns bool instead of success/details dict."""
     if not message:
-        st.warning("消息内容不能为空")
+            st.warning("消息内容不能为空")
         return
     
     # Send message
     try:
-        with st.spinner("发送中..."):
+            with st.spinner("发送中..."):
             ok, result = call_api("POST", f"/chat/{chat_id}/send", json={"message": message})
             if ok and result is True:
                 st.success("消息发送成功")
