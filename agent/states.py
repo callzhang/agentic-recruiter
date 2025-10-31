@@ -10,10 +10,6 @@ from dataclasses import dataclass, field
 from yaml import load, Loader
 from agent.prompts import STAGES, ACTIONS, ACTION_PROMPTS
 
-with open('config/jobs.yaml', 'r') as f:
-    jobs = load(f, Loader=Loader)
-
-
 
 class Candidate(BaseModel):
     """Candidate model"""
@@ -70,15 +66,18 @@ class ManagerInputState(BaseModel):
 class ManagerState(ManagerInputState):
     'State for the manager agent to manage the recruitment process'
     candidates: Annotated[list[Candidate], add_candidates] = Field(description="All candidates fetched from the jobs", default=[])
-    processed_candidates: Annotated[list[Dict], operator.add] = Field(description="All candidates that have been processed", default=[])
+    processed_candidates: Annotated[list[Candidate], operator.add] = Field(description="All candidates that have been processed", default=[])
     jobs: List[Dict] = Field(description="All available jobs from the web portal", default=[])
     assistants: List[Dict] = Field(description="All available assistant personas from the web portal", default=[])
+    # current candidate information
+    assistant_name: str = Field(description="The name of the assistant to use", default=None)
+    current_candidate: Candidate = Field(description="The index of the current candidate to process", default=None)
 
 class RecruiterState(BaseModel):
     """Recruiter agent state to process a single candidate"""
     mode: Literal["recommend", "greet", "chat", "followup"] = Field(description="The mode to look for candidates", default="recommend")
     stage: Literal["GREET", "PASS", "CHAT", "SEEK", "CONTACT"] = Field(description="The stage of the candidate", default=None)
-    candidate: Dict = Field(description="The candidate to process")
+    candidate: Candidate = Field(description="The candidate to process")
     job_info: Dict = Field(description="The job description to analyze the candidate")
     assistant_info: Dict = Field(description="The assistant persona to analyze the candidate")
     analysis: Dict = Field(description="The analysis of the candidate", default={})

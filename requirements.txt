@@ -15,8 +15,9 @@ colorlog>=6.8.2
 sentry-sdk[fastapi]>=2.0.0
 robust-json-parser
 # LangChain dependencies for graph agent example
-langchain>=0.3.0
-langchain-core>=0.3.0
+langchain>=1
+langchain-core>=1
 langchain-openai>=0.3.0
-langgraph>=0.2.0
+langgraph>=1
 typing-extensions>=4.0.0
+langgraph-checkpoint-sqlite>=3.0.0

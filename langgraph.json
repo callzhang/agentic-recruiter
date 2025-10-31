@@ -1,9 +1,30 @@
 {
-    "dependencies": ["agent"],
-    "graphs": {
-      "manager_agent": "./agent/graph.py:manager_graph",
-      "recruiter_agent": "./agent/graph.py:recruiter_graph"
+  "dependencies": ["./agent"],
+  "graphs": {
+    "manager_agent": "./agent/graph.py:manager_graph",
+    "recruiter_agent": "./agent/graph.py:recruiter_graph"
+  },
+  "env": ".env",
+  "store": {
+    "index": {
+      "embed": "openai:text-embedding-3-small",
+      "dims": 1536,
+      "fields": ["$"]
     },
-    "env": ".env"
-  }
+    "ttl": {
+      "refresh_on_read": true,
+      "sweep_interval_minutes": 60,
+      "default_ttl": 43200
+    }
+  },
+  "python_version": "3.13",
+  "checkpointer": {
+    "ttl": {
+      "strategy": "delete",
+      "sweep_interval_minutes": 60,
+      "default_ttl": 43200
+    }
+  },
+  "api_version": "0.1"
+}
   

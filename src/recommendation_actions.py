@@ -123,11 +123,16 @@ async def list_recommended_candidates_action(page: Page, *, limit: int = 40, job
     frame = await _prepare_recommendation_page(page, job_title=job_title)
     candidates: List[Dict[str, Any]] = []
     cards = frame.locator(CANDIDATE_CARD_SELECTOR)
-    count = await cards.count()
-    if count == 0:
+    t0 = time.time()
+    while time.time() - t0 < 5000:
+        count = await cards.count()
+        if count > 0:
+            break
+        await asyncio.sleep(0.5)
+    else:
         raise ValueError("未找到推荐候选人")
 
-    for index in range(min(count, limit)):
+    for index in range(count):
         card = cards.nth(index)
         await card.hover(timeout=3000)
         classes = await card.get_attribute("class") or ""
@@ -148,6 +153,10 @@ async def list_recommended_candidates_action(page: Page, *, limit: int = 40, job
                 "greeted": greeted,
                 'mode': 'recommend',
             })
+        if len(candidates) >= limit:
+            break
+    else:
+        logger.warning("获取的推荐候选人数量少于需求量，实际获取数量: %d", len(candidates))
     
     logger.info("成功获取 %d 个推荐候选人", len(candidates))
     return candidates
@@ -210,25 +219,26 @@ async def greet_recommend_candidate_action(page: Page, index: int, message: str)
             raise ValueError("未找到打招呼按钮")
 
     if message:
-        # 点击继续沟通按钮
-        chat_btn = card.locator(chat_selectors).first
-        if await chat_btn.count() > 0:
+        try:
+            # 点击继续沟通按钮
+            asyncio.sleep(3)
+            chat_btn = card.locator(chat_selectors)
             await chat_btn.click(timeout=1000)
-        # input_box = page.locator("div.conversation-bd-content").first
-        # await input_box.click(timeout=1000)
-        # 点击输入框
-        input_field = page.locator("div.bosschat-chat-input").first
-        await input_field.fill("")
-        await input_field.type(message)
-        send_btn = page.locator("span:has-text('发送')").first
-        if await send_btn.count() > 0:
-            await send_btn.click(timeout=1000)
-        else:
-            await page.keyboard.press("Enter")
-        close_btn = page.locator("div.iboss-close").first
-        if await close_btn.count() > 0:
+            # input_box = page.locator("div.conversation-bd-content").first
+            # await input_box.click(timeout=1000)
+            # 点击输入框
+            input_field = page.locator("div.bosschat-chat-input").first
+            await input_field.fill("", timeout=5000)
+            await input_field.type(message)
+            send_btn = page.locator("span:has-text('发送')").first
+            if await send_btn.count() > 0:
+                await send_btn.click(timeout=1000)
+            else:
+                await page.keyboard.press("Enter")
+            close_btn = page.locator("div.iboss-close").first
             await close_btn.click(timeout=1000)
-
+        except:
+            logger.error("发送消息失败")
     logger.info("打招呼成功")
     return True
 

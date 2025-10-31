@@ -11,3 +11,4 @@ screenshots/
 .DS_Store
 .langgraph_api/
 .env
+*copy.yaml
