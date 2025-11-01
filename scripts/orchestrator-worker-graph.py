@@ -24,7 +24,7 @@ class Sections(BaseModel):
         description="Sections of the report.",
     )
 
-llm = init_chat_model("gpt-4o-mini")    
+llm = init_chat_model("gpt-5-mini")    
 
 # Augment the LLM with schema for structured output
 planner = llm.with_structured_output(Sections)

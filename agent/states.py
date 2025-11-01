@@ -6,9 +6,6 @@ from langchain_core.messages import AnyMessage
 import operator
 import uuid
 from pydantic import BaseModel, Field, model_validator
-from dataclasses import dataclass, field
-from yaml import load, Loader
-from agent.prompts import STAGES, ACTIONS, ACTION_PROMPTS
 
 
 class Candidate(BaseModel):
@@ -49,7 +46,6 @@ def add_candidates(left: list[Candidate], right: list[Candidate]) -> list[Candid
         else:
             logger.warning(f"Candidate {d} already exists in the list")
     return result
-
     
 
 class ContextSchema(BaseModel):
@@ -58,6 +54,8 @@ class ContextSchema(BaseModel):
     timeout: float = Field(description="The timeout for the API calls", default=30.0)
     model: str = Field(description="The model to use for the API calls", default="gpt-5-mini")
     limit: int = Field(description="The limit for the number of candidates to process", default=10)
+    dingtalk_webhook: str = Field(description="DingTalk webhook URL for sending notifications", default="")
+    # dingtalk_secret: str = Field(description="DingTalk secret for signature generation", default="")
 
 class ManagerInputState(BaseModel):
     'Input state for the manager agent'
@@ -75,10 +73,10 @@ class ManagerState(ManagerInputState):
 
 class RecruiterState(BaseModel):
     """Recruiter agent state to process a single candidate"""
-    mode: Literal["recommend", "greet", "chat", "followup"] = Field(description="The mode to look for candidates", default="recommend")
+    # mode: Literal["recommend", "greet", "chat", "followup"] = Field(description="The mode to look for candidates", default="recommend")
     stage: Literal["GREET", "PASS", "CHAT", "SEEK", "CONTACT"] = Field(description="The stage of the candidate", default=None)
     candidate: Candidate = Field(description="The candidate to process")
-    job_info: Dict = Field(description="The job description to analyze the candidate")
-    assistant_info: Dict = Field(description="The assistant persona to analyze the candidate")
+    # job_info: Dict = Field(description="The job description to analyze the candidate")
+    # assistant_info: Dict = Field(description="The assistant persona to analyze the candidate")
     analysis: Dict = Field(description="The analysis of the candidate", default={})
     messages: Annotated[list[AnyMessage], add_messages] = Field(description="The messages to process with the candidate", default=[])

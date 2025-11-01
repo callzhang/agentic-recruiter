@@ -152,7 +152,7 @@ def test_login_endpoint_returns_flag(client: TestClient) -> None:
 
 
 def test_chat_dialogs_endpoint_returns_data(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    expected = [{"id": "chat-1", "name": "候选人A"}]
+    expected = [{"chat_id": "chat-1", "name": "候选人A"}]
     monkeypatch.setattr(chat_actions, "get_chat_list_action", make_async_return(expected))
 
     response = client.get("/chat/dialogs?limit=5&tab=新招呼&status=未读&job_title=全部")

@@ -64,8 +64,11 @@ async def close_overlay_dialogs(page, timeout_ms: int = 1000) -> bool:
             return True
 
     # close recommendation page's popup dialog
-    close_btn = page.locator("div.iboss-close").first
-    if await close_btn.count() > 0:
-        await close_btn.click(timeout=1000)
-        return True
+    try:    
+        close_btn = page.locator("div.iboss-close").first
+        if await close_btn.count() > 0:
+            await close_btn.click(timeout=1000)
+            return True
+    except Exception:
+        pass
     return False

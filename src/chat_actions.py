@@ -214,12 +214,23 @@ async def discard_candidate_action(page: Page, chat_id: str) -> bool:
     raise ValueError("PASS失败: 未删除对话")
 
 
-async def get_chat_list_action(page: Page, limit: int = 10, tab: str = '新招呼', status: str = '未读', job_title: str = '全部') -> List[Dict[str, Any]]:
+async def get_chat_list_action(page: Page, limit: int = 10, tab: str = '新招呼', status: str = '未读', job_title: str = '全部', unread_only=True) -> List[Dict[str, Any]]:
+    '''Get candidate list from chat page
+    Args:
+        page: Page - The Playwright Page instance representing the chat page.
+        limit: int - The maximum number of chat items to return.
+        tab: str - The chat tab to select (e.g., "新招呼", "沟通中").
+        status: str - The chat status filter to apply.
+        job_title: str - The job title to select from the dropdown.
+        unread_only: bool - Whether to only return unread candidates.
+    Returns:
+        List[Dict[str, Any]]: A list of candidate items.
+    '''
     await _prepare_chat_page(page, tab, status, job_title)
     items = page.locator("div.geek-item")
     count = await items.count()
     messages: List[Dict[str, Any]] = []
-    for index in range(min(count, limit)):
+    for index in range(count):
         item = items.nth(index)
         try:
             data_id = await item.get_attribute("data-id")
@@ -227,19 +238,25 @@ async def get_chat_list_action(page: Page, limit: int = 10, tab: str = '新招�
             job_title = await item.locator("span.source-job").inner_text()
             text = await item.locator("span.push-text").inner_text()
             timestamp = await item.locator("span.time").inner_text()
+            unread = await item.locator("span.badge-count").count() > 0
         except Exception as exc:  # noqa: BLE001
             logger.debug("读取列表项失败 #%s: %s", index, exc)
             continue
-        messages.append(
-            {
-                "id": data_id,
-                "name": name.strip(),
-                "job_applied": job_title.strip(),
-                "last_message": text.strip(),
-                "timestamp": timestamp.strip(),
-            }
-        )
-    logger.info("成功获取 %s 条消息", len(messages))
+        if not unread_only or unread:
+            messages.append(
+                {
+                    "chat_id": data_id,
+                    "name": name.strip(),
+                    "job_applied": job_title.strip(),
+                    "last_message": text.strip(),
+                    "timestamp": timestamp.strip(),
+                }
+            )
+        if len(messages) >= limit:
+            logger.info("成功获取 %s 条候选人", len(messages))
+            break
+    else:
+        logger.warning("获取的候选人数量少于需求量，实际获取数量: %d", len(messages))
     return messages
 
 
@@ -406,11 +423,13 @@ async def request_full_resume_action(page: Page, chat_id: str) -> bool:
 
 async def accept_full_resume_action(page: Page, chat_id: str) -> bool:
     """Accept candidate's resume. Returns True on success, raises ValueError if accept button not found."""
-    resume_pending = page.locator('div.notice-list >> a.btn[has-text="同意"]')
-    if await resume_pending.count() > 0:
-        resume_pending.click(timeout=1000)
-        await page.wait_for_timeout(1000) 
-        return True
+    accept_button_selectors = ['div.notice-list >> a.btn[has-text="同意"]', 'div.message-card-buttons >> span.card.btn[has-text="同意"]']
+    for selector in accept_button_selectors:
+        resume_pending = page.locator(selector)
+        if await resume_pending.count() > 0:
+            await resume_pending.click(timeout=1000)
+            await page.wait_for_timeout(1000) 
+            return True
     return False
 
 

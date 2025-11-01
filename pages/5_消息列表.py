@@ -329,9 +329,9 @@ def main() -> None:
     # get chat_id
     chat_id = col_select.selectbox(
         'None',
-        options=[row["id"] for row in dialogs],
+        options=[row["chat_id"] for row in dialogs],
         format_func=lambda cid: next(
-            (f"{row['name']}({row['job_title']}): {row['text']}" for row in dialogs if row['id'] == cid),
+            (f"{row['name']}({row['job_title']}): {row['text']}" for row in dialogs if row['chat_id'] == cid),
             cid,
         ),
         key=f"chat_selector",
@@ -343,7 +343,7 @@ def main() -> None:
     if chat_id and chat_id != cached_chat_id:
         st.session_state[SessionKeys.SELECTED_CHAT_ID] = chat_id
     # 选中对话
-    selected_dialog = next((row for row in dialogs if row['id'] == chat_id), None)
+    selected_dialog = next((row for row in dialogs if row['chat_id'] == chat_id), None)
     if col_refresh.button("🔄", key="refresh_messages_main"):
         _get_dialogs.clear()
         st.rerun()
@@ -443,10 +443,10 @@ def main() -> None:
         send_message_and_request_full_resume(chat_id, followup_message)
 
     # pass and next button
-    current_index = next(i for i, row in enumerate(dialogs) if row['id'] == cached_chat_id)
+    current_index = next(i for i, row in enumerate(dialogs) if row['chat_id'] == cached_chat_id)
     if st.button('Next'):
         next_index = current_index + 1
-        next_chat_id = dialogs[next_index]["id"]
+        next_chat_id = dialogs[next_index]["chat_id"]
         st.session_state[SessionKeys.SELECTED_CHAT_ID] = next_chat_id
         del st.session_state["chat_selector"] 
         st.rerun()
@@ -458,7 +458,7 @@ def main() -> None:
             # fetch more candidates
             pass
 
-        next_chat_id = dialogs[next_index]["id"]
+        next_chat_id = dialogs[next_index]["chat_id"]
         st.session_state[SessionKeys.SELECTED_CHAT_ID] = next_chat_id
         del st.session_state["chat_selector"] 
         # update the candidate with stage=PASS

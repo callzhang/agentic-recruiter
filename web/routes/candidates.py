@@ -11,6 +11,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
 from src.config import settings
+from src.jobs_store import jobs_store
 
 router = APIRouter()
 templates = Jinja2Templates(directory="web/templates")
@@ -39,26 +40,27 @@ async def call_api(method: str, path: str, timeout: float = 30.0, **kwargs) -> t
 
 
 def load_jobs() -> list[dict]:
-    """Load job configurations from jobs.yaml."""
-    import yaml
-    with open(settings.BOSS_CRITERIA_PATH, "r", encoding="utf-8") as f:
-        config = yaml.safe_load(f)
-    return config["roles"]
+    """Load job configurations from Zilliz Cloud."""
+    return jobs_store.get_all_jobs()
 
 
 def get_job_by_id(job_id: str) -> dict:
-    """Get job info by id or position name from jobs.yaml."""
+    """Get job info by id or position name from Zilliz Cloud."""
+    job = jobs_store.get_job_by_id(job_id)
+    if job:
+        return job
+    # If not found by ID, try to find by position name
     jobs = load_jobs()
     for job in jobs:
-        if job.get("id") == job_id or job.get("position") == job_id:
+        if job.get("position") == job_id:
             return job
     # Fallback: return minimal dict
-    return {"id": job_id, "position": job_id}
+    return {"job_id": job_id, "id": job_id, "position": job_id}
 
 
 async def prepare_init_chat_data(mode: str, chat_id: Optional[str], name: str, job_id: str, resume_text: str) -> dict:
     """Prepare data for init-chat API call by fetching chat_history and job_info."""
-    # Get job info from jobs.yaml
+    # Get job info from Zilliz Cloud
     job_info = get_job_by_id(job_id)
     
     # For recommend candidates, they have no chat history yet
@@ -101,7 +103,6 @@ async def get_candidate_list(
     chat_type: str = Query("新招呼", description="Chat type for chat mode"),
     job_title: str = Query(..., description="Job title filter (required)"),
     limit: int = Query(30, ge=5, le=100),
-    job_id: str = Query(..., description="Job id filter (required)"),
 ):
     """Get candidate list as HTML fragments."""
     if mode == "chat":
@@ -110,8 +111,7 @@ async def get_candidate_list(
             "limit": limit,
             "tab": chat_type,
             "status": chat_type,
-            "job_title": job_title,
-            "job_id": job_id
+            "job_title": job_title
         })
         
         if not ok or not isinstance(data, list):
@@ -124,8 +124,7 @@ async def get_candidate_list(
         # Fetch recommended candidates (no limit - returns all from browser page)
         # Longer timeout as this requires browser navigation and resume extraction
         ok, data = await call_api("GET", "/recommend/candidates", timeout=60.0, params={
-            "job_title": job_title,
-            "job_id": job_id
+            "job_title": job_title
         })
         
         if not ok or not isinstance(data, list):
@@ -175,6 +174,11 @@ async def get_candidate_detail(
     """Get candidate detail view."""
     # For recommend candidates, use data passed from the card
     if mode == "recommend":
+        if index is None:
+            return HTMLResponse(
+                content='<div class="text-red-500 p-4">推荐候选人必须提供索引(index)参数</div>',
+                status_code=400
+            )
         candidate_data = {
             "chat_id": None,  # Recommend candidates don't have chat_id yet
             "index": index,
@@ -483,9 +487,43 @@ async def fetch_online_resume(
 
 @router.post("/fetch-recommend-resume", response_class=HTMLResponse)
 async def fetch_recommend_resume(
-    index: int = Form(...),
+    request: Request,
 ):
     """Fetch resume for recommend candidate and return textarea."""
+    form_data = await request.form()
+    mode = form_data.get("mode", "").strip()
+    index_str = form_data.get("index", "").strip() if form_data.get("index") else ""
+    
+    # Handle "None" string (can happen when Jinja2 renders None as string)
+    if index_str.lower() == "none" or index_str == "":
+        index_str = ""
+    
+    # Only valid for recommend mode
+    if mode != "recommend":
+        return HTMLResponse(
+            content=f'<div class="text-red-500 p-4">此操作仅适用于推荐候选人。当前模式: {mode or "(空)"}</div>',
+            status_code=400
+        )
+    
+    # Parse index - handle empty string or None
+    if not index_str:
+        # Log all form fields for debugging
+        all_fields = {k: str(v)[:50] for k, v in form_data.items()}
+        return HTMLResponse(
+            content=f'<div class="text-red-500 p-4">缺少候选人索引(index)。表单字段: {all_fields}</div>',
+            status_code=400
+        )
+    
+    try:
+        index = int(index_str)
+        if index < 0:
+            raise ValueError("Index must be non-negative")
+    except (ValueError, TypeError) as e:
+        return HTMLResponse(
+            content=f'<div class="text-red-500 p-4">无效的候选人索引(index): {index_str}。错误: {str(e)}</div>',
+            status_code=400
+        )
+    
     ok, resume_data = await call_api("GET", f"/recommend/candidate/{index}/resume")
     
     if not ok:

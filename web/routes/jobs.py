@@ -227,6 +227,23 @@ async def delete_job(job_id: str):
         )
 
 
+@router.get("/list-simple", response_class=HTMLResponse)
+async def list_jobs_simple():
+    """Get jobs as HTML options for select."""
+    jobs = load_jobs()
+    
+    if not jobs:
+        return HTMLResponse(content='<option>无岗位</option>')
+    
+    html = ""
+    for job in jobs:
+        job_id = job.get("job_id") or job.get("id", "")
+        position = job.get("position", "未知")
+        html += f'<option value="{job_id}" data-title="{position}">{position}</option>'
+    
+    return HTMLResponse(content=html)
+
+
 @router.get("/api/list", response_class=JSONResponse)
 async def api_list_jobs():
     """API endpoint to list all jobs."""

@@ -21,3 +21,4 @@ langchain-openai>=0.3.0
 langgraph>=1
 typing-extensions>=4.0.0
 langgraph-checkpoint-sqlite>=3.0.0
+robust-json-parser>=0.1.0

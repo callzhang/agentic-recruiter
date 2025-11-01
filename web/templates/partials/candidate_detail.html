@@ -23,14 +23,14 @@
 
     <!-- Hidden context for HTMX requests -->
     <form id="candidate-context" class="hidden">
-        <input type="hidden" name="chat_id" value="{{ candidate.chat_id }}">
+        <input type="hidden" name="chat_id" value="{{ candidate.chat_id or '' }}">
         <input type="hidden" name="mode" value="{{ candidate.mode or 'chat' }}">
         <input type="hidden" name="name" value="{{ candidate.name or '' }}">
         <input type="hidden" name="assistant_id" value="{{ assistant_id }}">
         <input type="hidden" name="job_id" value="{{ job_id }}">
-        <input type="hidden" name="thread_id" value="{{ candidate.thread_id }}">
-        <input type="hidden" name="index" value="{{ candidate.index }}">
-    </div>
+        <input type="hidden" name="thread_id" value="{{ candidate.thread_id or '' }}">
+        <input type="hidden" name="index" value="{{ candidate.index if candidate.index is not none else '' }}">
+    </form>
     
     <!-- 1. Resume Section -->
     <div id="resume-section" class="bg-white rounded-lg border shadow-sm">
@@ -42,8 +42,7 @@
         {% else %}
         <div id="resume-content" class="text-center py-8 text-gray-500" 
             hx-post="{% if candidate.mode == 'recommend' %}/web/candidates/fetch-recommend-resume{% else %}/web/candidates/fetch-online-resume{% endif %}" 
-            <!-- TODO: we don't need to fetch resume in chat mode, wait untial checkExistingCandidateRecord(chatId) is False -->
-            hx-trigger="load"
+            {% if candidate.mode == 'recommend' %}hx-trigger="load"{% endif %}
             hx-include="#candidate-context"
             hx-target="#resume-content"
             hx-swap="innerHTML"
@@ -612,11 +611,13 @@ function get_candidate_from_resume(resumeText) {
 }
 
 /**
- * Trigger resume fetch (HTMX auto-trigger)
+ * Trigger resume fetch manually (for chat mode after checking existing record)
  */
-// function triggerResumeFetch() {
-//     // Resume fetch is auto-triggered by hx-trigger="load" on resume-content
-//     // This function is just a placeholder for the workflow
-//     console.log('Resume fetch will be triggered automatically');
-// }
+function triggerResumeFetch() {
+    const resumeContent = document.getElementById('resume-content');
+    if (resumeContent) {
+        // Trigger HTMX request manually
+        htmx.trigger(resumeContent, 'load');
+    }
+}
 </script>

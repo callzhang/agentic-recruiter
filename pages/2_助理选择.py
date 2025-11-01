@@ -109,7 +109,7 @@ def main() -> None:
         selected_assistant = [a for a in assistants if a['id'] == idx][0]
     name = st.subheader(selected_assistant['name'] if selected_assistant else "新助手", help="左侧选择助理")
     # Get current model and find its index, default to gpt-4o-mini if not in list
-    current_model = selected_assistant['model'] if selected_assistant else "gpt-4o-mini"
+    current_model = selected_assistant['model'] if selected_assistant else "gpt-5-mini"
     model_index = model_options.index(current_model) if current_model in model_options else 0
     model = st.selectbox("模型", options=model_options, index=model_index)
     description = st.text_area("描述", value=selected_assistant['description'] if selected_assistant else "")
