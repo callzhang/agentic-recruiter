@@ -32,10 +32,8 @@ python start_service.py
 
 服务地址: `http://127.0.0.1:5001`
 
-### 5. 启动 Streamlit UI (可选)
-```bash
-streamlit run boss_app.py
-```
+### 5. 访问 Web UI
+打开浏览器访问: `http://127.0.0.1:5001/web`
 
 ## 核心功能
 
@@ -58,7 +56,7 @@ streamlit run boss_app.py
 
 ## API 文档
 
-详见 [docs/API_USAGE_GUIDE.md](docs/API_USAGE_GUIDE.md)
+详见 [docs/api.md](docs/api.md)
 
 ### 示例
 
@@ -76,30 +74,28 @@ response = requests.post(
 )
 
 # 查看在线简历
-response = requests.post(
-    'http://127.0.0.1:5001/resume/online',
-    json={'chat_id': 'abc123'}
-)
+response = requests.get('http://127.0.0.1:5001/chat/resume/online/abc123')
 resume = response.json()
 ```
 
 ## 项目结构
 
 ```
-├── boss_service.py         # FastAPI 后端服务
-├── boss_app.py             # Streamlit 主应用
+├── boss_service.py         # FastAPI 后端服务 + Web UI
 ├── start_service.py        # 服务启动脚本
+├── web/                    # Web UI (FastAPI templates)
+│   ├── routes/            # 路由处理
+│   ├── templates/         # HTML 模板
+│   └── static/            # 静态资源
 ├── config/                 # 配置文件
 │   ├── config.yaml        # 非敏感配置
-│   ├── secrets.yaml       # 敏感配置 (API keys)
-│   └── jobs.yaml          # 岗位配置
+│   └── secrets.yaml       # 敏感配置 (API keys)
 ├── src/                    # 核心模块
 │   ├── chat_actions.py    # 聊天操作
 │   ├── recommendation_actions.py  # 推荐牛人操作
 │   ├── assistant_actions.py       # AI 助手
 │   ├── candidate_store.py         # Zilliz 存储
 │   └── config.py          # 配置加载
-├── pages/                  # Streamlit 页面
 ├── docs/                   # 文档
 └── test/                   # 测试
 
@@ -108,7 +104,7 @@ resume = response.json()
 ## 技术栈
 
 - **后端**: FastAPI + Playwright (CDP 模式)
-- **前端**: Streamlit
+- **前端**: FastAPI Web UI (Jinja2 templates + Alpine.js/HTMX)
 - **AI**: OpenAI GPT-4
 - **向量数据库**: Zilliz (Milvus)
 - **错误追踪**: Sentry
@@ -145,9 +141,9 @@ sentry:
 ## 文档
 
 - [系统架构](ARCHITECTURE.md) - 架构概览
-- [API 使用指南](docs/api/reference.md) - v2.2.0+ API 完整文档
-- [技术规范](docs/technical.md) - 架构和设计
-- [项目状态](docs/status.md) - 当前进展
+- [API 文档](docs/api.md) - REST API 完整参考
+- [系统架构详情](docs/architecture.md) - 架构和技术细节
+- [自动化工作流](docs/workflows.md) - 工作流和故障排查
 - [变更日志](CHANGELOG.md) - 版本历史
 - [贡献指南](CONTRIBUTING.md) - 如何贡献
 

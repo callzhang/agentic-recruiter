@@ -10,14 +10,12 @@ Boss直聘自动化机器人 - 基于 Playwright 的智能招聘助手，集成 
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                    Streamlit UI                         │
-│         (pages/*.py, boss_app.py, streamlit_shared.py)  │
-└────────────────────┬────────────────────────────────────┘
-                     │ HTTP/REST
-                     ▼
-┌─────────────────────────────────────────────────────────┐
 │                  FastAPI Service                        │
 │                 (boss_service.py)                       │
+│  ┌──────────────────────────────────────────────────┐  │
+│  │  Web UI (Jinja2)  │  REST API  │  Business Logic │  │
+│  │  (web/templates)  │  (endpoints)│  (core modules) │  │
+│  └──────────────────────────────────────────────────┘  │
 │  ┌──────────────────────────────────────────────────┐  │
 │  │  Chat Actions  │  Recommendation  │  Assistant   │  │
 │  │  (聊天操作)     │  (推荐牛人)       │  (AI助手)     │  │
@@ -40,7 +38,7 @@ Boss直聘自动化机器人 - 基于 Playwright 的智能招聘助手，集成 
 ## 技术栈
 
 - **后端**: FastAPI + Playwright (异步)
-- **前端**: Streamlit (多页面应用)
+- **前端**: FastAPI Web UI (Jinja2 templates + Alpine.js/HTMX)
 - **AI**: OpenAI GPT-4 (Assistant API + Threads)
 - **数据库**: Zilliz (Milvus 向量数据库)
 - **监控**: Sentry (错误追踪)
@@ -111,11 +109,11 @@ Zilliz 数据存储
    ↓
 2. 查询 Zilliz (by chat_id)
    ↓
-3. POST /resume/online (提取简历，如需要)
+3. GET /chat/resume/online/{chat_id} (提取简历，如需要)
    ↓
-4. POST /assistant/generate-chat-message (生成回复)
+4. POST /chat/generate-message (生成回复)
    ↓
-5. POST /chat/{chat_id}/send (发送消息)
+5. POST /chat/{chat_id}/send_message (发送消息)
    ↓
 6. 更新 Zilliz
 ```
@@ -145,9 +143,10 @@ config/
 ### 1. CDP 模式
 使用外部 Chrome + CDP 连接，避免频繁启动浏览器，支持热重载。
 
-### 2. 客户端-服务器分离
-- Streamlit (UI) ← HTTP → FastAPI (业务逻辑) ← Playwright (浏览器)
-- 业务编排在 Streamlit，FastAPI 只提供原子操作
+### 2. 统一服务架构
+- FastAPI 提供 Web UI 和 REST API
+- Web UI 通过模板渲染，业务逻辑在服务端
+- REST API 提供程序化访问接口
 
 ### 3. OpenAI Thread API
 每个候选人一个 Thread，持久化对话历史，保持上下文连续性。
@@ -165,16 +164,18 @@ config/
 ## 目录结构
 
 ```
-├── boss_service.py          # FastAPI 服务
-├── boss_app.py              # Streamlit 主应用
+├── boss_service.py          # FastAPI 服务 + Web UI
 ├── start_service.py         # 服务启动脚本
+├── web/                     # Web UI
+│   ├── routes/             # 路由处理
+│   ├── templates/          # HTML 模板 (Jinja2)
+│   └── static/             # 静态资源 (CSS, JS)
 ├── src/                     # 核心模块
 │   ├── chat_actions.py
 │   ├── recommendation_actions.py
 │   ├── assistant_actions.py
 │   ├── candidate_store.py
 │   └── config.py
-├── pages/                   # Streamlit 页面
 ├── config/                  # 配置文件
 ├── docs/                    # 文档
 └── test/                    # 测试
@@ -183,9 +184,9 @@ config/
 
 ## 快速查找
 
-- **API 文档**: [docs/api/reference.md](docs/api/reference.md)
-- **技术细节**: [docs/technical.md](docs/technical.md)
-- **项目状态**: [docs/status.md](docs/status.md)
+- **API 文档**: [docs/api.md](docs/api.md)
+- **技术细节**: [docs/architecture.md](docs/architecture.md)
+- **自动化工作流**: [docs/workflows.md](docs/workflows.md)
 - **变更日志**: [CHANGELOG.md](CHANGELOG.md)
 
 ## 版本

@@ -3,7 +3,9 @@ from langgraph.prebuilt import ToolNode, tools_condition
 from langgraph.prebuilt.interrupt import HumanInterrupt
 from langgraph.runtime import Runtime
 from langgraph.types import interrupt, Command
+from langgraph.utils.config import patch_configurable
 # from langgraph.store.postgres import PostgresStore # By default, LangSmith Deployments automatically create PostgreSQL and Redis instances for you. You can also configure external PostgreSQL and Redis services using environment variables like POSTGRES_URI_CUSTOM and REDIS_URI_CUSTOM.
+from langchain_core.runnables import RunnableConfig
 from langchain.chat_models import init_chat_model
 from langchain_core.messages import AIMessage, SystemMessage, HumanMessage, ToolMessage, AnyMessage
 from typing import Dict, Literal, cast
@@ -19,17 +21,21 @@ NAME_SPACE = ('RECRUITER_AGENT', 'derek')
 # ----------------------------------------------------------------------------
 def recruiter_think(state: RecruiterState, runtime: Runtime[ContextSchema]) -> RecruiterState:
     """Recruiter decides next action"""
-    last_message = state.messages[-1]
-    if last_message.type == 'tool' and last_message.name == 'finish_tool' and last_message.status == 'success':
-        return Command(goto=END)
-    new_state = {}
+    assert runtime.store is not None, "Store is required"
+    assert runtime.context is not None, "Context is required"
+
     # Add status message for recruiter thinking
-    model = init_chat_model(runtime.context.model, base_url=runtime.context.base_url)
+    model = init_chat_model(
+        model=runtime.context.model, 
+        api_key=runtime.context.api_key, 
+        base_url=runtime.context.base_url
+    )
     recruiter_model = model.bind_tools(chat_tools+resume_tools+action_tools, parallel_tool_calls=False)
     agent_message = recruiter_model.invoke([SystemMessage(content=RECRUITER_PROMPT), *state.messages])
-    new_state['messages'] = agent_message
 
-    return new_state
+    return {
+        'messages': agent_message,
+    }
 
 
 #TODO: remove this after testing
@@ -47,8 +53,14 @@ def recruiter_think_router(state: RecruiterState, runtime: Runtime[ContextSchema
         return END
 
 def recruiter_tool_router(state: RecruiterState) -> Literal["recruiter_think", END]:
-    last_message = state.messages[-1]
-    assert last_message.type == 'tool', "Last message must be a tool message"
+    last_message = None
+    for m in state.messages[::-1]:
+        if m.type == 'tool':
+            last_message = m
+            break
+        if m.type == 'ai' and m.tool_calls:
+            break
+    assert last_message, "missing last tool message"
     if last_message.status != 'success':
         return 'recruiter_think'
     elif last_message.name == 'finish_tool':
@@ -61,8 +73,8 @@ recruiter_builder = StateGraph(RecruiterState, context_schema=ContextSchema)
 # Add nodes
 recruiter_builder.add_node("recruiter_think", recruiter_think)
 recruiter_builder.add_node("execute_tools", ToolNode(chat_tools+resume_tools+action_tools))
+recruiter_builder.set_entry_point("recruiter_think")
 # Add edges
-recruiter_builder.add_edge(START, "recruiter_think")
 # recruiter_builder.add_conditional_edges("recruiter_think", tools_condition, {'tools': 'execute_tools', END: 'recruiter_think'})
 recruiter_builder.add_conditional_edges('recruiter_think', tools_condition, {'tools': 'execute_tools', END: 'recruiter_think'})
 recruiter_builder.add_conditional_edges("execute_tools", recruiter_tool_router)
@@ -117,7 +129,11 @@ def manager_plan(state: ManagerState, runtime: Runtime[ContextSchema]) -> Manage
         elif last_message.name == 'finish_tool':
             return Command(goto=END)
     # otherwise, continue to think
-    model = init_chat_model(runtime.context.model, base_url=runtime.context.base_url)
+    model = init_chat_model(
+        model=runtime.context.model, 
+        api_key=runtime.context.api_key, 
+        base_url=runtime.context.base_url
+    )
     manager_model = model.bind_tools(manager_tools, parallel_tool_calls=False)
     thinking_message = manager_model.invoke([SystemMessage(MANAGER_PROMPT), *state.messages])
     # Add status message for manager thinking
@@ -127,7 +143,7 @@ def manager_plan(state: ManagerState, runtime: Runtime[ContextSchema]) -> Manage
     }
 
 
-def dispatch_recruiter(state: ManagerState, runtime: Runtime[ContextSchema]):
+def dispatch_recruiter(state: ManagerState, runtime: Runtime[ContextSchema], config: RunnableConfig):
     # check if the candidate is already processed
     candidate = state.current_candidate
     past_execution = None
@@ -137,8 +153,7 @@ def dispatch_recruiter(state: ManagerState, runtime: Runtime[ContextSchema]):
 
     # prepare initial states for recruiter graph
     state_input = {
-        'candidate': state.current_candidate,
-        'stage': state.current_candidate.stage,
+        'candidate': state.current_candidate
     }
     if not past_execution:
         # pick one candidate from the candidates list, and invoke the recruiter graph
@@ -156,15 +171,14 @@ def dispatch_recruiter(state: ManagerState, runtime: Runtime[ContextSchema]):
         state_input['messages'] = [system_message, human_message]
     else:
         # resuming old messages
-        state_input['messages'] = SystemMessage(content=f"Resuming previous conversation. Time: {time.strftime('%Y-%m-%d %H:%M:%S')}.")
+        from agent.tools import current_timestr
+        state_input['messages'] = SystemMessage(content=f"Resuming previous conversation. Time: {current_timestr()}.")
     # invoke recruiter graph
     result: RecruiterState = recruiter_graph.invoke(
         input=state_input,
-        config={
-            'configurable': {
-                'thread_id': state.current_candidate.chat_id, # pass the thread_id, so we can resume later
-            },
-        },
+        config=patch_configurable(config, {'thread_id': state.current_candidate.chat_id}),
+        context=runtime.context,
+        store=runtime.store,
     )
 
     processed_candidate = result['candidate']
@@ -196,9 +210,8 @@ manager_builder.add_node("check_env", check_environment)
 manager_builder.add_node("manager_plan", manager_plan)
 manager_builder.add_node("manager_tool_node", ToolNode(manager_tools))
 manager_builder.add_node("dispatch_recruiter", dispatch_recruiter)
-
+manager_builder.set_entry_point("check_env")
 # Add edges
-manager_builder.add_edge(START, "check_env")
 manager_builder.add_edge("check_env", "manager_plan")
 manager_builder.add_conditional_edges("manager_plan", tools_condition, {'tools': 'manager_tool_node', END: END})
 manager_builder.add_conditional_edges("manager_tool_node", tool_router)
@@ -208,23 +221,18 @@ manager_builder.add_edge("dispatch_recruiter", 'manager_plan')
 # Compile graphs
 manager_graph = manager_builder.compile()
 
-# Example usage function
-# def run_manager_with_status(initial_state: ManagerState, config: Dict) -> ManagerState:
-#     """Run manager graph and return results with status messages"""
-#     try:
-#         result = manager_graph.invoke(initial_state, config)
-#         return result
-#     except Exception as e:
-#         error_message = f"❌ Graph Execution Error: {str(e)}"
-#         agent_message = AIMessage(content=error_message)
-#         return {"messages": [agent_message], "error": str(e)}
-
-# def run_recruiter_with_status(initial_state: RecruiterState, config: Dict) -> RecruiterState:
-#     """Run recruiter graph and return results with status messages"""
-#     try:
-#         result = recruiter_graph.invoke(initial_state, config)
-#         return result
-#     except Exception as e:
-#         error_message = f"❌ Graph Execution Error: {str(e)}"
-#         agent_message = AIMessage(content=error_message)
-#         return {"messages": [agent_message], "error": str(e)}
+if __name__ == "__main__":
+    # test the manager graph
+    for message, metadata in manager_graph.stream(
+        input={
+            'messages': [HumanMessage(content="我需要处理候选人张三，请帮我分析一下他是否符合我们的岗位要求")],
+        },
+        context=ContextSchema(
+            web_portal="http://localhost:5001",
+            timeout=30.0,
+            model="gpt-5-mini",
+            limit=10
+        )
+    ):
+        print(message)
+        print(metadata)

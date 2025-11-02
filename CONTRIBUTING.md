@@ -147,6 +147,6 @@ pytest test/ -v
 
 ---
 
-**快速链接**: [README](README.md) | [ARCHITECTURE](ARCHITECTURE.md) | [API 文档](docs/api/reference.md)
+**快速链接**: [README](README.md) | [ARCHITECTURE](ARCHITECTURE.md) | [API 文档](docs/api.md)
 
 

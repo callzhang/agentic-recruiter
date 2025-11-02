@@ -1,7 +1,6 @@
 """LangGraph tools that call FastAPI service endpoints."""
-
+from datetime import datetime
 from langgraph.graph import END
-from numpy import int16
 import requests, time, json
 import hmac
 import hashlib
@@ -11,12 +10,14 @@ from typing import Any, Dict, List, Optional, Callable, Annotated, Literal
 from langgraph.prebuilt import InjectedState, InjectedStore
 from langchain.tools import tool, ToolRuntime, InjectedToolCallId
 from langgraph.runtime import get_runtime
-from langgraph.types import Command
+from langgraph.types import Command, interrupt
 from langchain_core.messages import ToolMessage, HumanMessage, AIMessage
 from src.global_logger import logger
 from agent.states import ContextSchema, Candidate, ManagerState, RecruiterState
 from langchain_core.runnables import RunnableConfig
 
+
+current_timestr = lambda: datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 def _call_api(method: str, url: str, data: dict | None = None, timeout: float = 30.0) -> Dict:
     """Make HTTP request to FastAPI service."""
@@ -183,7 +184,6 @@ def dispatch_candidate_tool(
             index: The index of the candidate in the recommended mode", default=None
             job_applied: The job title applied by the candidate
             description: The description of the candidate, must be a string
-        assistant_name: str - The assistant persona（助手风格） to process(required)
     """
     candidate = Candidate(**candidate)
     manager_messages = ToolMessage(content=f"现在我们来处理候选人{candidate.name}，我们使用的助手风格是：\n{assistant_name}，我们的岗位是：\n{candidate.job_applied}", tool_call_id=tool_call_id)
@@ -240,8 +240,10 @@ def finish_tool(report: str,
         - the candidate is not suitable for the position
         - there is any error in the recruitment process
     """
-    messages = [f'{m.type}: {m.content[:100]}' for m in state.messages if m.type in ['human', 'ai']]
-    report = f'{report}\n\n--({time.time()})--\n\n{'\n---\n'.join(messages)}'
+    messages = [f'{m.type}: {m.content[:100]}' for m in state.messages if m.type in ['human', 'ai'] and m.content]
+    
+    
+    report = f'{report}\n\n--({current_timestr()})--\n\n{chr(10).join(["---"])}'.join(messages) if messages else f'{report}\n\n--({human_timestamp})--'
     return Command[Literal[END]](
         update={
             'messages': [ToolMessage(content=report, tool_call_id=tool_call_id)]
@@ -349,7 +351,7 @@ def send_chat_message_tool(chat_id: str, message: str, tool_call_id: Annotated[s
     """
     runtime = get_runtime(RecruiterState)
     web_portal = runtime.context.web_portal
-    result = _call_api("POST", f"{web_portal}/chat/{chat_id}/message", {"message": message})
+    result = _call_api("POST", f"{web_portal}/chat/{chat_id}/send_message", {"message": message})
     return Command(
         update={
             'messages': [
@@ -384,13 +386,13 @@ def get_chat_messages_tool(chat_id: str, state: Annotated[RecruiterState, Inject
     all_messages_in_boss = _call_api("GET", f"{web_portal}/chat/{chat_id}/messages")
     # append new candidate messages to state.messages
     state_candidate_messagess = [m.content for m in state.messages if m.type == 'human']
-    new_user_messages = []
+    new_user_messages = [ToolMessage(content='已获取消息历史', tool_call_id=tool_call_id)]
     for message in all_messages_in_boss:
         if message['type'] == 'user' and message['content'] not in state_candidate_messagess:
             candidate_message = HumanMessage(content=message['message'])
             new_user_messages.append(candidate_message)
             logger.info(f"Inserted candidate message: {message}")
-    new_user_messages.append(ToolMessage(content='已获取消息历史', tool_call_id=tool_call_id))
+
     return Command(
         update={
             'messages': new_user_messages
@@ -497,7 +499,7 @@ def request_full_resume_tool(chat_id: str, tool_call_id: Annotated[str, Injected
     """
     runtime = get_runtime(RecruiterState)
     web_portal = runtime.context.web_portal
-    result = _call_api("POST", f"{web_portal}/chat/resume/request", {"chat_id": chat_id})
+    result = _call_api("POST", f"{web_portal}/chat/resume/request_full", {"chat_id": chat_id})
     return Command(
         update={
             'messages': [ToolMessage(content=f'已向候选人请求完整简历，请稍后检查完整简历是否存在', tool_call_id=tool_call_id)]

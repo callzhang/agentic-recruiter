@@ -17,6 +17,8 @@ class Candidate(BaseModel):
     job_applied: str = Field(description="The job applied by the candidate")
     description: Optional[str] = Field(description="The description of the candidate", default=None)
     last_message: Optional[str] = Field(description="The last message of the candidate", default=None)
+    # online_resume: Optional[str] = Field(description="The online resume of the candidate", default=None)
+    # full_resume: Optional[str] = Field(description="The full resume of the candidate", default=None)
 
     @model_validator(mode='after')
     def validate_candidate(self):
@@ -55,7 +57,8 @@ class ContextSchema(BaseModel):
     model: str = Field(description="The model to use for the API calls", default="gpt-5-mini")
     limit: int = Field(description="The limit for the number of candidates to process", default=10)
     dingtalk_webhook: str = Field(description="DingTalk webhook URL for sending notifications", default="")
-    # dingtalk_secret: str = Field(description="DingTalk secret for signature generation", default="")
+    base_url: str = Field(description="The base URL for the LLM server calls", default="https://api.kksj.org/v1/")
+    api_key: str = Field(description="The API key for the LLM server calls")
 
 class ManagerInputState(BaseModel):
     'Input state for the manager agent'

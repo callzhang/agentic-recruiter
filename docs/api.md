@@ -1,14 +1,28 @@
-# API 使用指南 (v2.2.0+)
+# API 文档
 
-## 快速开始
+Boss直聘自动化机器人 REST API 文档
 
-### 基本原则
+## 目录
 
-自 v2.2.0 起，所有 API 端点遵循以下原则：
+- [基础信息](#基础信息)
+- [端点列表](#端点列表)
+- [端点详解](#端点详解)
+- [错误处理](#错误处理)
+- [测试 API](#测试-api)
+- [监控和调试](#监控和调试)
+- [性能优化](#性能优化)
+- [版本兼容性](#版本兼容性)
 
-1. **成功响应**: 直接返回数据（dict, list, bool）
-2. **失败响应**: 返回 HTTP 错误状态码 + `{"error": "错误描述"}`
-3. **无包装对象**: 不再使用 `{"success": bool, "details": str}` 格式
+## 基础信息
+
+**当前版本**: v2.2.0  
+**Base URL**: `http://127.0.0.1:5001`
+
+### 响应格式 (v2.2.0+)
+
+- **成功**: 直接返回数据（dict, list, bool）
+- **失败**: HTTP 错误状态码 + `{"error": "错误描述"}`
+- **无包装对象**: 不再使用 `{"success": bool, "details": str}` 格式
 
 ### HTTP 状态码
 
@@ -16,10 +30,94 @@
 |--------|------|---------|
 | 200 | 成功 | 正常响应 |
 | 400 | 请求错误 | 参数验证失败、业务逻辑错误 |
-| 408 | 请求超时 | Playwright 操作超时 |
+| 408 | 请求超时 | Playwright 操作超时（默认30秒） |
 | 500 | 服务器错误 | 未预期的系统错误 |
 
-## API 端点详解
+## 端点列表
+
+### 系统状态
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/status` | GET | 服务状态 |
+| `/sentry-debug` | GET | Sentry 测试 |
+| `/restart` | POST | 软重启服务 |
+| `/debug/page` | GET | 调试页面信息 |
+| `/debug/cache` | GET | 调试缓存信息 |
+
+### 认证登录
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/login` | POST | 登录 Boss直聘 |
+
+### 聊天相关
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/chat/dialogs` | GET | 获取对话列表 |
+| `/chat/{chat_id}/messages` | GET | 获取对话消息 |
+| `/chat/{chat_id}/send_message` | POST | 发送消息 |
+| `/chat/greet` | POST | 发送打招呼 |
+| `/chat/stats` | GET | 获取聊天统计 |
+| `/chat/candidate/discard` | POST | 丢弃候选人 |
+| `/chat/contact/request` | POST | 请求联系方式 |
+
+### 简历相关
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/chat/resume/request_full` | POST | 请求完整简历 |
+| `/chat/resume/full/{chat_id}` | GET | 查看完整简历 |
+| `/chat/resume/check_full_resume_available` | POST | 检查完整简历可用性 |
+| `/chat/resume/online/{chat_id}` | GET | 查看在线简历 |
+| `/chat/resume/accept` | POST | 接受简历 |
+
+### 候选人管理
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/store/candidate/{chat_id}` | GET | 获取候选人信息 |
+| `/store/candidate/get-by-resume` | POST | 通过简历检查候选人 |
+
+### 推荐牛人
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/recommend/candidates` | GET | 获取推荐列表 |
+| `/recommend/candidate/{index}/resume` | GET | 查看候选人简历 |
+| `/recommend/candidate/{index}/greet` | POST | 打招呼 |
+
+### AI 助手
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/assistant/list` | GET | 获取助手列表 |
+| `/assistant/create` | POST | 创建助手 |
+| `/assistant/update/{assistant_id}` | POST | 更新助手 |
+| `/assistant/delete/{assistant_id}` | DELETE | 删除助手 |
+
+### 对话线程
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/chat/generate-message` | POST | 生成消息 |
+| `/chat/init-chat` | POST | 初始化对话线程 |
+| `/chat/{thread_id}/messages` | GET | 获取线程消息 |
+| `/chat/{thread_id}/analysis` | GET | 获取线程分析 |
+
+### Web UI
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/web` | GET | Web UI 首页 |
+| `/web/stats` | GET | Web UI 统计 |
+| `/web/candidates/*` | GET/POST | 候选人管理界面 |
+| `/web/automation/*` | GET/POST | 自动化工作流界面 |
+| `/web/assistants/*` | GET | 助手管理界面 |
+| `/web/jobs/*` | GET | 岗位管理界面 |
+
+## 端点详解
 
 ### 1. 聊天相关
 
@@ -50,7 +148,7 @@ GET /chat/dialogs?limit=10&tab=全部&status=全部&job_title=
 
 #### 发送消息
 ```bash
-POST /chat/{chat_id}/send
+POST /chat/{chat_id}/send_message
 Content-Type: application/json
 
 {
@@ -87,7 +185,7 @@ GET /chat/stats
 
 #### 请求完整简历
 ```bash
-POST /resume/request
+POST /chat/resume/request_full
 Content-Type: application/json
 
 {
@@ -109,12 +207,7 @@ true
 
 #### 查看在线简历
 ```bash
-POST /resume/online
-Content-Type: application/json
-
-{
-  "chat_id": "abc123"
-}
+GET /chat/resume/online/{chat_id}
 ```
 
 **成功响应 (200)**:
@@ -135,12 +228,7 @@ Content-Type: application/json
 
 #### 查看完整简历
 ```bash
-POST /resume/view_full
-Content-Type: application/json
-
-{
-  "chat_id": "abc123"
-}
+GET /chat/resume/full/{chat_id}
 ```
 
 **成功响应 (200)**:
@@ -160,7 +248,7 @@ Content-Type: application/json
 
 #### 检查完整简历可用性
 ```bash
-POST /resume/check_full_resume_available
+POST /chat/resume/check_full_resume_available
 Content-Type: application/json
 
 {
@@ -174,31 +262,6 @@ true
 ```
 
 ### 3. 推荐牛人
-
-#### 选择职位
-```bash
-POST /recommend/select-job
-Content-Type: application/json
-
-{
-  "job_name": "Python后端开发"
-}
-```
-
-**成功响应 (200)**:
-```json
-{
-  "selected_job": "Python后端开发",
-  "available_jobs": ["Python后端开发", "Go后端开发"]
-}
-```
-
-**失败响应 (400)**:
-```json
-{
-  "error": "未找到职位下拉菜单"
-}
-```
 
 #### 获取推荐候选人列表
 ```bash
@@ -255,12 +318,13 @@ true
 
 #### 生成消息
 ```bash
-POST /assistant/generate-chat-message
+POST /chat/generate-message
 Content-Type: application/json
 
 {
-  "chat_id": "abc123",
-  "purpose": "reply",
+  "thread_id": "thread_123",
+  "assistant_id": "asst_123",
+  "purpose": "GREET_ACTION",
   "chat_history": []
 }
 ```
@@ -283,32 +347,65 @@ Content-Type: application/json
 }
 ```
 
-#### 分析候选人
-```bash
-POST /assistant/analyze-candidate
-Content-Type: application/json
+## 错误处理
 
-{
-  "resume_text": "简历内容...",
-  "job_requirements": "岗位要求..."
-}
-```
+### 错误响应格式
 
-**成功响应 (200)**:
+所有 API 错误返回 JSON 格式：
 ```json
 {
-  "recommendation": "recommend",
-  "scores": {
-    "技能匹配": 85,
-    "经验匹配": 90
-  },
-  "reasoning": "候选人具有..."
+  "error": "错误描述"
 }
 ```
 
-## 错误处理最佳实践
+配合 HTTP 状态码使用：
+- `400` - 检查请求参数
+- `408` - 操作超时，可重试
+- `500` - 服务器错误，查看 Sentry
 
-### Python (requests)
+### 常见错误类型
+
+#### 1. ValueError (400)
+**原因**: 参数验证失败、业务逻辑错误
+**示例**: 
+- "未找到指定对话项"
+- "消息内容不能为空"
+- "无效的职位名称"
+
+**解决方法**:
+- 检查请求参数是否正确
+- 确认资源（chat_id, job_name 等）是否存在
+- 验证输入数据格式
+
+#### 2. TimeoutError (408)
+**原因**: Playwright 操作超时（默认30秒）
+**示例**:
+- "操作超时: Timeout 30000ms exceeded."
+- 页面加载缓慢
+- 网络连接不稳定
+
+**解决方法**:
+- 重试请求
+- 检查网络连接
+- 检查 Boss 直聘网站状态
+- 考虑增加超时时间（如果是系统配置问题）
+
+#### 3. RuntimeError (500)
+**原因**: 未预期的系统错误
+**示例**:
+- "消息生成失败，请稍后重试"
+- OpenAI API 调用失败
+- 数据库连接错误
+
+**解决方法**:
+- 查看 Sentry 错误追踪
+- 检查日志文件
+- 联系系统管理员
+- 确认依赖服务（OpenAI, Zilliz）正常运行
+
+### 错误处理最佳实践
+
+#### Python (requests)
 
 ```python
 import requests
@@ -335,7 +432,7 @@ def call_api(method: str, endpoint: str, **kwargs):
 
 # 使用示例
 try:
-    result = call_api("POST", "/chat/abc123/send", json={"message": "Hello"})
+    result = call_api("POST", "/chat/abc123/send_message", json={"message": "Hello"})
     if result is True:
         print("消息发送成功")
 except ValueError as e:
@@ -346,7 +443,7 @@ except RuntimeError as e:
     print(f"服务器错误: {e}")
 ```
 
-### JavaScript (fetch)
+#### JavaScript (fetch)
 
 ```javascript
 async function callApi(method, endpoint, body = null) {
@@ -383,7 +480,7 @@ async function callApi(method, endpoint, body = null) {
 
 // 使用示例
 try {
-    const result = await callApi('POST', '/chat/abc123/send', {
+    const result = await callApi('POST', '/chat/abc123/send_message', {
         message: 'Hello'
     });
     
@@ -395,63 +492,33 @@ try {
 }
 ```
 
-### Streamlit (已集成)
+#### JavaScript (浏览器端)
 
-在 Streamlit 页面中使用 `streamlit_shared.py` 的 `call_api` 函数：
+在 Web UI 中使用 fetch API：
 
-```python
-from streamlit_shared import call_api
-import streamlit as st
-
-try:
-    ok, result = call_api("POST", "/chat/abc123/send", json={"message": "Hello"})
-    if ok and result is True:
-        st.success("消息发送成功")
-    else:
-        st.error(f"发送失败: {result}")
-except Exception as e:
-    st.error(f"操作失败: {str(e)}")
+```javascript
+async function sendMessage(chatId, message) {
+    try {
+        const response = await fetch(`/chat/${chatId}/send_message`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({message: message})
+        });
+        
+        if (response.ok) {
+            const result = await response.json();
+            if (result === true) {
+                alert('消息发送成功');
+            }
+        } else {
+            const error = await response.json();
+            alert(`发送失败: ${error.error}`);
+        }
+    } catch (error) {
+        alert(`操作失败: ${error.message}`);
+    }
+}
 ```
-
-## 常见错误处理
-
-### 1. ValueError (400)
-**原因**: 参数验证失败、业务逻辑错误
-**示例**: 
-- "未找到指定对话项"
-- "消息内容不能为空"
-- "无效的职位名称"
-
-**解决方法**:
-- 检查请求参数是否正确
-- 确认资源（chat_id, job_name 等）是否存在
-- 验证输入数据格式
-
-### 2. TimeoutError (408)
-**原因**: Playwright 操作超时（默认30秒）
-**示例**:
-- "操作超时: Timeout 30000ms exceeded."
-- 页面加载缓慢
-- 网络连接不稳定
-
-**解决方法**:
-- 重试请求
-- 检查网络连接
-- 检查 Boss 直聘网站状态
-- 考虑增加超时时间（如果是系统配置问题）
-
-### 3. RuntimeError (500)
-**原因**: 未预期的系统错误
-**示例**:
-- "消息生成失败，请稍后重试"
-- OpenAI API 调用失败
-- 数据库连接错误
-
-**解决方法**:
-- 查看 Sentry 错误追踪
-- 检查日志文件
-- 联系系统管理员
-- 确认依赖服务（OpenAI, Zilliz）正常运行
 
 ## 测试 API
 
@@ -465,9 +532,31 @@ curl http://localhost:5001/status
 curl "http://localhost:5001/chat/dialogs?limit=5"
 
 # 发送消息
-curl -X POST http://localhost:5001/chat/abc123/send \
+curl -X POST http://localhost:5001/chat/abc123/send_message \
   -H "Content-Type: application/json" \
   -d '{"message": "你好"}'
+
+# 查看在线简历
+curl "http://127.0.0.1:5001/chat/resume/online/abc123"
+
+# 查看完整简历
+curl "http://127.0.0.1:5001/chat/resume/full/abc123"
+
+# 请求完整简历
+curl -X POST http://127.0.0.1:5001/chat/resume/request_full \
+  -H "Content-Type: application/json" \
+  -d '{"chat_id": "abc123"}'
+
+# 获取推荐列表
+curl "http://127.0.0.1:5001/recommend/candidates"
+
+# 查看候选人简历
+curl "http://127.0.0.1:5001/recommend/candidate/0/resume"
+
+# 发送打招呼
+curl -X POST http://127.0.0.1:5001/recommend/candidate/0/greet \
+  -H "Content-Type: application/json" \
+  -d '{"message": "你好，我对您的简历很感兴趣"}'
 
 # 测试 Sentry（会触发 ZeroDivisionError）
 curl http://localhost:5001/sentry-debug
@@ -489,7 +578,7 @@ print(f"找到 {len(dialogs)} 个对话")
 
 # 发送消息
 response = requests.post(
-    "http://localhost:5001/chat/abc123/send",
+    "http://localhost:5001/chat/abc123/send_message",
     json={"message": "你好"}
 )
 
@@ -506,7 +595,7 @@ else:
 2. **添加环境变量**: `base_url = http://localhost:5001`
 3. **创建请求示例**:
    - 方法: POST
-   - URL: `{{base_url}}/chat/abc123/send`
+   - URL: `{{base_url}}/chat/abc123/send_message`
    - Body (JSON):
      ```json
      {
@@ -557,7 +646,7 @@ grep "/chat/.*send" logs/boss_service.log
 
 这些文档会自动反映最新的 API 变更和响应格式。
 
-## 性能优化建议
+## 性能优化
 
 ### 1. 缓存响应
 
@@ -569,9 +658,8 @@ import time
 
 @functools.lru_cache(maxsize=100)
 def get_resume_cached(chat_id: str):
-    response = requests.post(
-        "http://localhost:5001/resume/online",
-        json={"chat_id": chat_id}
+    response = requests.get(
+        f"http://localhost:5001/chat/resume/online/{chat_id}"
     )
     return response.json()
 
@@ -590,7 +678,7 @@ import requests
 
 def send_message(chat_id: str, message: str):
     return requests.post(
-        f"http://localhost:5001/chat/{chat_id}/send",
+        f"http://localhost:5001/chat/{chat_id}/send_message",
         json={"message": message}
     )
 
@@ -613,9 +701,8 @@ for i, result in enumerate(results):
 import requests
 
 # 连接超时5秒，读取超时30秒
-response = requests.post(
-    "http://localhost:5001/resume/view_full",
-    json={"chat_id": "abc123"},
+response = requests.get(
+    "http://localhost:5001/chat/resume/full/abc123",
     timeout=(5, 30)
 )
 ```
@@ -634,18 +721,18 @@ response = requests.post(
 
 ### 迁移指南
 
-如果你有使用旧版本 API 的代码，请参考 `docs/api_refactoring_2024.md` 进行迁移。
+如果你有使用旧版本 API 的代码，请参考项目变更日志进行迁移。
+
+## 相关文档
+
+- [系统架构](architecture.md) - 架构和实现细节
+- [系统架构概览](../ARCHITECTURE.md) - 快速概览
+- [自动化工作流](workflows.md) - 工作流和故障排查
+- [变更日志](../CHANGELOG.md) - API 版本历史
 
 ## 支持和反馈
 
 - **问题反馈**: 在 Sentry Dashboard 查看错误
 - **功能请求**: 提交 GitHub Issue
 - **文档问题**: 更新 `docs/` 目录中的相关文档
-
-## 相关文档
-
-- [技术规范](technical.md)
-- [架构设计](architecture.mermaid)
-- [项目状态](status.md)
-- [变更日志](../changelog.md)
 

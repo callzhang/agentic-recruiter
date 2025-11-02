@@ -282,9 +282,9 @@ print("Context:", context)
 ## 📖 Related Documentation
 
 - [LangGraph Comprehensive Notes](../../docs/langgraph_comprehensive_notes.md)
-- [Technical Specifications](../../docs/technical.md)
+- [System Architecture](../../docs/architecture.md)
 - [Architecture Overview](../../docs/architecture.mermaid)
-- [API Endpoints](../../docs/api/endpoints.md)
+- [API Endpoints](../../docs/api.md)
 
 ## 🤝 Contributing
 

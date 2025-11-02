@@ -451,7 +451,7 @@ async def send_message(
 @router.post("/request-resume", response_class=HTMLResponse)
 async def request_resume(chat_id: str = Form(...)):
     """Request full resume from candidate."""
-    ok, result = await call_api("POST", "/resume/request", json={"chat_id": chat_id})
+    ok, result = await call_api("POST", "/chat/resume/request_full", json={"chat_id": chat_id})
     
     if ok and result is True:
         return HTMLResponse(

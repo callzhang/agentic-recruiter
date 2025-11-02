@@ -337,7 +337,7 @@ async def get_chat_history_action(page: Page, chat_id: str) -> List[Dict[str, An
 # ------------------------------------------------------------
 # 在线简历
 # ------------------------------------------------------------
-async def view_online_resume_action(page: Page, chat_id: str) -> Dict[str, Any]:
+async def view_online_resume_action(page: Page, chat_id: str, timeout: int = 20000) -> Dict[str, Any]:
     """View candidate's online resume. Returns dict with 'text', 'name', 'chat_id'. Raises ValueError on failure."""
     await _prepare_chat_page(page)
     dialog = await _go_to_chat_dialog(page, chat_id)
@@ -357,7 +357,7 @@ async def view_online_resume_action(page: Page, chat_id: str) -> Dict[str, Any]:
     if not open_result.get("success"):
         raise ValueError(_create_error_result(open_result, "无法打开在线简历").get("details", "无法打开在线简历"))
     
-    context = await _get_resume_handle(page, 8000, logger)
+    context = await _get_resume_handle(page, timeout, logger)
     if not context.get("success"):
         raise ValueError(context.get("details", "未找到在线简历"))
     
@@ -414,13 +414,13 @@ async def request_full_resume_action(page: Page, chat_id: str) -> bool:
 
     # Verify success
     await page.wait_for_timeout(2000)
-    success_indicator = page.locator("div.item-system >> span:has-text=('简历请求已发送')")
+    success_indicator = page.locator("div.item-system >> span:has-text('简历请求已发送')")
     if await success_indicator.count() == 0:
         logger.error("简历请求未发送或超时")
     
     return True
     
-
+#TODO: fix this
 async def accept_full_resume_action(page: Page, chat_id: str) -> bool:
     """Accept candidate's resume. Returns True on success, raises ValueError if accept button not found."""
     accept_button_selectors = ['div.notice-list >> a.btn[has-text="同意"]', 'div.message-card-buttons >> span.card.btn[has-text="同意"]']

@@ -25,7 +25,18 @@ import src.chat_actions as chat_actions
 import src.recommendation_actions as recommendation_actions
 
 class BossServiceAsync:
-    """Async Playwright driver exposed as FastAPI service."""
+    """Async Playwright driver exposed as FastAPI service.
+    
+    API Response Format (v2.2.0+):
+        - Success: Returns data directly (dict/list/bool)
+        - Failure: Returns {"error": "错误描述"} with HTTP status code:
+            * 200: Success
+            * 400: Request error (parameter validation, business logic errors)
+            * 408: Request timeout (Playwright operation timeout, default 30s)
+            * 500: Server error (unexpected system errors)
+    
+    All endpoints follow this pattern unless otherwise specified.
+    """
 
     def __init__(self) -> None:
         # Initialize Sentry for error tracking (Sentry 2.x auto-detects FastAPI)
@@ -134,6 +145,14 @@ class BossServiceAsync:
     # Browser/session helpers
     # ------------------------------------------------------------------
     async def _ensure_page(self) -> Page:
+        """Ensure we have a valid page, reusing existing page if on chat or recommend page.
+        
+        If the current page is already on CHAT_URL or RECOMMEND_URL, reuse it without navigation.
+        Only navigate to CHAT_URL if the page is not on any target page.
+        
+        Returns:
+            Page: A valid Playwright page object
+        """
         if not self.context:
             raise RuntimeError("浏览器上下文不存在")
         target_pages = {settings.CHAT_URL, settings.RECOMMEND_URL}
@@ -146,7 +165,8 @@ class BossServiceAsync:
                 break
         if not candidate:
             candidate = await self.context.new_page()
-        if settings.BASE_URL not in candidate.url:
+        # Only navigate if we're not already on a target page
+        if candidate.url not in target_pages and not candidate.url.startswith(settings.BASE_URL):
             await candidate.goto(settings.CHAT_URL, wait_until="domcontentloaded", timeout=20000)
         return candidate
 
@@ -343,6 +363,16 @@ class BossServiceAsync:
         # Playwright/browser actions (async)
         @self.app.get("/status")
         async def get_status():
+            """Get service status including login state and message counts.
+            
+            Returns:
+                dict: Service status with keys:
+                    - status: Always "running"
+                    - logged_in: Boolean indicating if user is logged in
+                    - timestamp: ISO format timestamp
+                    - new_message_count: Count of new messages
+                    - new_greet_count: Count of new greeting requests
+            """
             page = await self._ensure_browser_session()
             stats = await chat_actions.get_chat_stats_action(page)
             return {
@@ -355,6 +385,11 @@ class BossServiceAsync:
 
         @self.app.post("/login")
         async def login():
+            """Verify login status. Triggers browser session check.
+            
+            Returns:
+                bool: True if logged in, False otherwise
+            """
             await self._ensure_browser_session()
             return self.is_logged_in
 
@@ -366,65 +401,199 @@ class BossServiceAsync:
             status: str = Query('未读', description="Status filter: 未读, 牛人已读未回, 全部"),
             job_title: str = Query('全部', description="Job title filter: 全部 or specific job title")
         ):
+            """Get list of chat dialogs/candidates.
+            
+            Args:
+                limit: Maximum number of dialogs to return (1-100)
+                tab: Tab filter for dialog type (新招呼, 沟通中, 全部)
+                status: Status filter (未读, 牛人已读未回, 全部)
+                job_title: Job title filter (全部 or specific job title)
+            
+            Returns:
+                List[dict]: List of candidate dialogs, each containing:
+                    - chat_id: Unique chat identifier
+                    - name: Candidate name
+                    - job_applied: Job title applied for
+                    - last_message: Last message text
+                    - timestamp: Message timestamp
+            """
             page = await self._ensure_browser_session()
             return await chat_actions.get_chat_list_action(page, limit, tab, status, job_title)
 
         @self.app.get("/chat/{chat_id}/messages")
         async def get_message_history(chat_id: str):
+            """Get message history for a specific chat.
+            
+            Args:
+                chat_id: Unique identifier for the chat/candidate
+            
+            Returns:
+                List[dict]: List of messages, each containing:
+                    - type: Message type (candidate, recruiter, system)
+                    - message: Message content
+                    - timestamp: Message timestamp
+                    - status: Read status (if applicable)
+            """
             page = await self._ensure_browser_session()
             return await chat_actions.get_chat_history_action(page, chat_id)
 
-        @self.app.post("/chat/{chat_id}/message")
+        @self.app.post("/chat/{chat_id}/send_message")
         async def send_message_api(chat_id: str, message: str = Body(..., embed=True)):
+            """Send a message to a candidate.
+            
+            Args:
+                chat_id: Unique identifier for the chat/candidate
+                message: Message text to send
+            
+            Returns:
+                bool: True if message was sent successfully
+            """
             page = await self._ensure_browser_session()
             return await chat_actions.send_message_action(page, chat_id, message)
-
+        
         @self.app.post("/chat/greet")
         async def greet_candidate(
             chat_id: str = Body(..., embed=True), 
             message: str = Body(..., embed=True)
         ):
+            """Send a greeting message to a candidate.
+            
+            Args:
+                chat_id: Unique identifier for the chat/candidate
+                message: Greeting message text (will be stripped of whitespace)
+            
+            Returns:
+                dict: Response containing success status and message details
+            """
             page = await self._ensure_browser_session()
             return await chat_actions.send_message_action(page, chat_id, message.strip())
 
         @self.app.get("/chat/stats")
         async def get_chat_stats():
+            """Get chat statistics including message counts.
+            
+            Returns:
+                dict: Statistics containing:
+                    - new_message_count: Count of new messages
+                    - new_greet_count: Count of new greeting requests
+            """
             page = await self._ensure_browser_session()
             return await chat_actions.get_chat_stats_action(page)
 
-        @self.app.post("/chat/resume/request")
+        @self.app.post("/chat/resume/request_full")
         async def request_resume_api(chat_id: str = Body(..., embed=True)):
+            """Request full resume from a candidate.
+            
+            Args:
+                chat_id: Unique identifier for the chat/candidate
+            
+            Returns:
+                bool: True if request was sent successfully
+            
+            Raises:
+                ValueError: If request fails (converted to 400 response)
+            """
             page = await self._ensure_browser_session()
             return await chat_actions.request_full_resume_action(page, chat_id)
-
+        
         @self.app.get("/chat/resume/full/{chat_id}")
         async def view_full_resume(chat_id: str):
+            """View full (offline) resume for a candidate.
+            
+            This endpoint retrieves the full resume PDF/document that was uploaded
+            by the candidate as an attachment. The resume is extracted from the PDF
+            using OCR if necessary.
+            
+            Args:
+                chat_id: Unique identifier for the chat/candidate
+            
+            Returns:
+                dict: Resume data containing:
+                    - text: Resume text content (extracted from PDF)
+                    - name: Candidate name
+                    - chat_id: Chat identifier
+                    - pages: List of image filenames (one per PDF page)
+            
+            Raises:
+                ValueError: If resume is not available or retrieval fails (converted to 400/408 response)
+                PlaywrightTimeoutError: If PDF extraction times out (converted to 408 response)
+            """
             page = await self._ensure_browser_session()
             return await chat_actions.view_full_resume_action(page, chat_id)
-
+        
         @self.app.post("/chat/resume/check_full_resume_available")
         async def check_full_resume(chat_id: str = Body(..., embed=True)):
+            """Check if full resume is available for a candidate.
+            
+            Args:
+                chat_id: Unique identifier for the chat/candidate
+            
+            Returns:
+                bool: True if full resume button/option is available
+            """
             page = await self._ensure_browser_session()
             resume_button = await chat_actions.check_full_resume_available(page, chat_id)
             return resume_button is not None
 
         @self.app.get("/chat/resume/online/{chat_id}")
         async def view_online_resume_api(chat_id: str):
+            """View online resume for a candidate.
+            
+            This endpoint retrieves the online resume that is displayed on the
+            candidate's profile page. This is typically shorter than the full resume
+            and includes key information visible before requesting the full document.
+            
+            Args:
+                chat_id: Unique identifier for the chat/candidate
+            
+            Returns:
+                dict: Resume data containing:
+                    - text: Resume text content
+                    - name: Candidate name
+                    - chat_id: Chat identifier
+            """
             page = await self._ensure_browser_session()
             return await chat_actions.view_online_resume_action(page, chat_id)
-
+        
         @self.app.post("/chat/resume/accept")
         async def accept_resume_api(chat_id: str = Body(..., embed=True)):
+            """Accept a candidate's resume.
+            
+            Args:
+                chat_id: Unique identifier for the chat/candidate
+            
+            Returns:
+                bool: True if resume was accepted successfully
+            
+            Raises:
+                ValueError: If accept button is not found or action fails
+            """
             page = await self._ensure_browser_session()
             return await chat_actions.accept_full_resume_action(page, chat_id)
 
         @self.app.post("/chat/candidate/discard")
         async def discard_candidate_api(chat_id: str = Body(..., embed=True)):
+            """Discard/pass a candidate (mark as not suitable).
+            
+            Args:
+                chat_id: Unique identifier for the chat/candidate
+            
+            Returns:
+                bool: True if candidate was discarded successfully
+            """
             page = await self._ensure_browser_session()
             return await chat_actions.discard_candidate_action(page, chat_id)
-
+        
         @self.app.post("/chat/contact/request")
         async def ask_contact_api(chat_id: str = Body(..., embed=True)):
+            """Request contact information from a candidate.
+            
+            Args:
+                chat_id: Unique identifier for the chat/candidate
+            
+            Returns:
+                bool: True if contact request was sent successfully
+            """
             page = await self._ensure_browser_session()
             return await chat_actions.ask_contact_action(page, chat_id)
 
@@ -435,16 +604,58 @@ class BossServiceAsync:
             job_title: str = Query(None, description="Job title to filter recommendations"),
             new_only: bool = Query(True, description="Only include new candidates (not yet viewed/greeted)")
         ):
+            """Get list of recommended candidates.
+            
+            Returns candidates from the "推荐牛人" (Recommended Candidates) page.
+            Candidates are indexed starting from 0 for use with other recommend endpoints.
+            
+            Args:
+                limit: Maximum number of candidates to return (1-100)
+                job_title: Optional job title to filter recommendations
+                new_only: If True, only return candidates not yet viewed/greeted
+            
+            Returns:
+                List[dict]: List of recommended candidates, each containing:
+                    - index: Index in the recommendation list (0-based, use for /recommend/candidate/{index}/* endpoints)
+                    - name: Candidate name
+                    - text: Candidate summary/description
+                    - job_title: Job title applied for
+            
+            """
             page = await self._ensure_browser_session()
             return await recommendation_actions.list_recommended_candidates_action(page, limit=limit, job_title=job_title, new_only=new_only)
 
         @self.app.get("/recommend/candidate/{index}/resume")
         async def view_recommended_candidate_resume(index: int):
+            """Get resume for a recommended candidate by index.
+            
+            The index corresponds to the position in the list returned by
+            /recommend/candidates. This endpoint opens the candidate's profile
+            and extracts their resume information.
+            
+            Args:
+                index: Index of the candidate in the recommendation list (0-based)
+            
+            Returns:
+                dict: Resume data containing:
+                    - text: Resume text content
+                    - name: Candidate name
+                    - index: Candidate index
+            """
             page = await self._ensure_browser_session()
             return await recommendation_actions.view_recommend_candidate_resume_action(page, index)
 
         @self.app.post("/recommend/candidate/{index}/greet")
         async def greet_recommended_candidate(index: int, message: str = Body(..., embed=True)):
+            """Send a greeting message to a recommended candidate.
+            
+            Args:
+                index: Index of the candidate in the recommendation list
+                message: Greeting message text
+            
+            Returns:
+                bool: True if message was sent successfully
+            """
             page = await self._ensure_browser_session()
             return await recommendation_actions.greet_recommend_candidate_action(page, index, message)
 
@@ -452,56 +663,185 @@ class BossServiceAsync:
         # ------------------ Candidate API ------------------
         @self.app.get("/store/candidate/{chat_id}")
         def get_candidate_api(chat_id: str, fields: Optional[List[str]] = ["*"]):
-            """Get candidate information from the store."""
+            """Get candidate information from the Zilliz store.
+            
+            Args:
+                chat_id: Unique identifier for the chat/candidate
+                fields: Optional list of fields to return (default: all fields)
+            """
             return candidate_store.get_candidate_by_id(chat_id=chat_id, fields=fields)
-
+        
         @self.app.post("/store/candidate/get-by-resume")
         def check_candidate_by_resume_api(resume_text: str = Body(..., embed=True)):
-            """Check if candidate exists by resume similarity."""
+            """Check if candidate exists by resume similarity search.
+            
+            Args:
+                resume_text: Resume text content to search for
+            
+            Returns:
+                Optional[dict]: Matching candidate data if found, None otherwise
+            """
             return assistant_actions.get_candidate_by_resume(
                 chat_id=None,
                 candidate_resume=resume_text
             )
 
-        # ------------------ Chat API ------------------
+        # ------------------ Thread/AI Assistant API ------------------
 
         @self.app.post("/chat/generate-message")
         def generate_message(data: dict = Body(...)):
+            """Generate AI message for candidate based on thread context.
+            
+            Uses OpenAI Assistant API to generate contextual messages based on
+            the thread history, candidate resume, and job requirements.
+            
+            Args:
+                data: JSON body containing:
+                    - thread_id: OpenAI thread identifier (required)
+                    - assistant_id: OpenAI assistant identifier (required)
+                    - purpose: Purpose of message generation:
+                        * "GREET_ACTION": Initial greeting message
+                        * "CHAT_ACTION": Follow-up conversation message
+                        * "ANALYZE_ACTION": Analysis of candidate
+                    - chat_history: Optional chat history for context
+            
+            Returns:
+                str: Generated message text
+            """
             return assistant_actions.generate_message(**data)
-
+        
         @self.app.post("/chat/init-chat")
         async def init_chat_api(data: dict = Body(...)):
-            """Initialize chat thread."""
+            """Initialize a new OpenAI thread for candidate conversation.
+            
+            Creates a new OpenAI thread and populates it with initial context
+            including candidate resume, job requirements, and optional chat history.
+            The thread can then be used for generating AI messages via /chat/generate-message.
+            
+            Args:
+                data: JSON body containing:
+                    - chat_id: Chat identifier (None for recommend candidates)
+                    - name: Candidate name
+                    - job_info: Job information dictionary containing job requirements, keywords, etc.
+                    - resume_text: Candidate resume text
+                    - chat_history: Optional existing chat history
+            
+            Returns:
+                dict: Response containing:
+                    - thread_id: Created OpenAI thread identifier
+                    - success: Boolean indicating success (always True on success)
+            
+            Raises:
+                ValueError: If initialization fails (converted to 500 response)
+            """
             return assistant_actions.init_chat(**data)
-
+        
         @self.app.get("/chat/{thread_id}/messages")
         def get_thread_messages_api(thread_id: str):
-            """Get all messages from a thread."""
+            """Get all messages from an OpenAI thread.
+            
+            Args:
+                thread_id: OpenAI thread identifier
+            
+            Returns:
+                dict: Response containing:
+                    - messages: List of thread messages with id, role, and content
+                    - has_more: Boolean indicating if more messages are available
+            
+            Raises:
+                ValueError: If thread not found or retrieval fails
+            """
+            from src.assistant_utils import get_thread_messages
+            return get_thread_messages(thread_id)
+        
+        @self.app.get("/thread/{thread_id}/messages")
+        def get_thread_messages_alias(thread_id: str):
+            """Alias for /chat/{thread_id}/messages endpoint.
+            
+            Args:
+                thread_id: OpenAI thread identifier
+            
+            Returns:
+                dict: Response containing messages list and has_more flag
+            """
             from src.assistant_utils import get_thread_messages
             return get_thread_messages(thread_id)
 
         @self.app.get("/chat/{thread_id}/analysis")
         def get_thread_analysis_api(thread_id: str):
-            """Get analysis from thread messages."""
+            """Get analysis result from thread messages.
+            
+            Extracts the most recent analysis from thread messages, typically generated
+            by ANALYZE_ACTION purpose.
+            
+            Args:
+                thread_id: OpenAI thread identifier
+            
+            Returns:
+                Optional[dict]: Analysis dictionary if found in thread, None otherwise
+            
+            Raises:
+                ValueError: If thread not found
+            """
             from src.assistant_utils import get_analysis_from_thread
             return get_analysis_from_thread(thread_id)
 
-        ##------ OpenAI API ------
+        # ------------------ OpenAI Assistant API ------------------
         @self.app.get("/assistant/list")
         def list_assistants_api():
-            """List openai assistants."""
+            """List all OpenAI assistants.
+            
+            Returns:
+                List[dict]: List of assistant dictionaries, each containing:
+                    - id: Assistant identifier
+                    - name: Assistant name
+                    - model: Model used by assistant
+                    - description: Assistant description
+                    - instructions: System instructions
+                    - metadata: Additional metadata
+                    - created_at: Creation timestamp
+            """
             assistants = assistant_actions.get_assistants()
             return [assistant.model_dump() for assistant in assistants.data]
 
         @self.app.post("/assistant/create")
         def create_assistant_api(payload: dict = Body(...)):
-            """Create a new openai assistant."""
+            """Create a new OpenAI assistant.
+            
+            Args:
+                payload: JSON body containing:
+                    - name: Assistant name (required)
+                    - model: Model identifier (required, e.g., "gpt-4o-mini")
+                    - instructions: System instructions (required)
+                    - description: Optional description
+                    - metadata: Optional metadata dictionary
+            
+            Returns:
+                dict: Created assistant data
+            """
             client = assistant_actions._openai_client
             assistant = client.beta.assistants.create(**payload)
             return assistant.model_dump()
 
         @self.app.post("/assistant/update/{assistant_id}")
         def update_assistant_api(assistant_id: str, payload: dict = Body(...)):
+            """Update an existing OpenAI assistant.
+            
+            Args:
+                assistant_id: OpenAI assistant identifier
+                payload: JSON body containing fields to update:
+                    - name: Optional new name
+                    - model: Optional new model
+                    - instructions: Optional new instructions
+                    - description: Optional new description
+                    - metadata: Optional new metadata
+            
+            Returns:
+                dict: Updated assistant data
+            
+            Raises:
+                ValueError: If update fails or assistant not found
+            """
             client = assistant_actions._openai_client
             assistant = client.beta.assistants.update(assistant_id, **payload)
             assistant_actions.get_assistants.cache_clear()
@@ -509,19 +849,46 @@ class BossServiceAsync:
 
         @self.app.delete("/assistant/delete/{assistant_id}")
         def delete_assistant_api(assistant_id: str):
+            """Delete an OpenAI assistant.
+            
+            Args:
+                assistant_id: OpenAI assistant identifier
+            
+            Returns:
+                bool: True if deletion was successful
+            """
             client = assistant_actions._openai_client
             client.beta.assistants.delete(assistant_id)
             assistant_actions.get_assistants.cache_clear()
             return True
 
-        # System / debug endpoints
+        # ------------------ System / Debug Endpoints ------------------
         @self.app.post("/restart")
         async def soft_restart_endpoint():
+            """Perform a soft restart of the browser session.
+            
+            Closes and reopens the browser context without restarting the entire service.
+            Useful for recovering from browser errors or refreshing the session.
+            
+            Returns:
+                bool: True if restart was successful
+            """
             await self.soft_restart()
             return True
 
         @self.app.get("/debug/page")
         async def debug_page():
+            """Get debug information about the current browser page.
+            
+            Returns:
+                dict: Debug information containing:
+                    - url: Current page URL
+                    - title: Page title
+                    - content: First 5000 characters of page HTML
+                    - content_length: Total length of page HTML
+            
+            Note: This endpoint is for debugging purposes only.
+            """
             page = await self._ensure_browser_session()
             await page.locator("body").first.wait_for(state="visible", timeout=5000)
             await page.wait_for_load_state("networkidle", timeout=5000)
@@ -536,6 +903,13 @@ class BossServiceAsync:
 
         @self.app.get("/debug/cache")
         async def get_cache_stats():
+            """Get cache statistics for debugging.
+            
+            Returns:
+                dict: Cache statistics if available, empty dict otherwise
+            
+            Note: This endpoint is for debugging purposes only.
+            """
             if self.event_manager and hasattr(self.event_manager, "get_cache_stats"):
                 return self.event_manager.get_cache_stats()
             return {}
@@ -571,12 +945,26 @@ app.include_router(jobs.router, prefix="/web/jobs", tags=["web-jobs"])
 @app.get("/web", response_class=HTMLResponse, tags=["web"])
 @app.get("/web/", response_class=HTMLResponse, tags=["web"])
 async def web_index(request: Request):
-    """Landing page for web UI."""
+    """Serve the Web UI landing page.
+    
+    Returns:
+        HTMLResponse: Rendered index.html template
+    """
     return templates.TemplateResponse("index.html", {"request": request})
 
 @app.get("/web/stats", response_class=HTMLResponse, tags=["web"])
 async def web_stats():
-    """Get quick stats for dashboard."""
+    """Get quick statistics for the Web UI dashboard.
+    
+    Returns HTML cards displaying:
+    - Total candidate count from Zilliz store
+    - New message count
+    - New greeting count
+    - Running workflows count (placeholder)
+    
+    Returns:
+        HTMLResponse: HTML cards with statistics
+    """
     # Get message counts from chat stats
     new_messages = 0
     new_greets = 0
@@ -621,7 +1009,15 @@ async def web_stats():
 
 @app.get("/web/recent-activity", response_class=HTMLResponse, tags=["web"])
 async def web_recent_activity():
-    """Get recent activity for dashboard."""
+    """Get recent activity feed for the Web UI dashboard.
+    
+    Currently returns a placeholder message. Future implementation should
+    track and display recent system activities like candidate processing,
+    message sending, etc.
+    
+    Returns:
+        HTMLResponse: HTML content with recent activity (placeholder)
+    """
     # TODO: Implement actual activity log
     html = '''
     <div class="text-gray-600 space-y-2">

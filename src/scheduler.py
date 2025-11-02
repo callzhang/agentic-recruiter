@@ -230,7 +230,7 @@ class BRDWorkScheduler:
 
     def _request_resume(self, chat_id: str) -> str:
         try:
-            resp = requests.post(f"{self.base_url}/resume/request", json={"chat_id": chat_id}, timeout=15)
+            resp = requests.post(f"{self.base_url}/chat/resume/request_full", json={"chat_id": chat_id}, timeout=15)
             if resp.ok and resp.json().get("success"):
                 return "resume_requested"
         except Exception as exc:
