@@ -28,7 +28,7 @@
         <h4 class="font-bold text-gray-800 mb-2">后续沟通策略</h4>
         <p class="text-gray-700 whitespace-pre-wrap">{{ candidate.analysis.followup_tips or '暂无策略' }}</p>
     </div>
-    <button hx-post="/web/candidates/analyze"
+    <button hx-post="/candidates/analyze"
             hx-include="#candidate-context"
             hx-target="#analysis-content"
             hx-swap="innerHTML"

@@ -382,14 +382,14 @@ async def generate_message(
             <textarea id="message-text" name="message" class="w-full h-32 p-4 border rounded-lg">{message}</textarea>
         </div>
         <div class="flex space-x-2">
-            <button hx-post="/web/candidates/send"
+            <button hx-post="/candidates/send"
                     hx-include="#candidate-context,#message-text"
                     hx-target="body"
                     hx-swap="none"
                     class="flex-1 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700">
                 📤 发送消息
             </button>
-            <button hx-post="/web/candidates/pass"
+            <button hx-post="/candidates/pass"
                     hx-include="#candidate-context"
                     hx-target="body"
                     hx-swap="none"

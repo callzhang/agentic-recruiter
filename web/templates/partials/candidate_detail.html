@@ -41,7 +41,7 @@
         <textarea readonly class="w-full h-64 p-4 bg-gray-50 border rounded-lg font-mono text-sm">{{ candidate.full_resume or candidate.resume_text }}</textarea>
         {% else %}
         <div id="resume-content" class="text-center py-8 text-gray-500" 
-            hx-post="{% if candidate.mode == 'recommend' %}/web/candidates/fetch-recommend-resume{% else %}/web/candidates/fetch-online-resume{% endif %}" 
+            hx-post="{% if candidate.mode == 'recommend' %}/candidates/fetch-recommend-resume{% else %}/candidates/fetch-online-resume{% endif %}" 
             {% if candidate.mode == 'recommend' %}hx-trigger="load"{% endif %}
             hx-include="#candidate-context"
             hx-target="#resume-content"
@@ -78,12 +78,12 @@
             <div class="space-y-4">
                 <textarea id="message-text" name="message" class="w-full h-32 p-4 border rounded-lg">{{ generated_message }}</textarea>
                 <div class="flex space-x-2">
-                    <button hx-post="/web/candidates/send"
+                    <button hx-post="/candidates/send"
                             hx-include="#candidate-context,#message-text"
                             class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700">
                         📤 发送消息
                     </button>
-                    <button hx-post="/web/candidates/pass"
+                    <button hx-post="/candidates/pass"
                             hx-include="#candidate-context"
                             class="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700">
                         ⏭️ PASS
@@ -103,7 +103,7 @@
             <h3 class="font-bold text-gray-800">💬 聊天记录</h3>
         </div>
         <div id="chat-history" 
-             hx-get="/web/candidates/history/{{ candidate.chat_id or candidate.id }}"
+             hx-get="/candidates/history/{{ candidate.chat_id or candidate.id }}"
              hx-trigger="load"
              hx-swap="innerHTML"
              class="p-4">
@@ -116,14 +116,14 @@
     <div class="bg-gray-50 rounded-lg p-4 space-y-2">
         <h3 class="font-bold text-gray-800 mb-2">🔧 手动操作</h3>
         <div class="flex flex-wrap gap-2">
-            <button hx-post="{% if candidate.mode == 'recommend' %}/web/candidates/fetch-recommend-resume{% else %}/web/candidates/fetch-online-resume{% endif %}"
+            <button hx-post="{% if candidate.mode == 'recommend' %}/candidates/fetch-recommend-resume{% else %}/candidates/fetch-online-resume{% endif %}"
                     hx-include="#candidate-context"
                     hx-target="#resume-content"
                     hx-swap="innerHTML"
                     class="px-3 py-1 bg-blue-600 text-white text-sm rounded hover:bg-blue-700">
                 🔄 重新获取简历
             </button>
-            <button hx-post="/web/candidates/analyze"
+            <button hx-post="/candidates/analyze"
                     hx-include="#candidate-context"
                     hx-target="#analysis-content"
                     hx-swap="innerHTML"
@@ -131,7 +131,7 @@
                     class="px-3 py-1 bg-purple-600 text-white text-sm rounded hover:bg-purple-700">
                 🔄 重新分析
             </button>
-            <button hx-post="/web/candidates/generate-message"
+            <button hx-post="/candidates/generate-message"
                     hx-include="#candidate-context"
                     hx-target="#message-content"
                     hx-swap="innerHTML"
@@ -460,7 +460,7 @@ function displayAnalysis(analysis) {
  */
 function startAnalysis() {
     const messageFormData = new FormData(document.getElementById('candidate-context'));
-    htmx.ajax('POST', '/web/candidates/analyze', {
+    htmx.ajax('POST', '/candidates/analyze', {
         target: '#analysis-content',
         swap: 'innerHTML',
         values: Object.fromEntries(messageFormData)
@@ -473,7 +473,7 @@ function startAnalysis() {
 function generateMessage() {
     const messageFormData = new FormData(document.getElementById('candidate-context'));
     messageFormData.append('purpose', 'GREET_ACTION');
-    htmx.ajax('POST', '/web/candidates/generate-message', {
+    htmx.ajax('POST', '/candidates/generate-message', {
         target: '#message-content',
         swap: 'innerHTML',
         values: Object.fromEntries(messageFormData)
@@ -520,7 +520,7 @@ function manualGenerateMessage(mode, assistantId, threadId, chatId) {
         messageFormData.append('chat_id', chatId);
     }
     
-    htmx.ajax('POST', '/web/candidates/generate-message', {
+    htmx.ajax('POST', '/candidates/generate-message', {
         target: '#message-content',
         swap: 'innerHTML',
         values: Object.fromEntries(messageFormData)
@@ -541,7 +541,7 @@ function initializeNewChat(mode, chatId, index, jobId, name, resumeText) {
     formData.append('name', name || (mode === 'recommend' ? '推荐候选人' : '候选人'));
     formData.append('resume_text', resumeText);
     
-    fetch('/web/candidates/init-chat', {
+    fetch('/candidates/init-chat', {
         method: 'POST',
         body: formData
     }).then(response => {

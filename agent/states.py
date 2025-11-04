@@ -57,8 +57,8 @@ class ContextSchema(BaseModel):
     model: str = Field(description="The model to use for the API calls", default="gpt-5-mini")
     limit: int = Field(description="The limit for the number of candidates to process", default=10)
     dingtalk_webhook: str = Field(description="DingTalk webhook URL for sending notifications", default="")
-    base_url: str = Field(description="The base URL for the LLM server calls", default="https://api.kksj.org/v1/")
-    api_key: str = Field(description="The API key for the LLM server calls")
+    # base_url: str = Field(description="The base URL for the LLM server calls", default="https://api.kksj.org/v1/")
+    # api_key: str = Field(description="The API key for the LLM server calls")
 
 class ManagerInputState(BaseModel):
     'Input state for the manager agent'

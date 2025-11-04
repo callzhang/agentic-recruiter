@@ -30,8 +30,6 @@ def recruiter_think(state: RecruiterState, runtime: Runtime[ContextSchema]) -> R
     # Add status message for recruiter thinking
     model = init_chat_model(
         model=runtime.context.model, 
-        api_key=runtime.context.api_key, 
-        base_url=runtime.context.base_url,
         tags = ['recruiter_graph']
     )
     recruiter_model = model.bind_tools(chat_tools+resume_tools+action_tools, parallel_tool_calls=False)
@@ -121,8 +119,6 @@ def manager_plan(state: ManagerState, runtime: Runtime[ContextSchema]) -> Manage
     # otherwise, continue to think
     model = init_chat_model(
         model=runtime.context.model, 
-        api_key=runtime.context.api_key, 
-        base_url=runtime.context.base_url,
         tags = ['manager_graph']
     )
     manager_model = model.bind_tools(manager_tools, parallel_tool_calls=False)

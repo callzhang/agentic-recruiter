@@ -57,7 +57,7 @@ const DEFAULT_INSTRUCTIONS = `你是一个专业的招聘顾问助理。你的�
 // Load assistants data from API
 async function loadAssistantsData() {
     try {
-        const response = await fetch('/web/assistants/api/list');
+        const response = await fetch('/assistants/api/list');
         const result = await response.json();
         if (result.success) {
             assistantsData = result.data;
@@ -386,7 +386,7 @@ async function saveAssistant(event, assistantId) {
     };
     
     try {
-        const response = await fetch(`/web/assistants/${assistantId}/update`, {
+        const response = await fetch(`/assistants/${assistantId}/update`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/x-www-form-urlencoded',
@@ -444,7 +444,7 @@ async function createAssistant(event) {
     };
     
     try {
-        const response = await fetch('/web/assistants/create', {
+        const response = await fetch('/assistants/create', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/x-www-form-urlencoded',
@@ -480,7 +480,7 @@ async function deleteAssistant(assistantId) {
     }
     
     try {
-        const response = await fetch(`/web/assistants/${assistantId}/delete`, {
+        const response = await fetch(`/assistants/${assistantId}/delete`, {
             method: 'DELETE'
         });
         

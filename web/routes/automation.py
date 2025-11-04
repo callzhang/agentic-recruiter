@@ -61,7 +61,16 @@ async def emit_event(message: str, level: str = "info"):
 @router.get("/", response_class=HTMLResponse)
 async def automation_page(request: Request):
     """Main automation page."""
-    return templates.TemplateResponse("automation.html", {"request": request})
+    # Get tunnel URL from environment
+    import os
+    tunnel_url = os.environ.get('BOSS_TUNNEL_URL')
+    local_url = settings.BOSS_SERVICE_BASE_URL or f"http://127.0.0.1:5001"
+    
+    return templates.TemplateResponse("automation.html", {
+        "request": request,
+        "tunnel_url": tunnel_url,
+        "local_url": local_url
+    })
 
 
 # ============================================================================

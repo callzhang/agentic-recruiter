@@ -34,6 +34,7 @@ class Settings(BaseModel):
     
     # OpenAI Configuration
     OPENAI_API_KEY: str = ""
+    OPENAI_BASE_URL: str = ""
     OPENAI_NAME: str = ""
     OPENAI_MODEL: str = ""
     OPENAI_TEMPERATURE: float = 0.7
@@ -109,6 +110,7 @@ class Settings(BaseModel):
             
             # OpenAI Configuration
             "OPENAI_API_KEY": secrets_openai["api_key"],
+            "OPENAI_BASE_URL": config_openai["base_url"],
             "OPENAI_NAME": config_openai["name"],
             "OPENAI_MODEL": config_openai["model"],
             "OPENAI_TEMPERATURE": config_openai["temperature"],

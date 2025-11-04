@@ -97,7 +97,7 @@ async def list_assistants():
             <td class="p-4 text-sm text-gray-600">{assistant.get("model", "")}</td>
             <td class="p-4 text-sm text-gray-600">{(assistant.get("description", "") or "")[:100]}</td>
             <td class="p-4 text-center">
-                <a href="/web/assistants/{assistant.get("id")}" class="text-blue-600 hover:text-blue-800">编辑</a>
+                <a href="/assistants/{assistant.get("id")}" class="text-blue-600 hover:text-blue-800">编辑</a>
             </td>
         </tr>
         '''

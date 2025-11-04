@@ -44,7 +44,7 @@ let currentJobIndex = -1;
 // Load jobs data from API
 async function loadJobsData() {
     try {
-        const response = await fetch('/web/jobs/api/list');
+        const response = await fetch('/jobs/api/list');
         const result = await response.json();
         if (result.success) {
             jobsData = result.data;
@@ -488,7 +488,7 @@ async function saveJob(event) {
     try {
         // Determine if this is a new job or an update
         const isNewJob = currentJobIndex === -1;
-        const endpoint = isNewJob ? '/web/jobs/create' : `/web/jobs/${jobsData[currentJobIndex].job_id}/update`;
+        const endpoint = isNewJob ? '/jobs/create' : `/jobs/${jobsData[currentJobIndex].job_id}/update`;
         
         const response = await fetch(endpoint, {
             method: 'POST',
@@ -535,7 +535,7 @@ async function createJob(event) {
     };
     
     try {
-        const response = await fetch('/web/jobs/create', {
+        const response = await fetch('/jobs/create', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -565,7 +565,7 @@ async function createJob(event) {
 async function deleteJob(jobId) {
     if (confirm('⚠️ 您确定要删除这个岗位吗？\n此操作无法撤销！')) {
         try {
-            const response = await fetch(`/web/jobs/${jobId}/delete`, {
+            const response = await fetch(`/jobs/${jobId}/delete`, {
                 method: 'DELETE',
                 headers: {
                     'Content-Type': 'application/json',

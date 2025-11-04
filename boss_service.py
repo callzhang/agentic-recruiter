@@ -360,6 +360,26 @@ class BossServiceAsync:
     # FastAPI routes
     # ------------------------------------------------------------------
     def setup_routes(self) -> None:
+        # TODO: Add API key authentication middleware for security
+        # When exposing service via Cloudflare tunnel, all endpoints should be protected
+        # with API key authentication to prevent unauthorized access.
+        # Example implementation:
+        # @self.app.middleware("http")
+        # async def verify_api_key(request: Request, call_next):
+        #     # Skip authentication for web UI routes and static files
+        #     if (request.url.path.startswith("/") and 
+        #         (request.url.path in ["/", "/candidates", "/automation", "/assistants", "/jobs", "/stats", "/recent-activity"] or
+        #          request.url.path.startswith("/static/") or
+        #          request.url.path.startswith("/candidates/") or
+        #          request.url.path.startswith("/automation/") or
+        #          request.url.path.startswith("/assistants/") or
+        #          request.url.path.startswith("/jobs/"))):
+        #         return await call_next(request)
+        #     api_key = request.headers.get("X-API-Key")
+        #     if api_key != settings.API_KEY:
+        #         raise HTTPException(status_code=401, detail="Invalid API key")
+        #     return await call_next(request)
+        
         # Playwright/browser actions (async)
         @self.app.get("/status")
         async def get_status():
@@ -392,6 +412,26 @@ class BossServiceAsync:
             """
             await self._ensure_browser_session()
             return self.is_logged_in
+
+        @self.app.get("/tunnel-url")
+        async def get_tunnel_url():
+            """Get Cloudflare tunnel URL if available.
+            
+            Returns:
+                dict: Tunnel URL information with keys:
+                    - tunnel_url: Public tunnel URL (if available)
+                    - local_url: Local service URL
+                    - has_tunnel: Boolean indicating if tunnel is active
+            """
+            import os
+            tunnel_url = os.environ.get('BOSS_TUNNEL_URL')
+            local_url = f"http://{settings.BOSS_SERVICE_HOST}:{settings.BOSS_SERVICE_PORT}"
+            
+            return {
+                "tunnel_url": tunnel_url,
+                "local_url": local_url,
+                "has_tunnel": tunnel_url is not None
+            }
 
         # ------------------ Chat API ------------------
         @self.app.get("/chat/dialogs")
@@ -936,14 +976,13 @@ templates = Jinja2Templates(directory="web/templates")
 # Include web UI routers
 from web.routes import candidates, automation, assistants, jobs
 
-app.include_router(candidates.router, prefix="/web/candidates", tags=["web-candidates"])
-app.include_router(automation.router, prefix="/web/automation", tags=["web-automation"])
-app.include_router(assistants.router, prefix="/web/assistants", tags=["web-assistants"])
-app.include_router(jobs.router, prefix="/web/jobs", tags=["web-jobs"])
+app.include_router(candidates.router, prefix="/candidates", tags=["web-candidates"])
+app.include_router(automation.router, prefix="/automation", tags=["web-automation"])
+app.include_router(assistants.router, prefix="/assistants", tags=["web-assistants"])
+app.include_router(jobs.router, prefix="/jobs", tags=["web-jobs"])
 
 # Web UI root endpoint
-@app.get("/web", response_class=HTMLResponse, tags=["web"])
-@app.get("/web/", response_class=HTMLResponse, tags=["web"])
+@app.get("/", response_class=HTMLResponse, tags=["web"])
 async def web_index(request: Request):
     """Serve the Web UI landing page.
     
@@ -952,7 +991,7 @@ async def web_index(request: Request):
     """
     return templates.TemplateResponse("index.html", {"request": request})
 
-@app.get("/web/stats", response_class=HTMLResponse, tags=["web"])
+@app.get("/stats", response_class=HTMLResponse, tags=["web"])
 async def web_stats():
     """Get quick statistics for the Web UI dashboard.
     
@@ -1007,7 +1046,7 @@ async def web_stats():
     '''
     return HTMLResponse(content=html)
 
-@app.get("/web/recent-activity", response_class=HTMLResponse, tags=["web"])
+@app.get("/recent-activity", response_class=HTMLResponse, tags=["web"])
 async def web_recent_activity():
     """Get recent activity feed for the Web UI dashboard.
     

@@ -10,6 +10,39 @@
         <p class="text-gray-600">配置并启动自动化招聘流程，实时监控执行状态</p>
     </div>
     
+    <!-- Tunnel URL info panel -->
+    <div class="bg-blue-50 border border-blue-200 rounded-lg shadow p-4 mb-6">
+        <div class="flex items-center justify-between">
+            <div class="flex-1">
+                <h3 class="text-lg font-semibold text-blue-900 mb-2">🌐 远程访问 URL</h3>
+                <p class="text-sm text-blue-700 mb-3">
+                    将此 URL 提供给远程 LangGraph Agent 服务以访问此 API：
+                </p>
+                <div class="flex items-center space-x-2" x-show="tunnelUrl">
+                    <input type="text" 
+                           :value="tunnelUrl" 
+                           readonly
+                           id="tunnel-url-input"
+                           class="flex-1 px-4 py-2 bg-white border border-blue-300 rounded-lg font-mono text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    <button @click="copyTunnelUrl()"
+                            class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition">
+                        📋 复制
+                    </button>
+                </div>
+                <div x-show="!tunnelUrl" class="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
+                    <p class="text-sm text-yellow-800">
+                        ⚠️ 未检测到 Cloudflare Tunnel URL。请确保：
+                    </p>
+                    <ul class="text-xs text-yellow-700 mt-2 ml-4 list-disc">
+                        <li>已安装 cloudflared (从 https://github.com/cloudflare/cloudflared/releases)</li>
+                        <li>服务已通过 <code class="bg-yellow-100 px-1 rounded">python start_service.py</code> 启动</li>
+                        <li>或者使用本地 URL: <code class="bg-yellow-100 px-1 rounded">{{ local_url }}</code></li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+    
     <!-- Configuration panel -->
     <div class="bg-white rounded-lg shadow-lg p-6">
         <h2 class="text-xl font-bold text-gray-800 mb-4">工作流配置</h2>
@@ -43,7 +76,7 @@
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-2">岗位</label>
                     <select name="job_id" class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
-                            hx-get="/web/jobs/list-simple" hx-trigger="load" hx-swap="innerHTML">
+                            hx-get="/jobs/list-simple" hx-trigger="load" hx-swap="innerHTML">
                         <option>加载中...</option>
                     </select>
                 </div>
@@ -51,7 +84,7 @@
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-2">助手</label>
                     <select name="assistant_id" class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
-                            hx-get="/web/assistants/list-simple" hx-trigger="load" hx-swap="innerHTML">
+                            hx-get="/assistants/list-simple" hx-trigger="load" hx-swap="innerHTML">
                         <option>加载中...</option>
                     </select>
                 </div>
@@ -167,10 +200,37 @@ function automationControl() {
         eventSource: null,
         isRunning: false,
         isPaused: false,
+        tunnelUrl: {{ tunnel_url|tojson|safe }} || null,
         
         initSSE() {
             // SSE connection will be established when automation starts
             console.log('Automation control initialized');
+            
+            // Fetch tunnel URL from API if not already set
+            if (!this.tunnelUrl) {
+                this.fetchTunnelUrl();
+            }
+        },
+        
+        async fetchTunnelUrl() {
+            try {
+                const response = await fetch('/tunnel-url');
+                const data = await response.json();
+                if (data.tunnel_url) {
+                    this.tunnelUrl = data.tunnel_url;
+                }
+            } catch (error) {
+                console.error('Failed to fetch tunnel URL:', error);
+            }
+        },
+        
+        copyTunnelUrl() {
+            const input = document.getElementById('tunnel-url-input');
+            if (input) {
+                input.select();
+                document.execCommand('copy');
+                showToast('URL 已复制到剪贴板', 'success');
+            }
         },
         
         startAutomation() {
@@ -178,7 +238,7 @@ function automationControl() {
             const formData = new FormData(form);
             
             // Post to start endpoint
-            fetch('/web/automation/start', {
+            fetch('/automation/start', {
                 method: 'POST',
                 body: formData
             })
@@ -203,7 +263,7 @@ function automationControl() {
                 this.eventSource.close();
             }
             
-            this.eventSource = new EventSource('/web/automation/stream');
+            this.eventSource = new EventSource('/automation/stream');
             
             this.eventSource.onmessage = (e) => {
                 const event = JSON.parse(e.data);
@@ -241,7 +301,7 @@ function automationControl() {
         },
         
         pauseAutomation() {
-            fetch('/web/automation/pause', { method: 'POST' })
+            fetch('/automation/pause', { method: 'POST' })
                 .then(response => response.json())
                 .then(data => {
                     if (data.success) {
@@ -252,7 +312,7 @@ function automationControl() {
         },
         
         nextStep() {
-            fetch('/web/automation/next', { method: 'POST' })
+            fetch('/automation/next', { method: 'POST' })
                 .then(response => response.json())
                 .then(data => {
                     if (data.success) {
@@ -262,7 +322,7 @@ function automationControl() {
         },
         
         stopAutomation() {
-            fetch('/web/automation/stop', { method: 'POST' })
+            fetch('/automation/stop', { method: 'POST' })
                 .then(response => response.json())
                 .then(data => {
                     if (data.success) {

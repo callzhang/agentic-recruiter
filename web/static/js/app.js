@@ -47,7 +47,7 @@ function automationControl() {
                 this.eventSource.close();
             }
             
-            this.eventSource = new EventSource('/web/automation/stream');
+            this.eventSource = new EventSource('/automation/stream');
             
             this.eventSource.onmessage = (e) => {
                 const event = JSON.parse(e.data);
@@ -157,7 +157,7 @@ function candidateTabs() {
                 job_id: jobId
             });
             
-            const url = `/web/candidates/list?${params.toString()}`;
+            const url = `/candidates/list?${params.toString()}`;
             console.log('Fetching:', url);
             
             // Remove initial message and empty message if they exist

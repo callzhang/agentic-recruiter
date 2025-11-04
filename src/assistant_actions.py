@@ -78,7 +78,7 @@ ACTION_PROMPTS = {
 
 
 # Assistants ----------------------------------------------------
-_openai_client = OpenAI(api_key=settings.OPENAI_API_KEY)
+_openai_client = OpenAI(api_key=settings.OPENAI_API_KEY, base_url=settings.OPENAI_BASE_URL)
 
 @lru_cache(maxsize=1)
 def get_assistants() -> List[Dict[str, Any]]:

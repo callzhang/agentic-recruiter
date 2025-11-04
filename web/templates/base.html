@@ -28,24 +28,24 @@
             <div class="flex justify-between items-center py-4">
                 <!-- Logo and title -->
                 <div class="flex items-center space-x-4">
-                    <a href="/web" class="text-2xl font-bold text-blue-600">🤖 BOSS招聘助手</a>
+                    <a href="/" class="text-2xl font-bold text-blue-600">🤖 BOSS招聘助手</a>
                 </div>
                 
                 <!-- Navigation links -->
                 <div class="flex space-x-6">
-                    <a href="/web" class="text-gray-700 hover:text-blue-600 transition {% if request.url.path == '/web' or request.url.path == '/web/' %}tab-active{% endif %}">
+                    <a href="/" class="text-gray-700 hover:text-blue-600 transition {% if request.url.path == '/' %}tab-active{% endif %}">
                         首页
                     </a>
-                    <a href="/web/candidates" class="text-gray-700 hover:text-blue-600 transition {% if '/candidates' in request.url.path %}tab-active{% endif %}">
+                    <a href="/candidates" class="text-gray-700 hover:text-blue-600 transition {% if '/candidates' in request.url.path %}tab-active{% endif %}">
                         候选人管理
                     </a>
-                    <a href="/web/automation" class="text-gray-700 hover:text-blue-600 transition {% if '/automation' in request.url.path %}tab-active{% endif %}">
+                    <a href="/automation" class="text-gray-700 hover:text-blue-600 transition {% if '/automation' in request.url.path %}tab-active{% endif %}">
                         自动化工作流
                     </a>
-                    <a href="/web/assistants" class="text-gray-700 hover:text-blue-600 transition {% if '/assistants' in request.url.path %}tab-active{% endif %}">
+                    <a href="/assistants" class="text-gray-700 hover:text-blue-600 transition {% if '/assistants' in request.url.path %}tab-active{% endif %}">
                         助手管理
                     </a>
-                    <a href="/web/jobs" class="text-gray-700 hover:text-blue-600 transition {% if '/jobs' in request.url.path %}tab-active{% endif %}">
+                    <a href="/jobs" class="text-gray-700 hover:text-blue-600 transition {% if '/jobs' in request.url.path %}tab-active{% endif %}">
                         岗位画像
                     </a>
                 </div>

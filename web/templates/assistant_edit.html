@@ -13,7 +13,7 @@
                 </h1>
                 <p class="text-gray-600 mt-2">配置 AI 助手的指令、模型和元数据</p>
             </div>
-            <button onclick="location.href='/web/assistants'" 
+            <button onclick="location.href='/assistants'" 
                     class="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700">
                 ← 返回列表
             </button>
@@ -22,7 +22,7 @@
 
     <!-- Assistant form -->
     <div class="bg-white rounded-lg shadow-lg p-6">
-        <form id="assistant-form" hx-post="{% if assistant %}/web/assistants/{{ assistant.id }}/update{% else %}/web/assistants/create{% endif %}" 
+        <form id="assistant-form" hx-post="{% if assistant %}/assistants/{{ assistant.id }}/update{% else %}/assistants/create{% endif %}" 
               hx-target="#form-result" hx-swap="innerHTML">
             
             <!-- Basic Information -->
@@ -138,7 +138,7 @@
                 </button>
                 {% endif %}
                 
-                <button type="button" onclick="location.href='/web/assistants'" 
+                <button type="button" onclick="location.href='/assistants'" 
                         class="px-6 py-3 bg-gray-600 text-white rounded-lg hover:bg-gray-700 font-medium">
                     取消
                 </button>
@@ -202,7 +202,7 @@ function removeMetadataRow(button) {
 // Delete assistant
 function deleteAssistant() {
     if (confirm('⚠️ 您确定要删除这个助手吗？\n此操作无法撤销！')) {
-        fetch('/web/assistants/{{ assistant.id }}/delete', {
+        fetch('/assistants/{{ assistant.id }}/delete', {
             method: 'DELETE',
             headers: {
                 'Content-Type': 'application/json',
@@ -212,7 +212,7 @@ function deleteAssistant() {
         .then(data => {
             if (data.success) {
                 alert('助手已删除');
-                location.href = '/web/assistants';
+                location.href = '/assistants';
             } else {
                 alert('删除失败: ' + data.error);
             }

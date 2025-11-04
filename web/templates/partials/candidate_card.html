@@ -3,7 +3,7 @@
   class="candidate-card p-4 border rounded-lg cursor-pointer bg-white hover:bg-blue-50 transition"
   data-candidate-id="{% if candidate.chat_id %}{{ candidate.chat_id }}{% else %}recommend_{{ candidate.index }}{% endif %}"
     hx-get="
-        /web/candidates/detail?mode={{ candidate.mode or 'chat' }}
+        /candidates/detail?mode={{ candidate.mode or 'chat' }}
         {%- if candidate.chat_id %}&chat_id={{ candidate.chat_id }}{% endif %}
         {%- if candidate.index is defined %}&index={{ candidate.index }}{% endif %}
         &name={{ candidate.name | urlencode }}
