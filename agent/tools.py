@@ -1,10 +1,8 @@
 """LangGraph tools that call FastAPI service endpoints."""
 from datetime import datetime
 from langgraph.graph import END
-import requests, time, json
-import hmac
-import hashlib
-import base64
+import requests, time, json, base64
+import hmac, hashlib
 import urllib.parse
 from typing import Any, Dict, List, Optional, Callable, Annotated, Literal
 from langgraph.prebuilt import InjectedState, InjectedStore
@@ -225,7 +223,9 @@ def manager_finish_tool(report: str, tool_call_id: Annotated[str, InjectedToolCa
 @tool
 def finish_tool(report: str, 
                 state: Annotated[RecruiterState, InjectedState],
-                tool_call_id: Annotated[str, InjectedToolCallId]) -> Command[Literal[END]]:
+                config: RunnableConfig,
+                tool_call_id: Annotated[str, InjectedToolCallId]
+            ) -> dict:
     """
     This tool finishes/pauses the recruitment process.
     
@@ -241,15 +241,23 @@ def finish_tool(report: str,
         - there is any error in the recruitment process
     """
     messages = [f'{m.type}: {m.content[:100]}' for m in state.messages if m.type in ['human', 'ai'] and m.content]
-    
-    
-    report = f'{report}\n\n--({current_timestr()})--\n\n{chr(10).join(["---"])}'.join(messages) if messages else f'{report}\n\n--({human_timestamp})--'
-    return Command[Literal[END]](
-        update={
-            'messages': [ToolMessage(content=report, tool_call_id=tool_call_id)]
-        },
-        goto=END
-    )
+    report_dict = {
+        'report': report,
+        'stage': state.stage,
+        'analysis': state.analysis,
+        'messages': messages,
+        'time': current_timestr()
+    }
+
+    # Doesn't work in CLI/Studio
+    # resume_instruction = interrupt({
+    #     'time': current_timestr(),
+    #     'candidate': state.candidate.model_dump(),
+    #     'report': report,
+    #     'messages': messages,
+    #     'thread_id': config['configurable'].get('thread_id')
+    # })
+    return report_dict
 
 
 @tool
@@ -261,13 +269,17 @@ def analyze_resume_tool(
     summary: str, 
     followup_tips: str,
     tool_call_id: Annotated[str, InjectedToolCallId]
-    ) -> Command[Literal[END]]:
+    ) -> Command:
     '''
     根据岗位描述，对候选人的简历进行打分，用于决定是否继续推进。
     尤其是岗位要求中的keyword里面的正负向关键词要进行加分和减分。
     另外也要仔细查看候选人的项目经历，检查是否有言过其词、模棱两可的情况。
     最后，还要查看候选人的过往工作经历，判断是否匹配岗位要求。
-    请给出 1-10 的四个评分：其中6分为及格，8分为良好，9分为优秀，10分为非常优秀。
+    请给出 1-10 的四个评分：
+        - 其中6分为及格：满足岗位要求的底线
+        - 8分为良好：基本满足岗位要求，并且有亮点
+        - 9分为优秀：满足岗位要求，是一位稀有的候选人
+        - 10分为非常优秀：完全满足岗位要求，并且有很强的竞争力
     args:
         skill: int - 技能、经验匹配度
         startup_fit: int - 创业公司契合度，抗压能力、对工作的热情程度
@@ -284,8 +296,15 @@ def analyze_resume_tool(
         'summary': summary,
         'followup_tips': followup_tips
     }
-    return Command[Literal[END]](
+    if overall < 7:
+        stage = 'PASS'
+    elif overall < 9:
+        stage = 'GREET'
+    else:
+        stage = 'SEEK'
+    return Command(
         update={
+            'stage': stage,
             'analysis': analysis,
             'messages': [ToolMessage(json.dumps(analysis, ensure_ascii=False), tool_call_id=tool_call_id)]
         }
@@ -361,7 +380,7 @@ def send_chat_message_tool(chat_id: str, message: str, tool_call_id: Annotated[s
         }
     )
 
-#TODO: fix error
+
 @tool
 def get_chat_messages_tool(chat_id: str, state: Annotated[RecruiterState, InjectedState], tool_call_id: Annotated[str, InjectedToolCallId]) -> Command:
     """
@@ -388,7 +407,7 @@ def get_chat_messages_tool(chat_id: str, state: Annotated[RecruiterState, Inject
     state_candidate_messagess = [m.content for m in state.messages if m.type == 'human']
     new_user_messages = [ToolMessage(content='已获取消息历史', tool_call_id=tool_call_id)]
     for message in all_messages_in_boss:
-        if message['type'] == 'user' and message['content'] not in state_candidate_messagess:
+        if message['type'] == 'candidate' and message['message'] not in state_candidate_messagess:
             candidate_message = HumanMessage(content=message['message'])
             new_user_messages.append(candidate_message)
             logger.info(f"Inserted candidate message: {message}")
@@ -513,6 +532,7 @@ def view_online_resume_tool(
         index:Optional[int], 
         mode: str, 
         state: Annotated[RecruiterState, InjectedState],
+        config: RunnableConfig,
         tool_call_id: Annotated[str, InjectedToolCallId]
     ) -> Command:
     """
@@ -548,18 +568,19 @@ def view_online_resume_tool(
         assert chat_id is not None, "Chat ID is required for chat/greet/followup modes"
         result = _call_api("GET", f"{web_portal}/chat/resume/online/{chat_id}")
     
-    resume_text = result.get('text')
-
-    store = runtime.store
-    from agent.graph import NAME_SPACE
-    store.put(
-        namespace=NAME_SPACE, 
-        key=chat_id, 
-        value={
-            'resume': resume_text,
-        }, 
-        index=["resume"]
-    )
+    if chat_id:
+        from agent.graph import NAME_SPACE
+        resume_text = result.get('text')
+        store = runtime.store
+        store.put(
+            namespace=NAME_SPACE, 
+            key=chat_id, 
+            value={
+                'resume': resume_text,
+                'checkpoint_ns': config['configurable']['checkpoint_ns'],
+            }, 
+            index=["resume"]
+        )
 
     return Command(
         update={

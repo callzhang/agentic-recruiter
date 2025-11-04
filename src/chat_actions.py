@@ -423,7 +423,7 @@ async def request_full_resume_action(page: Page, chat_id: str) -> bool:
 #TODO: fix this
 async def accept_full_resume_action(page: Page, chat_id: str) -> bool:
     """Accept candidate's resume. Returns True on success, raises ValueError if accept button not found."""
-    accept_button_selectors = ['div.notice-list >> a.btn[has-text="同意"]', 'div.message-card-buttons >> span.card.btn[has-text="同意"]']
+    accept_button_selectors = ['div.notice-list >> a.btn:has-text("同意")', 'div.message-card-buttons >> span.card.btn:has-text("同意")']
     for selector in accept_button_selectors:
         resume_pending = page.locator(selector)
         if await resume_pending.count() > 0:
