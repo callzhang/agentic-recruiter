@@ -435,11 +435,12 @@ class BossServiceAsync:
 
         # ------------------ Chat API ------------------
         @self.app.get("/chat/dialogs")
-        async def get_messages(
+        async def list_caht_messages(
             limit: int = Query(10, ge=1, le=100),
             tab: str = Query('新招呼', description="Tab filter: 新招呼, 沟通中, 全部"),
             status: str = Query('未读', description="Status filter: 未读, 牛人已读未回, 全部"),
-            job_title: str = Query('全部', description="Job title filter: 全部 or specific job title")
+            job_title: str = Query('全部', description="Job title filter: 全部 or specific job title"),
+            new_only: bool = Query(True, description="Only include new candidates (not yet viewed/greeted)")
         ):
             """Get list of chat dialogs/candidates.
             
@@ -448,7 +449,7 @@ class BossServiceAsync:
                 tab: Tab filter for dialog type (新招呼, 沟通中, 全部)
                 status: Status filter (未读, 牛人已读未回, 全部)
                 job_title: Job title filter (全部 or specific job title)
-            
+                new_only: If True, only include new candidates (not yet viewed/greeted)
             Returns:
                 List[dict]: List of candidate dialogs, each containing:
                     - chat_id: Unique chat identifier
@@ -458,7 +459,7 @@ class BossServiceAsync:
                     - timestamp: Message timestamp
             """
             page = await self._ensure_browser_session()
-            return await chat_actions.get_chat_list_action(page, limit, tab, status, job_title)
+            return await chat_actions.get_chat_list_action(page, limit, tab, status, job_title, new_only)
 
         @self.app.get("/chat/{chat_id}/messages")
         async def get_message_history(chat_id: str):
@@ -642,7 +643,8 @@ class BossServiceAsync:
         async def get_recommended_candidates(
             limit: int = Query(20, ge=1, le=100),
             job_title: str = Query(None, description="Job title to filter recommendations"),
-            new_only: bool = Query(True, description="Only include new candidates (not yet viewed/greeted)")
+            new_only: bool = Query(True, description="Only include new candidates (not yet viewed/greeted)"),
+            filters: str = Query(None, description="Candidate filters as JSON string")
         ):
             """Get list of recommended candidates.
             
@@ -663,7 +665,15 @@ class BossServiceAsync:
             
             """
             page = await self._ensure_browser_session()
-            return await recommendation_actions.list_recommended_candidates_action(page, limit=limit, job_title=job_title, new_only=new_only)
+            # Parse filters from JSON string if provided
+            parsed_filters = None
+            if filters:
+                try:
+                    import json
+                    parsed_filters = json.loads(filters)
+                except json.JSONDecodeError:
+                    raise ValueError(f"Invalid filters JSON: {filters}")
+            return await recommendation_actions.list_recommended_candidates_action(page, limit=limit, job_title=job_title, new_only=new_only, filters=parsed_filters)
 
         @self.app.get("/recommend/candidate/{index}/resume")
         async def view_recommended_candidate_resume(index: int):
@@ -702,7 +712,7 @@ class BossServiceAsync:
 
         # ------------------ Candidate API ------------------
         @self.app.get("/store/candidate/{chat_id}")
-        def get_candidate_api(chat_id: str, fields: Optional[List[str]] = ["*"]):
+        def get_candidate_api(chat_id: str, fields: Optional[List[str]] = None):
             """Get candidate information from the Zilliz store.
             
             Args:
@@ -726,9 +736,9 @@ class BossServiceAsync:
                 candidate_resume=resume_text
             )
 
-        # ------------------ Thread/AI Assistant API ------------------
+        # ------------------ AI Assistant API ------------------
 
-        @self.app.post("/chat/generate-message")
+        @self.app.post("/assistant/generate-message")
         def generate_message(data: dict = Body(...)):
             """Generate AI message for candidate based on thread context.
             
@@ -750,13 +760,13 @@ class BossServiceAsync:
             """
             return assistant_actions.generate_message(**data)
         
-        @self.app.post("/chat/init-chat")
+        @self.app.post("/assistant/init-chat")
         async def init_chat_api(data: dict = Body(...)):
-            """Initialize a new OpenAI thread for candidate conversation.
+            """Initialize a new OpenAI conversation for candidate.
             
-            Creates a new OpenAI thread and populates it with initial context
-            including candidate resume, job requirements, and optional chat history.
-            The thread can then be used for generating AI messages via /chat/generate-message.
+            Creates a new OpenAI conversation and populates it with initial context
+            including candidate resume and job requirements.
+            The conversation_id can then be used for generating AI messages via /assistant/generate-message.
             
             Args:
                 data: JSON body containing:
@@ -764,67 +774,60 @@ class BossServiceAsync:
                     - name: Candidate name
                     - job_info: Job information dictionary containing job requirements, keywords, etc.
                     - resume_text: Candidate resume text
-                    - chat_history: Optional existing chat history
+                    - chat_history: Optional existing chat history (currently unused)
             
             Returns:
-                dict: Response containing:
-                    - thread_id: Created OpenAI thread identifier
-                    - success: Boolean indicating success (always True on success)
+                str: Created OpenAI conversation identifier
             
             Raises:
                 ValueError: If initialization fails (converted to 500 response)
             """
             return assistant_actions.init_chat(**data)
         
-        @self.app.get("/chat/{thread_id}/messages")
+        @self.app.get("/assistant/{thread_id}/messages")
         def get_thread_messages_api(thread_id: str):
-            """Get all messages from an OpenAI thread.
+            """Get all messages from an OpenAI conversation.
+            
+            Note: The URL parameter is named 'thread_id' for backward compatibility,
+            but it actually accepts a conversation_id.
             
             Args:
-                thread_id: OpenAI thread identifier
+                thread_id: OpenAI conversation identifier (stored as thread_id field)
             
             Returns:
                 dict: Response containing:
-                    - messages: List of thread messages with id, role, and content
-                    - has_more: Boolean indicating if more messages are available
+                    - messages: List of conversation messages with id, role, and content
+                    - has_more: Boolean indicating if more messages are available (always False)
+                    - analysis: Optional analysis dict if found in messages
+                    - action: Optional action dict if found in messages
             
             Raises:
-                ValueError: If thread not found or retrieval fails
+                ValueError: If conversation not found or retrieval fails
             """
-            from src.assistant_utils import get_thread_messages
-            return get_thread_messages(thread_id)
-        
-        @self.app.get("/thread/{thread_id}/messages")
-        def get_thread_messages_alias(thread_id: str):
-            """Alias for /chat/{thread_id}/messages endpoint.
-            
-            Args:
-                thread_id: OpenAI thread identifier
-            
-            Returns:
-                dict: Response containing messages list and has_more flag
-            """
-            from src.assistant_utils import get_thread_messages
-            return get_thread_messages(thread_id)
+            from src.assistant_utils import get_conversation_messages
+            return get_conversation_messages(thread_id)
 
-        @self.app.get("/chat/{thread_id}/analysis")
+        @self.app.get("/assistant/{thread_id}/analysis")
         def get_thread_analysis_api(thread_id: str):
-            """Get analysis result from thread messages.
+            """Get analysis result from conversation messages.
             
-            Extracts the most recent analysis from thread messages, typically generated
+            Note: The URL parameter is named 'thread_id' for backward compatibility,
+            but it actually accepts a conversation_id.
+            
+            Extracts the most recent analysis from conversation messages, typically generated
             by ANALYZE_ACTION purpose.
             
             Args:
-                thread_id: OpenAI thread identifier
+                thread_id: OpenAI conversation identifier (stored as thread_id field)
             
             Returns:
-                Optional[dict]: Analysis dictionary if found in thread, None otherwise
+                Optional[dict]: Analysis dictionary if found in conversation, None otherwise
             
             Raises:
-                ValueError: If thread not found
+                ValueError: If conversation not found
             """
-            from src.assistant_utils import get_analysis_from_thread
-            return get_analysis_from_thread(thread_id)
+            from src.assistant_utils import get_analysis_from_conversation
+            return get_analysis_from_conversation(thread_id)
 
         # ------------------ OpenAI Assistant API ------------------
         @self.app.get("/assistant/list")

@@ -391,16 +391,25 @@ def test_thread_init_chat_endpoint(client: TestClient, monkeypatch: pytest.Monke
 
 
 def test_thread_messages_endpoint(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    from src import assistant_utils
     monkeypatch.setattr(
-        assistant_actions,
-        "get_thread_messages",
-        lambda thread_id: [{"id": "msg-1", "thread_id": thread_id}],
+        assistant_utils,
+        "get_conversation_messages",
+        lambda conversation_id: {
+            "messages": [{"id": "msg-1", "role": "user", "content": "test"}],
+            "has_more": False,
+            "analysis": None,
+            "action": None
+        },
     )
 
-    response = client.get("/thread/thread-1/messages")
+    response = client.get("/assistant/thread-1/messages")
 
     assert response.status_code == 200
-    assert response.json() == [{"id": "msg-1", "thread_id": "thread-1"}]
+    data = response.json()
+    assert "messages" in data
+    assert data["messages"] == [{"id": "msg-1", "role": "user", "content": "test"}]
+    assert data["has_more"] is False
 
 
 def test_assistant_list_endpoint(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:

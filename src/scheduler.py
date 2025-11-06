@@ -239,7 +239,7 @@ class BRDWorkScheduler:
 
     def _discard_candidate(self, chat_id: str) -> str:
         try:
-            resp = requests.post(f"{self.base_url}/candidate/discard", json={"chat_id": chat_id}, timeout=15)
+            resp = requests.post(f"{self.base_url}/chat/candidate/discard", json={"chat_id": chat_id}, timeout=15)
             if resp.ok and resp.json().get("success"):
                 return "discarded"
         except Exception as exc:

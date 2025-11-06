@@ -215,6 +215,28 @@ function loadJobForm(job) {
                         </div>
                     </div>
                     
+                    <!-- Candidate Filters -->
+                    <div class="space-y-4 mt-8">
+                        <h2 class="text-xl font-semibold text-gray-800">候选人筛选条件</h2>
+                        <p class="text-sm text-gray-500">用于在推荐页面筛选候选人的条件，JSON格式。例如：{"活跃度": "本周活跃", "院校": ["985", "留学"], "学历": "硕士"}</p>
+                        <div>
+                            <label for="candidate_filters_json" class="block text-sm font-medium text-gray-700 mb-2">
+                                筛选条件 (JSON)
+                                <button type="button" onclick="formatCandidateFilters()" class="ml-2 px-2 py-1 text-xs bg-gray-100 hover:bg-gray-200 rounded text-gray-600">
+                                    ✨ 格式化
+                                </button>
+                                <button type="button" onclick="validateCandidateFilters()" class="ml-1 px-2 py-1 text-xs bg-blue-100 hover:bg-blue-200 rounded text-blue-600">
+                                    ✓ 验证
+                                </button>
+                            </label>
+                            <textarea id="candidate_filters_json" name="candidate_filters_json" rows="8"
+                                      class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 font-mono text-sm"
+                                      placeholder='{"活跃度": "本周活跃", "院校": ["985", "留学"], "只看第一学历": true, "学历": "硕士", "经验": "3-5年", "求职意向": ["离职-随时到岗", "在职-考虑机会"], "薪资待遇": "20-50K"}'
+                                      onblur="validateCandidateFilters()">${job.candidate_filters ? JSON.stringify(job.candidate_filters, null, 2) : ''}</textarea>
+                            <p id="candidate_filters_validation" class="text-xs mt-1"></p>
+                        </div>
+                    </div>
+                    
                     <!-- Keywords -->
                     <div class="space-y-4 mt-8">
                         <h2 class="text-xl font-semibold text-gray-800">关键词</h2>
@@ -388,6 +410,28 @@ function loadNewJobForm() {
                         </div>
                     </div>
                     
+                    <!-- Candidate Filters -->
+                    <div class="space-y-4 mt-8">
+                        <h2 class="text-xl font-semibold text-gray-800">候选人筛选条件</h2>
+                        <p class="text-sm text-gray-500">用于在推荐页面筛选候选人的条件，JSON格式。例如：{"活跃度": "本周活跃", "院校": ["985", "留学"], "学历": "硕士"}</p>
+                        <div>
+                            <label for="candidate_filters_json" class="block text-sm font-medium text-gray-700 mb-2">
+                                筛选条件 (JSON)
+                                <button type="button" onclick="formatCandidateFilters()" class="ml-2 px-2 py-1 text-xs bg-gray-100 hover:bg-gray-200 rounded text-gray-600">
+                                    ✨ 格式化
+                                </button>
+                                <button type="button" onclick="validateCandidateFilters()" class="ml-1 px-2 py-1 text-xs bg-blue-100 hover:bg-blue-200 rounded text-blue-600">
+                                    ✓ 验证
+                                </button>
+                            </label>
+                            <textarea id="candidate_filters_json" name="candidate_filters_json" rows="8"
+                                      class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 font-mono text-sm"
+                                      placeholder='{"活跃度": "本周活跃", "院校": ["985", "留学"], "只看第一学历": true, "学历": "硕士", "经验": "3-5年", "求职意向": ["离职-随时到岗", "在职-考虑机会"], "薪资待遇": "20-50K"}'
+                                      onblur="validateCandidateFilters()"></textarea>
+                            <p id="candidate_filters_validation" class="text-xs mt-1"></p>
+                        </div>
+                    </div>
+                    
                     <!-- Keywords -->
                     <div class="space-y-4 mt-8">
                         <h2 class="text-xl font-semibold text-gray-800">关键词</h2>
@@ -476,6 +520,25 @@ async function saveJob(event) {
     const ddqTextEl = document.getElementById('drill_down_questions_text');
     jobData.drill_down_questions = ddqTextEl ? ddqTextEl.value : '';
     
+    // Get candidate filters as JSON (with validation)
+    const candidateFiltersEl = document.getElementById('candidate_filters_json');
+    if (candidateFiltersEl && candidateFiltersEl.value.trim()) {
+        if (!validateCandidateFilters()) {
+            alert('候选人筛选条件 JSON 格式错误，请修正后再保存');
+            candidateFiltersEl.focus();
+            return;
+        }
+        try {
+            jobData.candidate_filters = JSON.parse(candidateFiltersEl.value);
+        } catch (e) {
+            alert('候选人筛选条件 JSON 格式错误: ' + e.message);
+            candidateFiltersEl.focus();
+            return;
+        }
+    } else {
+        jobData.candidate_filters = null;
+    }
+    
     // Get keywords from tag editors
     const positiveKeywords = window.tagEditors['positive_keywords'] ? Array.from(window.tagEditors['positive_keywords'].tags) : [];
     const negativeKeywords = window.tagEditors['negative_keywords'] ? Array.from(window.tagEditors['negative_keywords'].tags) : [];
@@ -524,6 +587,25 @@ async function createJob(event) {
     // Get drill down questions as string
     const ddqTextEl = document.getElementById('drill_down_questions_text');
     jobData.drill_down_questions = ddqTextEl ? ddqTextEl.value : '';
+    
+    // Get candidate filters as JSON (with validation)
+    const candidateFiltersEl = document.getElementById('candidate_filters_json');
+    if (candidateFiltersEl && candidateFiltersEl.value.trim()) {
+        if (!validateCandidateFilters()) {
+            alert('候选人筛选条件 JSON 格式错误，请修正后再保存');
+            candidateFiltersEl.focus();
+            return;
+        }
+        try {
+            jobData.candidate_filters = JSON.parse(candidateFiltersEl.value);
+        } catch (e) {
+            alert('候选人筛选条件 JSON 格式错误: ' + e.message);
+            candidateFiltersEl.focus();
+            return;
+        }
+    } else {
+        jobData.candidate_filters = null;
+    }
     
     // Get keywords from tag editors
     const positiveKeywords = window.tagEditors['positive_keywords'] ? Array.from(window.tagEditors['positive_keywords'].tags) : [];
@@ -810,6 +892,71 @@ class TagEditor {
     setTags(tags) {
         this.tags.clear();
         tags.forEach(tag => this.addTag(tag));
+    }
+}
+
+// Format candidate filters JSON
+function formatCandidateFilters() {
+    const el = document.getElementById('candidate_filters_json');
+    if (!el) return;
+    
+    const value = el.value.trim();
+    if (!value) {
+        el.value = '';
+        const validationEl = document.getElementById('candidate_filters_validation');
+        if (validationEl) validationEl.textContent = '';
+        return;
+    }
+    
+    try {
+        const parsed = JSON.parse(value);
+        el.value = JSON.stringify(parsed, null, 2);
+        const validationEl = document.getElementById('candidate_filters_validation');
+        if (validationEl) {
+            validationEl.textContent = '✓ JSON 格式正确';
+            validationEl.className = 'text-xs mt-1 text-green-600';
+        }
+        el.classList.remove('border-red-500');
+        el.classList.add('border-gray-300');
+    } catch (e) {
+        const validationEl = document.getElementById('candidate_filters_validation');
+        if (validationEl) {
+            validationEl.textContent = '✗ JSON 格式错误: ' + e.message;
+            validationEl.className = 'text-xs mt-1 text-red-600';
+        }
+        el.classList.remove('border-gray-300');
+        el.classList.add('border-red-500');
+    }
+}
+
+// Validate candidate filters JSON
+function validateCandidateFilters() {
+    const el = document.getElementById('candidate_filters_json');
+    const validationEl = document.getElementById('candidate_filters_validation');
+    
+    if (!el || !validationEl) return true;
+    
+    const value = el.value.trim();
+    if (!value) {
+        validationEl.textContent = '';
+        el.classList.remove('border-red-500', 'border-green-500');
+        el.classList.add('border-gray-300');
+        return true;
+    }
+    
+    try {
+        JSON.parse(value);
+        validationEl.textContent = '✓ JSON 格式正确';
+        validationEl.className = 'text-xs mt-1 text-green-600';
+        el.classList.remove('border-red-500');
+        el.classList.add('border-gray-300');
+        return true;
+    } catch (e) {
+        validationEl.textContent = '✗ JSON 格式错误: ' + e.message;
+        validationEl.className = 'text-xs mt-1 text-red-600';
+        el.classList.remove('border-gray-300', 'border-green-500');
+        el.classList.add('border-red-500');
+        return false;
     }
 }
 </script>

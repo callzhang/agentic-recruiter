@@ -120,7 +120,6 @@ function candidateTabs() {
             },
         
         loadCandidates() {
-            console.log('Loading candidates, activeTab:', this.activeTab);
             
             this.loading = true;
             
@@ -141,10 +140,10 @@ function candidateTabs() {
                 mode = 'recommend';
                 chatType = '';
             } else {
-                mode = 'chat';
+                mode = this.activeTab; // Use the tab name directly as mode
                 const tabMap = {
                     'greet': '新招呼',
-                    'reply': '沟通中',
+                    'chat': '沟通中',
                     'followup': '牛人已读未回'
                 };
                 chatType = tabMap[this.activeTab] || '新招呼';
@@ -157,6 +156,7 @@ function candidateTabs() {
                 job_id: jobId
             });
             
+            console.log('Loading candidates, activeTab:', this.activeTab, 'params:', params);
             const url = `/candidates/list?${params.toString()}`;
             console.log('Fetching:', url);
             

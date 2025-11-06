@@ -243,7 +243,7 @@ document.getElementById('assistant-form').addEventListener('htmx:afterRequest', 
         const response = JSON.parse(event.detail.xhr.responseText);
         if (response.success) {
             alert('{% if assistant %}助手已更新{% else %}助手已创建{% endif %}');
-            location.href = '/web/assistants';
+            location.href = '/assistants';
         } else {
             document.getElementById('form-result').innerHTML = 
                 `<div class="mt-4 p-4 bg-red-100 border border-red-400 text-red-700 rounded">${response.error}</div>`;

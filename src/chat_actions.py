@@ -212,9 +212,9 @@ async def discard_candidate_action(page: Page, chat_id: str) -> bool:
     
     # If we get here, the dialog wasn't deleted
     raise ValueError("PASS失败: 未删除对话")
+    
 
-
-async def get_chat_list_action(page: Page, limit: int = 10, tab: str = '新招呼', status: str = '未读', job_title: str = '全部', unread_only=True) -> List[Dict[str, Any]]:
+async def get_chat_list_action(page: Page, limit: int = 999, tab: str = '新招呼', status: str = '未读', job_title: str = '全部', unread_only=True) -> List[Dict[str, Any]]:
     '''Get candidate list from chat page
     Args:
         page: Page - The Playwright Page instance representing the chat page.

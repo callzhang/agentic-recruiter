@@ -2,19 +2,20 @@
 <div
   class="candidate-card p-4 border rounded-lg cursor-pointer bg-white hover:bg-blue-50 transition"
   data-candidate-id="{% if candidate.chat_id %}{{ candidate.chat_id }}{% else %}recommend_{{ candidate.index }}{% endif %}"
-    hx-get="
-        /candidates/detail?mode={{ candidate.mode or 'chat' }}
-        {%- if candidate.chat_id %}&chat_id={{ candidate.chat_id }}{% endif %}
-        {%- if candidate.index is defined %}&index={{ candidate.index }}{% endif %}
-        &name={{ candidate.name | urlencode }}
-        &job_title={{ candidate.job_title | urlencode }}
-        &text={{ (candidate.text or candidate.last_message or '') | urlencode }}
-        {%- if candidate.stage %}&stage={{ candidate.stage }}{% endif %}
-        {% if candidate.viewed is defined %}
-        &viewed={{ candidate.viewed }}{% endif %}
-        {%- if candidate.greeted is defined %}&greeted={{ candidate.greeted }}{% endif %}"
-    hx-target="#detail-pane"
-    hx-include="#job-selector,#assistant-selector"
+  data-candidate='{{ candidate | tojson }}'
+  hx-get="
+      /candidates/detail?mode={{ candidate.mode or 'chat' }}
+      {%- if candidate.chat_id %}&chat_id={{ candidate.chat_id }}{% endif %}
+      {%- if candidate.index is defined %}&index={{ candidate.index }}{% endif %}
+      &name={{ candidate.name | urlencode }}
+      &job_title={{ (candidate.job_applied or candidate.job_title or '') | urlencode }}
+      &text={{ (candidate.description or candidate.last_message or candidate.text or '') | urlencode }}
+      {%- if candidate.stage %}&stage={{ candidate.stage }}{% endif %}
+      {%- if candidate.viewed is defined %}&viewed={{ candidate.viewed }}{% endif %}
+      {%- if candidate.greeted is defined %}&greeted={{ candidate.greeted }}{% endif %}"
+  hx-target="#detail-pane"
+  hx-include="#job-selector,#assistant-selector"
+  hx-on::click="console.log('Candidate clicked:', JSON.parse(this.dataset.candidate));"
 >
   <div class="flex items-start space-x-3">
     <div class="flex-shrink-0">
@@ -29,19 +30,20 @@
         {{ candidate.name or '未知' }}
       </h3>
       <p class="text-sm text-gray-600 truncate">
-        {{ candidate.job_title or candidate.job_applied or '未指定岗位' }}
+        {{ candidate.job_applied or candidate.job_title or '未指定岗位' }}
       </p>
       <p class="text-xs text-gray-500 mt-1 line-clamp-2">
-        {{ candidate.text or candidate.last_message or '暂无消息' }}
+        {{ candidate.description or candidate.last_message or candidate.text or '暂无消息' }}
       </p>
       <div class="mt-2 flex flex-wrap gap-1">
-        {% if candidate.viewed %}
+        {% if candidate.viewed is defined and candidate.viewed %}
         <span
           class="inline-block px-2 py-1 text-xs rounded-full bg-purple-100 text-purple-700"
         >
           👁️ 已查看
         </span>
-        {% endif %} {% if candidate.greeted %}
+        {% endif %}
+        {% if candidate.greeted is defined and candidate.greeted %}
         <span
           class="inline-block px-2 py-1 text-xs rounded-full bg-green-100 text-green-700"
         >

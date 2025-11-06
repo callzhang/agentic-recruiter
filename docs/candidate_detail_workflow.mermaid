@@ -67,7 +67,7 @@ flowchart TD
     
     subgraph THREAD_DATA ["📊 loadThreadData"]
         M[THREAD DATA LOADING]
-        M --> M1["GET /thread/{threadId}/messages"]
+        M --> M1["GET /assistant/{threadId}/messages"]
         M1 --> M2{"response.ok"}
         M2 -->|if| M3["SUCCESS"]
         M2 -->|else| M4["FAILURE"]

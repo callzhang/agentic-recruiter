@@ -6,29 +6,29 @@ Boss直聘自动化机器人的 4 个独立工作流入口
 
 每个工作流可独立执行，处理不同来源的候选人，支持阶段双向转换。
 
-## 工作流入口
+## 工作流入口(Mode)
 
-### 1. 推荐牛人
+### 1. 推荐牛人(recommend)
 **数据源**: Boss直聘推荐页面
 
 **流程**: 获取推荐列表 → 提取简历 → AI 分析 → 决策阶段 → 打招呼 → 存储
 
 **关键API**:
-- `GET /recommend/candidates`
-- `POST /chat/generate-message` (purpose="ANALYZE_ACTION")
+- `GET /recommend/candidates` 获取候选人列表
+- `POST /assistant/generate-message` (purpose="ANALYZE_ACTION")
 - `POST /recommend/candidate/{idx}/greet`
 
-### 2. 新招呼
+### 2. 新招呼(Greet)
 **数据源**: 聊天列表"新招呼"标签页
 
 **流程**: 获取新招呼 → 查询存储 → 提取简历 → AI 分析 → 生成回复 → 发送
 
 **关键API**:
 - `GET /chat/dialogs?tab=新招呼&status=未读`
-- `POST /chat/generate-message`
+- `POST /assistant/generate-message` (purpose="ANALYZE_ACTION")
 - `POST /chat/{chat_id}/send_message`
 
-### 3. 沟通中
+### 3. 沟通中(Chat)
 **数据源**: 聊天列表"沟通中"标签页
 
 **流程**: 获取对话 → 查询缓存 → 请求完整简历 → 重新分析 → 生成回复
@@ -38,14 +38,14 @@ Boss直聘自动化机器人的 4 个独立工作流入口
 - `POST /chat/resume/request_full`
 - `GET /chat/resume/full/{chat_id}`
 
-### 4. 追结果
+### 4. 牛人已读未回(Followup)
 **数据源**: Zilliz 存储的超时候选人
 
 **流程**: 查询超时候选人 → 筛选阶段 → 生成跟进消息 → 发送
 
 **关键API**:
 - Zilliz 直接查询
-- `POST /chat/generate-message` (purpose="FOLLOWUP_ACTION")
+- `POST /assistant/generate-message` (purpose="FOLLOWUP_ACTION")
 - `POST /chat/{chat_id}/send_message`
 
 ## 候选人阶段
@@ -55,8 +55,6 @@ Boss直聘自动化机器人的 4 个独立工作流入口
 - **PASS**: 不匹配，已拒绝
 - **GREET**: 表达兴趣，已索要简历
 - **SEEK**: 强匹配，寻求联系方式
-- **CONTACT**: 已获得联系方式
-- **WAITING_LIST**: 待定
 
 ### 阶段转换
 

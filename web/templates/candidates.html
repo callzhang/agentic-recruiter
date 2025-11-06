@@ -31,11 +31,11 @@
                 👋 新招呼
             </button>
             <button 
-                @click="switchTab('reply')"
-                data-tab="reply"
-                :class="activeTab === 'reply' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-gray-600'"
+                @click="switchTab('chat')"
+                data-tab="chat"
+                :class="activeTab === 'chat' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-gray-600'"
                 class="tab-btn px-4 py-3 font-medium hover:text-blue-600 transition">
-                💬 牛人回复
+                💬 沟通中
             </button>
             <button 
                 @click="switchTab('followup')"
@@ -110,5 +110,131 @@
 
 {% block scripts %}
 <!-- All candidate logic is now handled by Alpine.js in app.js via candidateTabs() -->
+
+<script>
+// ============================================================================
+// Centralized Candidate Analysis & Workflow Logic
+// ============================================================================
+
+// Handle analysis completion after HTMX swap
+document.body.addEventListener('htmx:afterSwap', function(event) {
+    if (event.detail.target.id === 'analysis-content') {
+        handleAnalysisComplete();
+    }
+});
+
+function handleAnalysisComplete() {
+    const analysisDiv = document.querySelector('#analysis-content #analysis-result-container');
+    if (!analysisDiv) return;
+    
+    try {
+        const actionFlags = JSON.parse(analysisDiv.getAttribute('data-action-flags') || '{}');
+        const analysis = JSON.parse(analysisDiv.getAttribute('data-analysis') || '{}');
+        const mode = analysisDiv.getAttribute('data-mode');
+        const conversationId = analysisDiv.getAttribute('data-conversation-id');
+        const chatId = analysisDiv.getAttribute('data-chat-id');
+        const name = analysisDiv.getAttribute('data-name');
+        const jobId = analysisDiv.getAttribute('data-job-id');
+        const assistantId = analysisDiv.getAttribute('data-assistant-id');
+        
+        // Get resume text from textarea if available, otherwise from data attribute
+        let resumeText = '';
+        const resumeTextarea = document.querySelector('#resume-section textarea');
+        if (resumeTextarea) {
+            resumeText = resumeTextarea.value || '';
+        }
+        if (!resumeText) {
+            resumeText = analysisDiv.getAttribute('data-resume-text') || '';
+        }
+        
+        const thresholdBorderline = actionFlags.threshold_borderline || 7.0;
+        const thresholdSeek = actionFlags.threshold_seek || 9.0;
+        const shouldGenerateGreet = actionFlags.should_generate_greet || false;
+        const shouldRequestResume = actionFlags.should_request_resume || false;
+        
+        // For recommend/greet mode, handle sequential actions
+        if (mode === 'recommend' || mode === 'greet') {
+            if (shouldRequestResume && analysis.overall >= thresholdSeek) {
+                // Request full resume first, then save to cloud
+                showToast(`评分 ${analysis.overall} >= ${thresholdSeek}，请求完整简历...`, 'info');
+                // Note: For recommend candidates, we can't request resume yet (no chat_id)
+                // Just save to cloud after generating greet message
+                if (shouldGenerateGreet) {
+                    generateMessageForRecommend(mode, conversationId, assistantId, jobId, chatId, name, resumeText, analysis);
+                } else {
+                    saveCandidateToCloud(mode, conversationId, chatId, name, jobId, assistantId, resumeText, analysis);
+                }
+            } else if (shouldGenerateGreet && analysis.overall >= thresholdBorderline) {
+                // Generate greet message, then save to cloud
+                showToast(`评分 ${analysis.overall} >= ${thresholdBorderline}，生成招呼消息...`, 'success');
+                generateMessageForRecommend(mode, conversationId, assistantId, jobId, chatId, name, resumeText, analysis);
+            } else {
+                // Score below threshold, don't save to cloud
+                showToast(`评分 ${analysis.overall} < ${thresholdBorderline}，不推荐`, 'warning');
+            }
+        }
+    } catch (e) {
+        console.error('Error handling analysis complete:', e);
+    }
+}
+
+function generateMessageForRecommend(mode, conversationId, assistantId, jobId, chatId, name, resumeText, analysis) {
+    const formData = new FormData();
+    formData.append('mode', mode);
+    formData.append('conversation_id', conversationId);
+    formData.append('assistant_id', assistantId);
+    formData.append('job_id', jobId);
+    if (chatId) formData.append('chat_id', chatId);
+    
+    // Set up one-time event listener for message generation completion
+    const messageTarget = document.getElementById('message-content');
+    const handler = function() {
+        // After message is generated, save to cloud
+        setTimeout(() => {
+            saveCandidateToCloud(mode, conversationId, chatId, name, jobId, assistantId, resumeText, analysis);
+        }, 500);
+        messageTarget.removeEventListener('htmx:afterSwap', handler);
+    };
+    
+    if (messageTarget) {
+        messageTarget.addEventListener('htmx:afterSwap', handler, { once: true });
+    }
+    
+    htmx.ajax('POST', '/candidates/generate-message', {
+        target: '#message-content',
+        swap: 'innerHTML',
+        values: Object.fromEntries(formData)
+    });
+}
+
+function saveCandidateToCloud(mode, conversationId, chatId, name, jobId, assistantId, resumeText, analysis) {
+    const formData = new FormData();
+    formData.append('mode', mode);
+    formData.append('conversation_id', conversationId);
+    formData.append('name', name);
+    formData.append('job_id', jobId);
+    formData.append('assistant_id', assistantId);
+    formData.append('resume_text', resumeText);
+    formData.append('analysis', JSON.stringify(analysis));
+    if (chatId) formData.append('chat_id', chatId);
+    
+    fetch('/candidates/save-to-cloud', {
+        method: 'POST',
+        body: formData
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            showToast('✅ 候选人已保存到云端', 'success');
+        } else {
+            showToast('保存失败: ' + (data.error || '未知错误'), 'error');
+        }
+    })
+    .catch(err => {
+        console.error('Failed to save candidate:', err);
+        showToast('保存失败', 'error');
+    });
+}
+</script>
 {% endblock %}
 

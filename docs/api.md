@@ -88,7 +88,7 @@ Boss直聘自动化机器人 REST API 文档
 | `/recommend/candidate/{index}/resume` | GET | 查看候选人简历 |
 | `/recommend/candidate/{index}/greet` | POST | 打招呼 |
 
-### AI 助手
+### AI 助手管理
 
 | 端点 | 方法 | 说明 |
 |------|------|------|
@@ -97,14 +97,14 @@ Boss直聘自动化机器人 REST API 文档
 | `/assistant/update/{assistant_id}` | POST | 更新助手 |
 | `/assistant/delete/{assistant_id}` | DELETE | 删除助手 |
 
-### 对话线程
+### AI 助手操作
 
 | 端点 | 方法 | 说明 |
 |------|------|------|
-| `/chat/generate-message` | POST | 生成消息 |
-| `/chat/init-chat` | POST | 初始化对话线程 |
-| `/chat/{thread_id}/messages` | GET | 获取线程消息 |
-| `/chat/{thread_id}/analysis` | GET | 获取线程分析 |
+| `/assistant/generate-message` | POST | 生成消息 |
+| `/assistant/init-chat` | POST | 初始化对话线程 |
+| `/assistant/{thread_id}/messages` | GET | 获取线程消息 |
+| `/assistant/{thread_id}/analysis` | GET | 获取线程分析 |
 
 ### Web UI
 
@@ -318,7 +318,7 @@ true
 
 #### 生成消息
 ```bash
-POST /chat/generate-message
+POST /assistant/generate-message
 Content-Type: application/json
 
 {

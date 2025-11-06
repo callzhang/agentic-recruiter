@@ -28,8 +28,8 @@
         <input type="hidden" name="name" value="{{ candidate.name or '' }}">
         <input type="hidden" name="assistant_id" value="{{ assistant_id }}">
         <input type="hidden" name="job_id" value="{{ job_id }}">
-        <input type="hidden" name="thread_id" value="{{ candidate.thread_id or '' }}">
-        <input type="hidden" name="index" value="{{ candidate.index if candidate.index is not none else '' }}">
+        <input type="hidden" name="conversation_id" value="{{ candidate.conversation_id or candidate.thread_id or '' }}">
+        <input type="hidden" name="index" value="{{ candidate.index}}">
     </form>
     
     <!-- 1. Resume Section -->
@@ -42,11 +42,12 @@
         {% else %}
         <div id="resume-content" class="text-center py-8 text-gray-500" 
             hx-post="{% if candidate.mode == 'recommend' %}/candidates/fetch-recommend-resume{% else %}/candidates/fetch-online-resume{% endif %}" 
-            {% if candidate.mode == 'recommend' %}hx-trigger="load"{% endif %}
+            hx-trigger="load"
             hx-include="#candidate-context"
             hx-target="#resume-content"
             hx-swap="innerHTML"
-            hx-on::after-swap="handleResumeLoaded()"> 
+            hx-on::after-swap="handleResumeLoaded()"
+            hx-on::htmx:after-swap="handleResumeLoaded()"> 
             ⏳ 正在加载简历...
         </div>
         {% endif %}
@@ -98,7 +99,7 @@
 
     <!-- 4. Chat History (for chat mode only) -->
     {% if candidate.mode != 'recommend' %}
-    <div class="bg-white rounded-lg border shadow-sm">
+    <!-- <div class="bg-white rounded-lg border shadow-sm">
         <div class="p-4 border-b bg-gray-50">
             <h3 class="font-bold text-gray-800">💬 聊天记录</h3>
         </div>
@@ -109,7 +110,7 @@
              class="p-4">
             <div class="text-center text-gray-500">加载中...</div>
         </div>
-    </div>
+    </div> -->
     {% endif %}
 
     <!-- Manual Actions (always available) -->
@@ -155,58 +156,20 @@ load the candidate detail page
     |- (no)   check by chat_id first, before fetching resume -> div.resume-content will be empty
     |
 ============================================================================ */
-// Mode-specific record check logic
-(function() {
-    const mode = document.querySelector('input[name="mode"]')?.value;
-    const chatId = document.querySelector('input[name="chat_id"]')?.value;
+// // Mode-specific record check logic
+// (function() {
+//     const mode = document.querySelector('input[name="mode"]')?.value;
+//     const chatId = document.querySelector('input[name="chat_id"]')?.value;
     
-    if (mode === 'recommend') {
-        // For recommend: must fetch resume first, then check
-        // Resume fetch is auto-triggered by hx-trigger="load"
-        // After fetch, htmx:afterSwap will handle the check
-    } else if (mode === 'greet' || mode === 'reply' || mode === 'followup') {
-        // For chat mode(greet, reply, followup): check by chat_id first, before fetching resume
-        checkExistingCandidateRecord(chatId);
-    }
-})();
-
-/**
- * Check for existing chat candidate (chat mode)
- */
-function checkExistingCandidateRecord(chatId) {
-    if (!chatId) {
-        console.warn('No chat_id provided for checkChatCandidate');
-        return;
-    }
-
-    showToast('检查已有记录...', 'info');
-
-    fetch('/candidate/' + chatId, {
-        method: 'GET'
-    })
-        .then(response => response.json())
-        .then(existingRecord => {
-            if (existingRecord) {
-                if (!existingRecord.thread_id) {
-                    // ❌ NOT FOUND: Initialize new chat
-                    console.log('❌ No similar record, initializing new chat...' + existingRecord);
-                    showToast('no thread_id for fetched candidate: ' + existingRecord, 'error');
-                    throw new Error('no thread_id for fetched candidate: ' + existingRecord);
-                }
-                // ✅ FOUND: Reuse everything, skip resume fetch
-                console.log('✅ Found existing chat candidate, reusing thread:', existingRecord.thread_id);
-                reuseExistingRecord(existingRecord);
-            } else {
-                // ❌ NOT FOUND: Proceed with resume fetch
-                console.log('❌ No existing chat candidate found, fetching resume...');
-                triggerResumeFetch();
-            }
-        })
-        .catch(err => {
-            console.error('Error checking chat candidate:', err);
-            triggerResumeFetch();
-        });
-}
+//     if (mode === 'recommend') {
+//         // For recommend: must fetch resume first, then check
+//         // Resume fetch is auto-triggered by hx-trigger="load"
+//         // After fetch, htmx:afterSwap will handle the check
+//     } else if (mode === 'greet' || mode === 'reply' || mode === 'followup') {
+//         // For chat mode(greet, reply, followup): check by chat_id first, before fetching resume
+//         checkExistingCandidateRecord(chatId); //TODO: we can reuse exisiting record
+//     }
+// })();
 
 function updateFormData(record) {
     dataElement = document.getElementById('candidate-context');
@@ -226,38 +189,70 @@ function updateFormData(record) {
     }
 }
 
+/**
+ * Check for existing chat candidate (chat mode)
+ */
+function checkExistingCandidateRecord(chatId) {
+    if (!chatId) {
+        console.warn('No chat_id provided for checkChatCandidate');
+        return;
+    }
+
+    showToast('检查已有记录...', 'info');
+
+    fetch('/store/candidate/' + chatId, {
+        method: 'GET'
+    })
+        .then(response => response.json())
+        .then(existingRecord => {
+            if (existingRecord) {
+                const conversationId = existingRecord.conversation_id || existingRecord.thread_id;
+                if (!conversationId) {
+                    // ❌ NOT FOUND: Initialize new chat
+                    console.log('❌ No similar record, initializing new chat...' + existingRecord);
+                    showToast('no conversation_id for fetched candidate: ' + existingRecord, 'error');
+                    throw new Error('no conversation_id for fetched candidate: ' + existingRecord);
+                }
+                // ✅ FOUND: Reuse everything, skip resume fetch
+                console.log('✅ Found existing chat candidate, reusing conversation:', conversationId);
+                reuseExistingRecord(existingRecord);
+            } else {
+                // ❌ NOT FOUND: Proceed with resume fetch
+                console.log('❌ No existing chat candidate found, fetching resume...');
+                triggerResumeFetch();
+            }
+        })
+        .catch(err => {
+            console.error('Error checking chat candidate:', err);
+            triggerResumeFetch();
+        });
+}
+
 // Handle resume loaded event using HTMX's hx-on::after-swap
+// when resume is loaded, we need to initialize a new chat thread
+// Then start analysis
 function handleResumeLoaded() {
+
     const textarea = document.querySelector('#resume-content textarea');
 
     if (!textarea || !textarea.value) {
         return;
     }
     resumeText = textarea.value;
-    // Add candidate-specific filtering to prevent cross-candidate interference
-    const candidateId = document.querySelector('input[name="index"]')?.value || 
-                       document.querySelector('input[name="chat_id"]')?.value;
-    if (!candidateId) {
-        console.warn('No candidate ID found, skipping resume processing');
-        return;
-    }
-    
     const mode = document.querySelector('input[name="mode"]')?.value;
+    const chatId = document.querySelector('input[name="chat_id"]')?.value;
+    const name = document.querySelector('input[name="name"]')?.value;
+    const jobId = document.querySelector('input[name="job_id"]')?.value;
     
-    if (mode === 'recommend') {
-        // For recommend: now check by resume similarity
-        get_candidate_from_resume(resumeText);
-    } else {
-        // For chat: resume was fetched because no existing record
-        // Proceed with init_chat
-        const chatId = document.querySelector('input[name="chat_id"]')?.value;
-        const name = document.querySelector('input[name="name"]')?.value;
-        const jobId = document.querySelector('input[name="job_id"]')?.value;
-        
-        if (typeof initializeNewChat === 'function') {
-            initializeNewChat(mode, chatId, null, jobId, name, resumeText);
-        }
-    }
+    initializeNewChat(mode, chatId, jobId, name, resumeText).then((conversation_id) => {
+        updateFormData({'conversation_id': conversation_id});
+        showToast('简历加载完成，正在分析简历...', 'success');
+        startAnalysis();
+    }).catch(err => {
+        console.error('Failed to analyze resume:', err);
+        showToast('初始化对话失败', 'error');
+        throw new Error('Failed to analyze resume');
+    });
 }
 
 
@@ -266,12 +261,12 @@ function handleResumeLoaded() {
 // ============================================================================
 
 /**
- * Reuse existing candidate record (thread_id, resume, analysis, history)
+ * Reuse existing candidate record (conversation_id, resume, analysis, history)
  */
 function reuseExistingRecord(existingRecord) {
     console.log('Reusing existing record:', existingRecord);
     
-    // 1. Store thread_id (always available)
+    // 1. Store conversation_id (always available)
     updateFormData(existingRecord)
 
     // 2. Display saved resume (for chat mode only)
@@ -284,7 +279,8 @@ function reuseExistingRecord(existingRecord) {
     // Note: For recommend mode, resume was already fetched
     
     // 3. Load all thread data in one call (messages, analysis, action)
-    loadThreadData(existingRecord.thread_id);
+    const conversationId = existingRecord.conversation_id || existingRecord.thread_id;
+    loadThreadData(conversationId);
 }
 
 /**
@@ -303,10 +299,10 @@ function displayResume(resumeText, statusMessage = '') {
 /**
  * Load thread data (messages, analysis, action) in one call
  */
-function loadThreadData(threadId) {
+function loadThreadData(conversationId) {
     showToast('正在加载对话数据...', 'info');
     
-    fetch(`/thread/${threadId}/messages`)
+    fetch(`/assistant/${conversationId}/messages`)
         .then(response => response.json())
         .then(data => {
             console.log('Thread data loaded:', data);
@@ -488,13 +484,13 @@ function showManualGenerateButton() {
     if (messageSection) {
         const mode = document.querySelector('input[name="mode"]')?.value;
         const assistantId = document.querySelector('input[name="assistant_id"]')?.value;
-        const threadId = document.querySelector('input[name="thread_id"]')?.value;
+        const conversationId = document.querySelector('input[name="conversation_id"]')?.value;
         const chatId = document.querySelector('input[name="chat_id"]')?.value;
         
         messageSection.innerHTML = `
             <div class="text-center py-8">
                 <p class="text-gray-600 mb-4">评分未达标，是否手动生成消息？</p>
-                <button onclick="manualGenerateMessage('${mode}', '${assistantId}', '${threadId}', '${chatId}')" 
+                <button onclick="manualGenerateMessage('${mode}', '${assistantId}', '${conversationId}', '${chatId}')" 
                         class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700">
                     🔄 手动生成消息
                 </button>
@@ -506,15 +502,15 @@ function showManualGenerateButton() {
 /**
  * Manual message generation function
  */
-function manualGenerateMessage(mode, assistantId, threadId, chatId) {
+function manualGenerateMessage(mode, assistantId, conversationId, chatId) {
     console.log('Manual message generation triggered');
     showToast('手动生成消息...', 'info');
     
     const messageFormData = new FormData();
     messageFormData.append('mode', mode);
     messageFormData.append('assistant_id', assistantId);
-    if (threadId && threadId !== 'null' && threadId !== 'undefined') {
-        messageFormData.append('thread_id', threadId);
+    if (conversationId && conversationId !== 'null' && conversationId !== 'undefined') {
+        messageFormData.append('conversation_id', conversationId);
     }
     if (chatId && chatId !== 'null' && chatId !== 'undefined') {
         messageFormData.append('chat_id', chatId);
@@ -530,18 +526,16 @@ function manualGenerateMessage(mode, assistantId, threadId, chatId) {
 /**
  * Initialize new chat (current flow)
  */
-function initializeNewChat(mode, chatId, index, jobId, name, resumeText) {
+function initializeNewChat(mode, chatId, jobId, name, resumeText) {
     showToast('初始化对话线程...', 'info');
-    
     const formData = new FormData();
     formData.append('mode', mode);
     if (chatId) formData.append('chat_id', chatId);
-    if (index !== null) formData.append('index', index);
     formData.append('job_id', jobId);
-    formData.append('name', name || (mode === 'recommend' ? '推荐候选人' : '候选人'));
+    formData.append('name', name);
     formData.append('resume_text', resumeText);
-    
-    fetch('/candidates/init-chat', {
+
+    return fetch('/candidates/init-chat', {
         method: 'POST',
         body: formData
     }).then(response => {
@@ -549,66 +543,19 @@ function initializeNewChat(mode, chatId, index, jobId, name, resumeText) {
         return response.json();
     }).then(data => {
         console.log('Chat initialized:', data);
-        if (data.thread_id) {
-            // Add thread_id to context
-            let threadInput = document.querySelector('input[name="thread_id"]');
-            threadInput.value = data.thread_id;
-            updateFormData({'thread_id': data.thread_id})
+        const conversationId = data.conversation_id;
+        if (conversationId) {
+            // Add conversation_id to context
+            updateFormData({'conversation_id': conversationId})
         }
-        
-        // Start analysis
-        startAnalysis();
+        return conversationId;
     }).catch(err => {
         console.error('Failed to init chat:', err);
         showToast('初始化对话失败', 'error');
+        throw new Error('Failed to init chat');
     });
 }
 
-/**
- * Check for existing recommend candidate (recommend mode, after resume fetch)
- */
-function get_candidate_from_resume(resumeText) {
-    showToast('搜索相似简历...', 'info');
-    
-    fetch('/candidate/check-by-resume', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-            resume_text: resumeText
-        })
-    })
-    .then(response => response.json())
-    .then(existingRecord => {
-        console.log('got similar candidate by resume:', existingRecord);
-        if (existingRecord && existingRecord.thread_id) {
-            // ✅ FOUND: Reuse thread
-            console.log('✅ Found similar candidate, reusing thread:', existingRecord.thread_id);
-            // change the form data
-            reuseExistingRecord(existingRecord);
-        } else {
-            // ❌ NOT FOUND: Initialize new chat
-            console.log('❌ No similar candidate found, initializing new chat...');
-            const mode = document.querySelector('input[name="mode"]')?.value;
-            const name = document.querySelector('input[name="name"]')?.value;
-            const jobId = document.querySelector('input[name="job_id"]')?.value;
-            const index = document.querySelector('input[name="index"]')?.value;
-            
-            initializeNewChat('recommend', null, index, jobId, name, resumeText);
-        }
-    })
-    .catch(err => {
-        console.error('Error checking recommend candidate:', err);
-        // Fallback: initialize new chat
-        const mode = document.querySelector('input[name="mode"]')?.value;
-        const name = document.querySelector('input[name="name"]')?.value;
-        const jobId = document.querySelector('input[name="job_id"]')?.value;
-        const index = document.querySelector('input[name="index"]')?.value;
-        
-        initializeNewChat('recommend', null, index, jobId, name, resumeText);
-    });
-}
 
 /**
  * Trigger resume fetch manually (for chat mode after checking existing record)

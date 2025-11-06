@@ -27,6 +27,7 @@ JOB_POPOVER_SELECTOR = "div.ui-dropmenu"
 JOB_SELECTOR = "div.ui-dropmenu >> ul.job-list > li"
 
 
+
 async def _prepare_recommendation_page(page: Page, job_title: str = None, *, wait_timeout: int = 8000) -> Frame:
     """
     Navigates and configures the recommendation page for automated actions.
@@ -91,7 +92,7 @@ async def _prepare_recommendation_page(page: Page, job_title: str = None, *, wai
     return frame
 
 
-async def list_recommended_candidates_action(page: Page, *, limit: int = 40, job_title: str, new_only: bool) -> List[Dict[str, Any]]:
+async def list_recommended_candidates_action(page: Page, *, limit: int = 999, job_title: str, new_only: bool = True, filters: Dict[str, Any] = None) -> List[Dict[str, Any]]:
     """
     List recommended candidates from the Boss直聘推荐页面.
 
@@ -102,7 +103,7 @@ async def list_recommended_candidates_action(page: Page, *, limit: int = 40, job
         limit (int, optional): Maximum number of candidates to retrieve. Defaults to 20.
         job_title (str, optional): Job title to filter candidates by. If provided, the recommendation list will be filtered accordingly.
         new_only (bool): If True, only include new candidates (not yet viewed/greeted). *(Not currently implemented; reserved for future)*
-
+        filters (Dict[str, Any], optional): Candidate filters dictionary to apply on the recommendation page. If provided, filters will be applied before listing candidates.
     Returns:
         List[Dict[str, Any]]: List of dictionaries, each representing a recommended candidate with standardized fields:
             - index: Position in the current list
@@ -121,6 +122,9 @@ async def list_recommended_candidates_action(page: Page, *, limit: int = 40, job
         Call this after logging in and loading the Boss直聘推荐页面. Use returned candidate indices for downstream actions (e.g., resume view or greeting).
     """
     frame = await _prepare_recommendation_page(page, job_title=job_title)
+    # apply filters if provided
+    if filters:
+        await apply_filters(frame, filters)
     candidates: List[Dict[str, Any]] = []
     cards = frame.locator(CANDIDATE_CARD_SELECTOR)
     t0 = time.time()
@@ -283,6 +287,67 @@ async def discard_recommend_candidate_action(page: Page, index: int, reason: str
         raise ValueError("未找到不合适原因")
     return False
 
+
+async def apply_filters(frame: Frame, filters: Dict[str, Any]) -> bool:
+    """Apply filters to the recommendation page.
+    
+    This function applies various filter criteria to the recommendation page
+    to narrow down candidate search results.
+    
+    Args:
+        frame: The recommendation page iframe Frame object
+        filters: Dictionary containing filter criteria. If None, uses default filters.
+                 Expected structure:
+    Raises:
+        ValueError: If filter application fails or required elements not found
+    """
+
+    # open the filter panel
+    filter_wrap = frame.locator("div.recommend-filter")
+    filter_panel = filter_wrap.locator("div.filter-panel")
+    panel_down = filter_wrap.locator("div.filter-arrow-down")
+    if await panel_down.count() > 0:
+        await panel_down.click(timeout=1000)
+    if await filter_panel.count() == 0:
+        # open the filter panel
+        await filter_wrap.click(timeout=1000)
+        await asyncio.sleep(0.5)
+        # Wait for panel to appear
+        await filter_panel.wait_for(state="visible", timeout=1000)
+    
+    # apply filters
+    logger.info("开始应用筛选条件: %s", filters)
+    for key, value in filters.items():
+        if key == "只看第一学历":
+            await filter_panel.locator("div.first-degree-wrap").click(timeout=1000)
+            continue
+        # Find the parent "div.filter-wrap" that contains a child "div.name:has-text('{key}')"
+        filter_wrap_item = filter_panel.locator(f"div.filter-wrap:has(div.name:has-text('{key}'))").first
+        if await filter_wrap_item.count() == 0:
+            logger.warning(f"未找到筛选项: {key}")
+            continue
+        if type(value) is str:
+            value = [value]
+        for v in value:
+            try:
+                option = filter_wrap_item.locator(f"div.option:has-text('{v}')")
+                if await option.count() > 0:
+                    await option.click(timeout=1000)
+                else:
+                    logger.warning(f"未找到筛选选项: {key} = {v}")
+            except Exception as e:
+                logger.error(f"点击筛选选项失败 {key} = {v}: {e}")
+    
+    # confirm
+    confirm_btn = filter_panel.locator("div.btn:has-text('确定')")
+    if await confirm_btn.count() > 0:
+        await confirm_btn.click(timeout=1000)
+    else:
+        logger.warning("未找到确定按钮")
+    
+    return True
+    
+
 __all__ = [
     "_prepare_recommendation_page",
     "select_recommend_job_action",
@@ -290,4 +355,5 @@ __all__ = [
     "view_recommend_candidate_resume_action",
     "greet_recommend_candidate_action",
     "discard_recommend_candidate_action",
+    "apply_filters",
 ]

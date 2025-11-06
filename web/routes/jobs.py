@@ -80,6 +80,9 @@ async def create_job(request: Request):
             content={"success": False, "error": f"岗位ID '{job_id}' 已存在"}
         )
     
+    # Extract candidate filters from JSON
+    candidate_filters = json_data.get("candidate_filters")
+    
     # Create new job data
     new_job = {
         "id": job_id,
@@ -93,7 +96,8 @@ async def create_job(request: Request):
             "positive": positive_keywords,
             "negative": negative_keywords
         },
-        "drill_down_questions": drill_down_questions
+        "drill_down_questions": drill_down_questions,
+        "candidate_filters": candidate_filters
     }
     
     # Add extra configuration if provided
@@ -141,6 +145,9 @@ async def update_job(job_id: str, request: Request):
     # Extract drill down questions as string
     drill_down_questions = json_data.get("drill_down_questions", "").strip()
     
+    # Extract candidate filters from JSON
+    candidate_filters = json_data.get("candidate_filters")
+    
     # Validate required fields
     if not new_job_id or not position:
         return JSONResponse(
@@ -178,7 +185,8 @@ async def update_job(job_id: str, request: Request):
             "positive": positive_keywords,
             "negative": negative_keywords
         },
-        "drill_down_questions": drill_down_questions
+        "drill_down_questions": drill_down_questions,
+        "candidate_filters": candidate_filters
     }
     
     # Add extra configuration if provided

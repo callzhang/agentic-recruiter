@@ -25,7 +25,7 @@ Boss直聘自动化机器人 - 基于 Playwright 的智能招聘助手，集成 
          ▼                     ▼                ▼
    ┌──────────┐          ┌─────────┐      ┌─────────┐
    │Playwright│          │ OpenAI  │      │ Zilliz  │
-   │(浏览器控制)│          │(AI分析)  │      │(向量库)  │
+   │(浏览器控制)│          │(AI分析) │      │(向量库)  │
    └──────────┘          └─────────┘      └─────────┘
          │
          ▼
@@ -111,7 +111,7 @@ Zilliz 数据存储
    ↓
 3. GET /chat/resume/online/{chat_id} (提取简历，如需要)
    ↓
-4. POST /chat/generate-message (生成回复)
+4. POST /assistant/generate-message (生成回复)
    ↓
 5. POST /chat/{chat_id}/send_message (发送消息)
    ↓

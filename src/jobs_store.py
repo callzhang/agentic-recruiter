@@ -32,6 +32,9 @@ fields = [
     FieldSchema(name="keywords", dtype=DataType.JSON, nullable=True),
     FieldSchema(name="drill_down_questions", dtype=DataType.VARCHAR, max_length=65000, nullable=True),
     
+    # Candidate search filters (stored as JSON)
+    FieldSchema(name="candidate_filters", dtype=DataType.JSON, nullable=True),
+    
     # Vector field for future semantic search
     FieldSchema(name="job_embedding", dtype=DataType.FLOAT_VECTOR, dim=settings.ZILLIZ_EMBEDDING_DIM),
     
@@ -187,6 +190,7 @@ class JobsStore:
                 "target_profile": job_data.get("target_profile", ""),
                 "keywords": job_data.get("keywords", {"positive": [], "negative": []}),
                 "drill_down_questions": drill_down,
+                "candidate_filters": job_data.get("candidate_filters"),  # Store candidate search filters
                 "job_embedding": [0.0] * settings.ZILLIZ_EMBEDDING_DIM,  # Empty embedding for now
                 "created_at": now,
                 "updated_at": now,
@@ -229,6 +233,7 @@ class JobsStore:
                 "target_profile": job_data.get("target_profile", existing["target_profile"]),
                 "keywords": job_data.get("keywords", existing["keywords"]),
                 "drill_down_questions": str(job_data.get("drill_down_questions", existing["drill_down_questions"]))[:30000],
+                "candidate_filters": job_data.get("candidate_filters", existing.get("candidate_filters")),  # Update candidate filters
                 "job_embedding": [0.0] * settings.ZILLIZ_EMBEDDING_DIM,  # Keep empty for now
                 "created_at": existing["created_at"],  # Keep original creation time
                 "updated_at": now,

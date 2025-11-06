@@ -1,4 +1,5 @@
 # from __future__ import annotations
+import typing_extensions
 import json
 try: import regex as re
 except: import re
@@ -11,9 +12,10 @@ from .config import settings
 from .global_logger import logger
 from .candidate_store import CandidateStore, candidate_store
 from openai import OpenAI
-_openai_client = OpenAI(api_key=settings.OPENAI_API_KEY)
+_openai_client = OpenAI(api_key=settings.OPENAI_API_KEY, base_url=settings.OPENAI_BASE_URL)
 
-
+#------------------------Thread management (deprecated)---------------------------------
+@typing_extensions.deprecated("The Assistants API is deprecated in favor of the Responses API")
 def get_thread_messages(thread_id: str) -> Dict[str, Any]:
     """List all messages in a thread, paginated.
     1.	Fetch the first page (since after is None initially).
@@ -61,7 +63,7 @@ def get_thread_messages(thread_id: str) -> Dict[str, Any]:
         "action": objects.get("action")
     }
 
-
+@typing_extensions.deprecated("The Assistants API is deprecated in favor of the Responses API")
 def get_objects_from_thread_messages(messages: list) -> Dict[str, Any]:
     """Get analysis from thread."""
     objects = {}
@@ -75,27 +77,11 @@ def get_objects_from_thread_messages(messages: list) -> Dict[str, Any]:
                 objects["action"] = json_obj
     return objects
 
+@typing_extensions.deprecated("The Assistants API is deprecated in favor of the Responses API")
 def extract_json_from_message(message: str) -> Dict[str, Any]:
     """Extract JSON from message."""
-    match = extract_json_block(message)
-    if match:
-        try:
-            match = strip_comments(match)
-            data = json5.loads(match)
-        except Exception as e:
-            logger.error("Error parsing JSON from message: %s", e)
-            return {}
-        return data
-    return {}
-
-
-def strip_comments(text: str) -> str:
-    """Remove both # and // style comments."""
-    # Remove single-line // comments
-    text = re.sub(r"//.*", "", text)
-    # Remove Python-style # comments (but not in quotes)
-    text = re.sub(r"(?<!['\"])\s#.*", "", text)
-    return text
+    from robust_json import loads
+    return loads(message)
 
 @njit
 def extract_json_block(text: str) -> str | None:
@@ -116,6 +102,8 @@ def extract_json_block(text: str) -> str | None:
     # If we reached end without full closure, return what we have (partial)
     return text[start:]
 
+
+@typing_extensions.deprecated("The Assistants API is deprecated in favor of the Responses API")
 def _normalise_history(chat_history: List[Dict[str, Any]]) -> List[Dict[str, str]]:
     """Convert chat history to thread message format."""
     role_map = {"candidate": "user", "recruiter": "assistant", "system": "assistant"}
@@ -129,7 +117,7 @@ def _normalise_history(chat_history: List[Dict[str, Any]]) -> List[Dict[str, str
             logger.warning(f"缺少角色或消息内容: [{role}]: {entry}")
     return normalised
 
-
+@typing_extensions.deprecated("The Assistants API is deprecated in favor of the Responses API")
 def _sync_thread_with_history(
     thread_id: str,
     thread_messages: List[Dict[str, str]],
@@ -169,7 +157,7 @@ def _sync_thread_with_history(
 
     return thread_messages
 
-
+@typing_extensions.deprecated("The Assistants API is deprecated in favor of the Responses API")
 def _append_message_to_thread(
     thread_id: str,
     role: str,
@@ -196,7 +184,7 @@ def _append_message_to_thread(
     message = _openai_client.beta.threads.messages.create(thread_id=thread_id, role=role, content=content)
     return bool(message)
     
-
+@typing_extensions.deprecated("The Assistants API is deprecated in favor of the Responses API")
 def _wait_for_run_completion(thread_id: str, run_id: str, timeout: int = 60) -> bool:
     """Wait for AI assistant run to complete with timeout."""
     start = time.time()
@@ -213,7 +201,7 @@ def _wait_for_run_completion(thread_id: str, run_id: str, timeout: int = 60) -> 
     _openai_client.beta.threads.runs.cancel(thread_id=thread_id, run_id=run_id)
     return False
 
-
+@typing_extensions.deprecated("The Assistants API is deprecated in favor of the Responses API")
 def _extract_latest_assistant_message(thread_id: str) -> str:
     """Extract the latest assistant message from thread."""
     response = _openai_client.beta.threads.messages.list(
@@ -233,6 +221,87 @@ def _extract_latest_assistant_message(thread_id: str) -> str:
         return content # only return the latest assistant message
 
 
+# ------------------------Conversation API (replaces Threads API)-----------------------
+
+def get_conversation_messages(conversation_id: str) -> Dict[str, Any]:
+    """Get all messages from an OpenAI conversation using Conversations API.
+    
+    Replaces deprecated get_thread_messages() which used Threads API.
+    
+    Args:
+        conversation_id: OpenAI conversation identifier
+    
+    Returns:
+        dict: Response containing:
+            - messages: List of conversation messages with id, role, and content
+            - has_more: Boolean (always False for conversations API, no pagination)
+            - analysis: Optional analysis dict if found in messages
+            - action: Optional action dict if found in messages
+    
+    Raises:
+        ValueError: If conversation not found or retrieval fails
+    """
+    try:
+        conversation = _openai_client.conversations.retrieve(conversation_id)
+        
+        # Extract messages from conversation.items
+        messages = []
+        analysis = None
+        action = None
+        
+        for item in getattr(conversation, 'items', []):
+            # Handle message items
+            if hasattr(item, 'type') and item.type == 'message':
+                role = getattr(item, 'role', 'unknown')
+                content = getattr(item, 'content', '')
+                item_id = getattr(item, 'id', '')
+                
+                messages.append({
+                    "id": item_id,
+                    "role": role,
+                    "content": content
+                })
+                
+                # Extract analysis/action from assistant messages
+                if role == "assistant" and content:
+                    json_obj = extract_json_from_message(content)
+                    if json_obj.get("skill") or json_obj.get("overall"):
+                        analysis = json_obj
+                    elif json_obj.get("action"):
+                        action = json_obj
+        
+        return {
+            "messages": messages,
+            "has_more": False,  # Conversations API doesn't paginate
+            "analysis": analysis,
+            "action": action
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to get conversation messages: {e}")
+        raise ValueError(f"Conversation not found or retrieval failed: {e}")
+
+
+def get_analysis_from_conversation(conversation_id: str) -> Optional[Dict[str, Any]]:
+    """Get analysis result from conversation messages.
+    
+    Extracts the most recent analysis from conversation messages, typically generated
+    by ANALYZE_ACTION purpose.
+    
+    Args:
+        conversation_id: OpenAI conversation identifier
+    
+    Returns:
+        Optional[dict]: Analysis dictionary if found in conversation, None otherwise
+    """
+    try:
+        result = get_conversation_messages(conversation_id)
+        # Return analysis if found, otherwise None
+        return result.get("analysis")
+    except Exception as e:
+        logger.error(f"Failed to get analysis from conversation: {e}")
+        return None
+
 
 # Embeddings ----------------------------------------------------
 @lru_cache(maxsize=1000)
@@ -246,3 +315,16 @@ def get_embedding(text: str) -> Optional[List[float]]:
         dimensions=settings.ZILLIZ_EMBEDDING_DIM,
     )
     return response.data[0].embedding
+
+
+# ------------------------Candidate management---------------------------------
+def update_candidate_resume(chat_id: str, conversation_id: str, resume_text: str=None, full_resume: str=None) -> bool:
+    """Update candidate resume in store and conversation."""
+    assert resume_text or full_resume, "resume_text or full_resume is required"
+    if not candidate_store.enabled:
+        return False
+    if resume_text:
+        candidate_store.update_candidate(chat_id=chat_id, thread_id=conversation_id, resume_text=resume_text)
+    if full_resume:
+        candidate_store.update_candidate(chat_id=chat_id, thread_id=conversation_id, full_resume=full_resume)
+    return True
