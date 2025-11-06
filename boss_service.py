@@ -368,11 +368,10 @@ class BossServiceAsync:
         # async def verify_api_key(request: Request, call_next):
         #     # Skip authentication for web UI routes and static files
         #     if (request.url.path.startswith("/") and 
-        #         (request.url.path in ["/", "/candidates", "/automation", "/assistants", "/jobs", "/stats", "/recent-activity"] or
+        #         (request.url.path in ["/", "/candidates", "/automation", "/jobs", "/stats", "/recent-activity"] or
         #          request.url.path.startswith("/static/") or
         #          request.url.path.startswith("/candidates/") or
         #          request.url.path.startswith("/automation/") or
-        #          request.url.path.startswith("/assistants/") or
         #          request.url.path.startswith("/jobs/"))):
         #         return await call_next(request)
         #     api_key = request.headers.get("X-API-Key")
@@ -977,11 +976,10 @@ app.mount("/static", StaticFiles(directory="web/static"), name="static")
 templates = Jinja2Templates(directory="web/templates")
 
 # Include web UI routers
-from web.routes import candidates, automation, assistants, jobs
+from web.routes import candidates, automation, jobs
 
 app.include_router(candidates.router, prefix="/candidates", tags=["web-candidates"])
 app.include_router(automation.router, prefix="/automation", tags=["web-automation"])
-app.include_router(assistants.router, prefix="/assistants", tags=["web-assistants"])
 app.include_router(jobs.router, prefix="/jobs", tags=["web-jobs"])
 
 # Web UI root endpoint

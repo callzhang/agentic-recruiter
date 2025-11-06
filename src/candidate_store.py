@@ -254,6 +254,26 @@ class CandidateStore:
             return None
         return results[0]
 
+    def search_candidate_by_name_job(self, name: str, job_applied: str, fields = _all_fields) -> Optional[Dict[str, Any]]:
+        """Search for a candidate by name and job_applied."""
+        if not self.enabled or not self.collection:
+            return None
+        if fields is None:
+            fields = _all_fields
+        
+        # Build query expression for name and job_applied
+        expr = f'name == {json.dumps(name)} && job_applied == {json.dumps(job_applied)}'
+        
+        results: List[Dict[str, Any]] = self.collection.query(
+            expr=expr,
+            output_fields=fields,
+            limit=1,
+        )
+
+        if not results:
+            return None
+        return results[0]
+
     def upsert_candidate(self, **kwargs) -> bool:
         """Insert or update candidate information in the store.
         

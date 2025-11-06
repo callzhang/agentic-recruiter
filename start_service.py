@@ -8,14 +8,10 @@ import sys
 import os
 import time
 import signal
-import re
 import threading
 from typing import Any, Dict, Optional
 import requests
 from src.global_logger import logger
-# Global variable to store tunnel URL
-_tunnel_url: Optional[str] = None
-_tunnel_process: Optional[subprocess.Popen] = None
 
 def install_dependencies():
     """安装依赖"""
@@ -135,88 +131,6 @@ def kill_existing_chrome(user_data: str):
                 print(f"[*] 已清理现有Chrome进程")
     except Exception:
         pass
-
-
-def start_cloudflare_tunnel(port: int) -> Optional[str]:
-    """Start Cloudflare tunnel and return public URL."""
-    global _tunnel_url, _tunnel_process
-    
-    try:
-        # Check if cloudflared is installed
-        result = subprocess.run(
-            ["cloudflared", "--version"],
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
-        if result.returncode != 0:
-            logger.error("[!] cloudflared not found. Install from: https://github.com/cloudflare/cloudflared/releases")
-            logger.info("[*] Skipping tunnel setup. Service will only be accessible locally.")
-            return None
-    except FileNotFoundError:
-        logger.error("[!] cloudflared not found. Install from: https://github.com/cloudflare/cloudflared/releases")
-        logger.info("[*] Skipping tunnel setup. Service will only be accessible locally.")
-        return None
-    except Exception as e:
-        logger.error(f"[!] Error checking cloudflared: {e}")
-        return None
-    
-    logger.info("[*] Starting Cloudflare tunnel...")
-    
-    def read_tunnel_url(process):
-        """Read tunnel URL from cloudflared output."""
-        global _tunnel_url
-        url_pattern = re.compile(r'https://[a-zA-Z0-9-]+\.trycloudflare\.com')
-        
-        # Read from stderr line by line
-        while True:
-            line = process.stderr.readline()
-            if not line:
-                break
-            line_str = line.decode('utf-8') if isinstance(line, bytes) else str(line)
-            match = url_pattern.search(line_str)
-            if match:
-                _tunnel_url = match.group(0)
-                print(f"[+] Cloudflare tunnel URL: {_tunnel_url}")
-                os.environ['BOSS_TUNNEL_URL'] = _tunnel_url
-                break
-    
-    try:
-        _tunnel_process = subprocess.Popen(
-            ["cloudflared", "tunnel", "--url", f"http://127.0.0.1:{port}"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            preexec_fn=os.setsid if sys.platform != "win32" else None
-        )
-        
-        # Start thread to read tunnel URL
-        thread = threading.Thread(target=read_tunnel_url, args=(_tunnel_process,), daemon=True)
-        thread.start()
-        
-        # Wait a bit for URL to be generated
-        time.sleep(1)
-        
-        return _tunnel_url
-    except Exception as e:
-        print(f"[!] Failed to start Cloudflare tunnel: {e}")
-        return None
-
-
-def stop_cloudflare_tunnel():
-    """Stop Cloudflare tunnel."""
-    global _tunnel_process
-    if _tunnel_process:
-        try:
-            if sys.platform == "win32":
-                _tunnel_process.terminate()
-            else:
-                os.killpg(os.getpgid(_tunnel_process.pid), signal.SIGTERM)
-            _tunnel_process.wait(timeout=5)
-            print("[+] Cloudflare tunnel stopped")
-        except Exception as e:
-            print(f"[!] Error stopping tunnel: {e}")
-        finally:
-            _tunnel_process = None
 
 
 def _wait_for_service_ready(base_url: str, timeout: int = 60) -> bool:
@@ -356,14 +270,6 @@ def start_service(*, scheduler_options: Optional[Dict[str, Any]] | None = None):
                 print(f"[!] Chrome启动失败: {e}")
                 return False
 
-        # Start Cloudflare tunnel if enabled
-        enable_tunnel = env.get('ENABLE_CLOUDFLARE_TUNNEL', 'true').lower() == 'true'
-        if enable_tunnel:
-            tunnel_url = start_cloudflare_tunnel(int(port))
-            if tunnel_url:
-                print(f"[*] Public URL: {tunnel_url}")
-                print("[*] Share this URL with your remote LangGraph agent")
-
         # 使用 uvicorn 启动（可开启 --reload；CDP模式下重载不会中断浏览器）
         # 直接使用 Python API 以支持 reload_excludes (uvicorn 0.21.0+)
         print("[+] 服务启动成功!")
@@ -377,40 +283,21 @@ def start_service(*, scheduler_options: Optional[Dict[str, Any]] | None = None):
         def open_browser_after_ready():
             """Open browser after service is ready."""
             if _wait_for_service_ready(service_url, timeout=15):
-                # Wait for tunnel URL if tunnel was enabled (up to 10 more seconds)
-                global _tunnel_url
-                if enable_tunnel and not _tunnel_url:
-                    logger.info("[*] 等待 Cloudflare Tunnel URL 生成...")
-                    for _ in range(10):
-                        time.sleep(1)
-                        if _tunnel_url:
-                            break
-                
-                # Prefer tunnel URL if available, otherwise use local URL
-                url_to_open = _tunnel_url if _tunnel_url else service_url
-                
                 try:
                     if sys.platform == "darwin":
-                        subprocess.Popen(["open", url_to_open])
+                        subprocess.Popen(["open", service_url])
                     elif sys.platform == "win32":
-                        subprocess.Popen(["start", url_to_open], shell=True)
+                        subprocess.Popen(["start", service_url], shell=True)
                     else:
-                        subprocess.Popen(["xdg-open", url_to_open])
+                        subprocess.Popen(["xdg-open", service_url])
                     
-                    if _tunnel_url:
-                        logger.info(f"[+] 已在浏览器中打开远程 URL: {url_to_open}")
-                    else:
-                        logger.info(f"[+] 已在浏览器中打开: {url_to_open}")
+                    logger.info(f"[+] 已在浏览器中打开: {service_url}")
                 except Exception as e:
                     logger.error(f"[!] 无法自动打开浏览器: {e}")
-                    if _tunnel_url:
-                        logger.info(f"[*] 请手动访问远程 URL: {_tunnel_url}")
-                    logger.info(f"[*] 或访问本地 URL: {service_url}")
+                    logger.info(f"[*] 请手动访问本地 URL: {service_url}")
             else:
                 print(f"[!] 服务启动超时")
-                if _tunnel_url:
-                    print(f"[*] 请手动访问远程 URL: {_tunnel_url}")
-                print(f"[*] 或访问本地 URL: {service_url}")
+                print(f"[*] 请手动访问本地 URL: {service_url}")
         
         # Start browser opener in background thread
         browser_thread = threading.Thread(target=open_browser_after_ready, daemon=True)
@@ -454,9 +341,6 @@ def start_service(*, scheduler_options: Optional[Dict[str, Any]] | None = None):
             except Exception:
                 pass
         
-        # Stop tunnel
-        stop_cloudflare_tunnel()
-        
         # 可选：清理Chrome进程（通常保留以便下次使用）
         cleanup_chrome = os.environ.get('CLEANUP_CHROME_ON_EXIT', 'false').lower() == 'true'
         # if cleanup_chrome:
@@ -472,7 +356,6 @@ def start_service(*, scheduler_options: Optional[Dict[str, Any]] | None = None):
                 requests.post(f"{base_url}/automation/scheduler/stop", timeout=10)
             except Exception:
                 pass
-        stop_cloudflare_tunnel()
         print("[+] 服务已停止")
     except Exception as e:
         print(f"[!] 启动服务失败: {e}")
@@ -481,7 +364,6 @@ def start_service(*, scheduler_options: Optional[Dict[str, Any]] | None = None):
                 requests.post(f"{base_url}/automation/scheduler/stop", timeout=10)
             except Exception:
                 pass
-        stop_cloudflare_tunnel()
         return False
     
     return True

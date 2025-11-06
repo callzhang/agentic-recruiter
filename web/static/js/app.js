@@ -185,15 +185,42 @@ function candidateTabs() {
                         return;
                     }
                     
-                    // Success: append candidate cards
-                    candidateList.insertAdjacentHTML('beforeend', html);
+                    // Success: deduplicate and update/append candidate cards
+                    // Parse the incoming HTML to extract candidate cards
+                    const tempDiv = document.createElement('div');
+                    tempDiv.innerHTML = html;
+                    const newCards = tempDiv.querySelectorAll('.candidate-card');
+                    
+                    let updatedCount = 0;
+                    let appendedCount = 0;
+                    
+                    newCards.forEach(newCard => {
+                        const candidateId = newCard.getAttribute('data-candidate-id');
+                        if (!candidateId) {
+                            // Skip cards without ID
+                            return;
+                        }
+                        
+                        // Check if candidate already exists
+                        const existingCard = candidateList.querySelector(`[data-candidate-id="${candidateId}"]`);
+                        
+                        if (existingCard) {
+                            // Update existing card with new content
+                            existingCard.outerHTML = newCard.outerHTML;
+                            updatedCount++;
+                        } else {
+                            // Append new card
+                            candidateList.appendChild(newCard);
+                            appendedCount++;
+                        }
+                    });
                     
                     // Tell HTMX to process the new content
                     htmx.process(candidateList);
                     
                     this.loading = false;
                     
-                    // Count how many candidates were actually loaded
+                    // Count how many candidates are in the list now
                     const candidateCards = document.querySelectorAll('#candidate-list .candidate-card');
                     const count = candidateCards.length;
                     
@@ -216,7 +243,16 @@ function candidateTabs() {
                         if (emptyMsg) {
                             emptyMsg.remove();
                         }
-                        showToast(`加载完成，共 ${count} 个候选人`, 'success');
+                        
+                        // Show toast with update/append info
+                        let toastMsg = `加载完成，共 ${count} 个候选人`;
+                        if (updatedCount > 0 || appendedCount > 0) {
+                            const parts = [];
+                            if (updatedCount > 0) parts.push(`更新 ${updatedCount} 个`);
+                            if (appendedCount > 0) parts.push(`新增 ${appendedCount} 个`);
+                            toastMsg += ` (${parts.join(', ')})`;
+                        }
+                        showToast(toastMsg, 'success');
                     }
                 })
                 .catch((err) => {

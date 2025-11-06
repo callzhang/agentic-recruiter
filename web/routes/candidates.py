@@ -209,92 +209,121 @@ async def get_candidate_detail(
     stage: str = Query(None, description="Candidate stage"),
     viewed: bool = Query(None, description="Viewed status (recommend only)"),
     greeted: bool = Query(None, description="Greeted status (recommend only)"),
-    assistant_id: str = Query(..., description="Selected assistant ID"),
     job_id: str = Query(..., description="Selected job ID"),
 ):
     """Get candidate detail view."""
-    # For recommend candidates, use data passed from the card (no Zilliz lookup)
-    if mode == "recommend":
-        if index is None:
-            return HTMLResponse(
-                content='<div class="text-red-500 p-4">推荐候选人必须提供索引(index)参数</div>',
-                status_code=400
-            )
-        if type(index) != int:
-            raise ValueError("index must be an integer")
-        candidate_data = {
-            "chat_id": None,  # Recommend candidates don't have chat_id yet
-            "index": index,
-            "name": name or "推荐候选人",
-            "job_title": job_title,
-            "job_applied": job_title,
-            "text": text,
-            "mode": mode,
-            "viewed": viewed,
-            "greeted": greeted,
-            "stage": stage
-        }
-    elif mode == "greet":
-        # Greet mode candidates have chat_id from chat dialogs
-        candidate_data = {
-            "chat_id": chat_id,  # Greet candidates have chat_id
-            "name": name or "新招呼候选人",
-            "job_title": job_title,
-            "job_applied": job_title,
-            "text": text,
-            "mode": mode,
-            "stage": stage
-        }
-    else:
-        # For chat/followup mode: search by chat_id first, then similarity search fallback
-        candidate_data = None
-        
-        # First try: Search by chat_id
-        if chat_id:
-            ok, candidate_data = await call_api("GET", f"/store/candidate/{chat_id}")
-            if ok and candidate_data:
-                logger.info("Found candidate from zilliz cloud by chat_id: %s", candidate_data['name'])
-                candidate_data["mode"] = mode
-                candidate_data["description"] = candidate_data.get("last_message") or text
-        
-        # If not found, try similarity search
-        # if not candidate_data and chat_id:
-        #     # Fetch online resume to do similarity search
-        #     ok, resume_data = await call_api("GET", f"/chat/resume/online/{chat_id}")
-        #     if ok and resume_data:
-        #         resume_text = resume_data.get("text", "")
-        #         if resume_text:
-        #             # Search by similarity
-        #             similar_candidate = await search_candidate_by_similarity(resume_text)
-        #             if similar_candidate:
-        #                 # Found similar candidate, use it but keep the new chat_id
-        #                 candidate_data = dict(similar_candidate)
-        #                 candidate_data["chat_id"] = chat_id  # Update with current chat_id
-        #                 candidate_data["mode"] = mode
-        #                 candidate_data["description"] = candidate_data.get("last_message") or text
-        
-        # If still not found, use data passed from the card
-        if not candidate_data:
+    candidate_data = None
+    
+    # Step 1: Search by name and job_applied first (for all modes)
+    if candidate_store.enabled and name and job_title:
+        candidate_data = candidate_store.search_candidate_by_name_job(
+            name=name,
+            job_applied=job_title
+        )
+        if candidate_data:
+            logger.info("Found existing candidate by name and job: %s - %s (mode: %s)", name, job_title, mode)
+            # Update with mode-specific data
+            candidate_data["mode"] = mode
+            candidate_data["description"] = candidate_data.get("last_message") or text or candidate_data.get("description")
+    
+    # Step 2: If not found by name/job, fall back to mode-specific lookup
+    if not candidate_data:
+        if mode == "recommend":
+            # Validate index for recommend mode
+            if index is None:
+                return HTMLResponse(
+                    content='<div class="text-red-500 p-4">推荐候选人必须提供索引(index)参数</div>',
+                    status_code=400
+                )
+            if type(index) != int:
+                raise ValueError("index must be an integer")
+            
+            # Create new candidate data for recommend mode
             candidate_data = {
+                "chat_id": None,  # Recommend candidates don't have chat_id yet
+                "index": index,
                 "name": name,
                 "job_title": job_title,
                 "job_applied": job_title,
                 "text": text,
-                "stage": stage,
-                "chat_id": chat_id, 
                 "mode": mode,
-                "description": text,
                 "viewed": viewed,
                 "greeted": greeted,
+                "stage": stage
             }
+        elif mode == "greet":
+            # Greet mode: try chat_id lookup first
+            if chat_id and candidate_store.enabled:
+                candidate_data = candidate_store.get_candidate_by_id(chat_id=chat_id)
+                if candidate_data:
+                    logger.info("Found greet candidate from zilliz cloud by chat_id: %s", candidate_data.get('name'))
+                    candidate_data["mode"] = mode
+                    candidate_data["description"] = candidate_data.get("last_message") or text
+            
+            # If still not found, use data passed from the card
+            if not candidate_data:
+                candidate_data = {
+                    "chat_id": chat_id,  # Greet candidates have chat_id
+                    "name": name or "新招呼候选人",
+                    "job_title": job_title,
+                    "job_applied": job_title,
+                    "text": text,
+                    "mode": mode,
+                    "stage": stage
+                }
+        else:
+            # For chat/followup mode: try chat_id lookup first
+            if chat_id and candidate_store.enabled:
+                candidate_data = candidate_store.get_candidate_by_id(chat_id=chat_id)
+                if candidate_data:
+                    logger.info("Found candidate from zilliz cloud by chat_id: %s", candidate_data.get('name'))
+                    candidate_data["mode"] = mode
+                    candidate_data["description"] = candidate_data.get("last_message") or text
+            
+            # If still not found, use data passed from the card
+            if not candidate_data:
+                candidate_data = {
+                    "name": name,
+                    "job_title": job_title,
+                    "job_applied": job_title,
+                    "text": text,
+                    "stage": stage,
+                    "chat_id": chat_id, 
+                    "mode": mode,
+                    "description": text,
+                    "viewed": viewed,
+                    "greeted": greeted,
+                }
+    else:
+        # If found by name/job, update with mode-specific fields
+        if mode == "recommend" and index is not None:
+            candidate_data["index"] = index
+            candidate_data["viewed"] = viewed
+            candidate_data["greeted"] = greeted
+        if text:
+            candidate_data["text"] = text
+            if not candidate_data.get("description"):
+                candidate_data["description"] = text
+    
+    # Extract generated_message from last_message if available
+    generated_message = None
+    if candidate_data.get("last_message"):
+        generated_message = candidate_data.get("last_message")
+    
+    # Default threshold values (no longer fetched from assistant metadata)
+    threshold_chat = 5.0
+    threshold_borderline = 7.0
+    threshold_seek = 9.0
     
     return templates.TemplateResponse("partials/candidate_detail.html", {
         "request": request,
         "candidate": candidate_data,
-        "assistant_id": assistant_id,
         "job_id": job_id,
         "job_title": job_title,  # Use job_title from selector, not from candidate data
-        "generated_message": None
+        "generated_message": generated_message,
+        "threshold_chat": threshold_chat,
+        "threshold_borderline": threshold_borderline,
+        "threshold_seek": threshold_seek
     })
 
 
@@ -391,7 +420,6 @@ async def analyze_candidate(
     mode: str = Form(...),
     chat_id: Optional[str] = Form(None),
     conversation_id: str = Form(...),
-    assistant_id: str = Form(...),
     job_id: str = Form(...),
     resume_text: Optional[str] = Form(None),
     name: Optional[str] = Form(None),
@@ -428,30 +456,16 @@ async def analyze_candidate(
             analysis_data = analysis_result
         
         overall_score = analysis_data.get("overall", 0)
-        threshold_borderline = 7.0  # Default threshold for greet
-        threshold_seek = 9.0  # Default threshold for request full resume
         
-        # Determine action flags based on thresholds
-        should_generate_greet = overall_score >= threshold_borderline
-        should_request_resume = overall_score >= threshold_seek
-        
-        # Add action flags to analysis data
-        analysis_data["action_flags"] = {
-            "should_generate_greet": should_generate_greet,
-            "should_request_resume": should_request_resume,
-            "threshold_borderline": threshold_borderline,
-            "threshold_seek": threshold_seek
-        }
+        # Add empty action_flags (thresholds and flags are computed in frontend)
+        # This keeps the structure for backward compatibility
+        analysis_data["action_flags"] = {}
         
     except (json.JSONDecodeError, KeyError, TypeError):
         # If parsing fails, set safe defaults
         analysis_data = analysis_result if isinstance(analysis_result, dict) else {"summary": str(analysis_result)}
-        analysis_data["action_flags"] = {
-            "should_generate_greet": False,
-            "should_request_resume": False,
-            "threshold_borderline": 7.0,
-            "threshold_seek": 9.0
-        }
+        # Add empty action_flags (thresholds and flags are computed in frontend)
+        analysis_data["action_flags"] = {}
     
     # Try to get existing candidate_id if candidate already exists
     candidate_id = None
@@ -468,7 +482,6 @@ async def analyze_candidate(
         "thread_id": conversation_id,  # Store conversation_id in thread_id field for template compatibility
         "conversation_id": conversation_id,
         "candidate_id": candidate_id,  # Include candidate_id if available
-        "assistant_id": assistant_id,
         "job_id": job_id,
         "resume_text": resume_text,
         "name": name
@@ -476,7 +489,6 @@ async def analyze_candidate(
     return templates.TemplateResponse("partials/analysis_result.html", {
         "request": request,
         "candidate": candidate_data,
-        "assistant_id": assistant_id
     })
 
 
@@ -487,7 +499,6 @@ async def save_candidate_to_cloud(
     chat_id: Optional[str] = Form(None),
     name: str = Form(...),
     job_id: str = Form(...),
-    assistant_id: str = Form(...),
     resume_text: str = Form(...),
     analysis: str = Form(...),
 ):
@@ -546,8 +557,8 @@ async def generate_message(
     mode: str = Form(...),
     chat_id: str = Form(None),
     conversation_id: str = Form(None),
-    assistant_id: str = Form(...),
     job_id: str = Form(...),
+    purpose: str = Form(...),
 ):
     """Generate message for candidate."""
     
@@ -566,7 +577,9 @@ async def generate_message(
     else:
         ok, history = await call_api("GET", f"/chat/{chat_id}/messages")
         if not ok:
-            history = []
+            return HTMLResponse(
+                content=f'<div class="text-red-500 p-4">获取聊天记录失败，请重试。</div>'
+            )
     
     # Fetch job_info from jobs_store
     job_info = get_job_by_id(job_id)
@@ -577,13 +590,27 @@ async def generate_message(
     ok, message = await call_api("POST", "/assistant/generate-message", json={
         "conversation_id": conversation_id,
         "input_message": input_message,
-        "purpose": "CHAT_ACTION"
+        "purpose": purpose
     })
     
     if not ok:
         return HTMLResponse(
             content=f'<div class="text-red-500 p-4">生成消息失败: {message}</div>'
         )
+    
+    # Save generated message to last_message in candidate store
+    if candidate_store.enabled and conversation_id:
+        try:
+            # Get existing candidate to update
+            existing_candidate = candidate_store.get_candidate_by_id(thread_id=conversation_id)
+            if existing_candidate:
+                # Update last_message field
+                candidate_store.update_candidate(
+                    candidate_id=existing_candidate.get("candidate_id"),
+                    last_message=message
+                )
+        except Exception as e:
+            logger.warning(f"Failed to save generated message to candidate store: {e}")
     
     # Return textarea with generated message and send button
     html = f'''
@@ -618,7 +645,7 @@ async def generate_message(
 async def send_message(
     mode: str = Form(...),
     chat_id: Optional[str] = Form(None),
-    index: Optional[int] = Form(None),
+    index: Optional[str] = Form(None),
     message: str = Form(...),
 ):
     """Send message to candidate."""
@@ -630,9 +657,21 @@ async def send_message(
         )
     
     # Handle different modes
-    if mode == "recommend" and index is not None:
+    # Parse index if provided
+    index_int = None
+    if index and index.strip():
+        try:
+            index_int = int(index)
+        except (ValueError, TypeError):
+            return HTMLResponse(
+                content='',
+                status_code=400,
+                headers={"HX-Trigger": '{"showToast": {"message": "无效的候选人索引", "type": "error"}}'}
+            )
+    
+    if mode == "recommend" and index_int is not None:
         # For recommend candidates, use greet endpoint
-        ok, result = await call_api("POST", f"/recommend/candidate/{index}/greet", json={"message": message})
+        ok, result = await call_api("POST", f"/recommend/candidate/{index_int}/greet", json={"message": message})
     elif chat_id:
         # For chat candidates, use send endpoint
         ok, result = await call_api("POST", f"/chat/{chat_id}/send_message", json={"message": message})
@@ -704,8 +743,6 @@ async def fetch_recommend_resume(
     index: str = Form(...),
 ):
     """Fetch resume for recommend candidate and return textarea."""
-    assert mode == "recommend", "mode must be recommend"
-    index = int(index)
     # Only valid for recommend mode
     if mode != "recommend":
         return HTMLResponse(
@@ -714,14 +751,22 @@ async def fetch_recommend_resume(
         )
     
     # Parse index - handle empty string or None
-    if not index:
+    if not index or index.strip() == "":
         return HTMLResponse(
-            content='<div class="text-red-500 p-4">缺少候选人索引(index)</div>',
+            content='<div class="text-red-500 p-4">缺少候选人索引(index)。必须是有效的整数。</div>',
+            status_code=400
+        )
+    
+    try:
+        index_int = int(index)
+    except (ValueError, TypeError):
+        return HTMLResponse(
+            content=f'<div class="text-red-500 p-4">候选人索引格式错误: {index}。必须是有效的整数。</div>',
             status_code=400
         )
     
     # get resume
-    ok, resume_data = await call_api("GET", f"/recommend/candidate/{index}/resume")
+    ok, resume_data = await call_api("GET", f"/recommend/candidate/{index_int}/resume")
     
     if not ok:
         return HTMLResponse(
@@ -758,12 +803,11 @@ async def fetch_full_resume(
     request: Request,
     chat_id: str = Form(...),
     mode: str = Form("chat"),
-    assistant_id: str = Form(""),
     job_id: str = Form(""),
 ):
     """Explicitly fetch full/offline resume (not online resume)."""
-    # Only for chat mode, not recommend
-    if mode != "chat":
+    # Only for chat/greet/followup modes, not recommend
+    if mode not in ["chat", "greet", "followup"]:
         return HTMLResponse(
             content='<div class="text-red-500 p-4">推荐候选人不支持离线简历</div>',
             status_code=400
@@ -791,12 +835,19 @@ async def fetch_full_resume(
         "mode": mode
     })
 
+    # Default threshold values (no longer fetched from assistant metadata)
+    threshold_chat = 5.0
+    threshold_borderline = 7.0
+    threshold_seek = 9.0
+
     return templates.TemplateResponse("partials/candidate_detail.html", {
         "request": request,
         "candidate": candidate_data,
-        "assistant_id": assistant_id,
         "job_id": job_id,
-        "generated_message": None
+        "generated_message": None,
+        "threshold_chat": threshold_chat,
+        "threshold_borderline": threshold_borderline,
+        "threshold_seek": threshold_seek
     })
 
 

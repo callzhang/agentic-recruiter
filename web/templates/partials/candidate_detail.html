@@ -58,7 +58,9 @@
         <div class="p-4 border-b bg-gray-50">
             <h3 class="font-bold text-gray-800">📊 AI 分析结果</h3>
         </div>
-        <div id="analysis-content" class="p-4">
+        <div id="analysis-content" 
+             class="p-4"
+             hx-on::after-swap="handleAnalysisComplete()">
             {% if candidate.analysis %}
                 {% include 'partials/analysis_result.html' %}
             {% else %}
@@ -136,6 +138,7 @@
                     hx-include="#candidate-context"
                     hx-target="#message-content"
                     hx-swap="innerHTML"
+                    hx-vals='{"purpose": "CHAT_ACTION"}'
                     class="px-3 py-1 bg-indigo-600 text-white text-sm rounded hover:bg-indigo-700">
                 🔄 重新生成消息
             </button>
@@ -146,30 +149,207 @@
 
 <!-- Mode-specific record check logic -->
 <script>
+// ============================================================================
+// Centralized Candidate Analysis & Workflow Logic
+// ============================================================================
 
-/* ============================================================================
-load the candidate detail page
-|- check model == 'recommend'
-    |- (yes)  fetch resume first, then check -> div.resume-content will be filled with resume text
-        |- when resume is fetched, html:after-swap will be triggered, and handleResumeLoaded will be called
-        
-    |- (no)   check by chat_id first, before fetching resume -> div.resume-content will be empty
-    |
-============================================================================ */
-// // Mode-specific record check logic
-// (function() {
-//     const mode = document.querySelector('input[name="mode"]')?.value;
-//     const chatId = document.querySelector('input[name="chat_id"]')?.value;
+// Get threshold values from UI inputs in candidates.html (same document, loaded via HTMX)
+function getThresholdValues() {
+    const chatInput = document.getElementById('threshold-chat');
+    const borderlineInput = document.getElementById('threshold-borderline');
+    const seekInput = document.getElementById('threshold-seek');
+
+    return {
+        chat: chatInput ? (parseFloat(chatInput.value) || 5.0) : 5.0,
+        borderline: borderlineInput ? (parseFloat(borderlineInput.value) || 7.0) : 7.0,
+        seek: seekInput ? (parseFloat(seekInput.value) || 9.0) : 9.0
+    };
+}
+// Handle resume loaded event using HTMX's hx-on::after-swap
+// when resume is loaded, we need to initialize a new chat thread
+// Then start analysis
+function handleResumeLoaded() {
+
+    const textarea = document.querySelector('#resume-content textarea');
+
+    if (!textarea || !textarea.value) {
+        return;
+    }
+    resumeText = textarea.value;
+    const mode = document.querySelector('input[name="mode"]')?.value;
+    const chatId = document.querySelector('input[name="chat_id"]')?.value;
+    const name = document.querySelector('input[name="name"]')?.value;
+    const jobId = document.querySelector('input[name="job_id"]')?.value;
+
+    initializeNewChat(mode, chatId, jobId, name, resumeText).then((conversation_id) => {
+        updateFormData({'conversation_id': conversation_id});
+        showToast('简历加载完成，正在分析简历...', 'success');
+        startAnalysis();
+    }).catch(err => {
+        console.error('Failed to analyze resume:', err);
+        showToast('初始化对话失败', 'error');
+        throw new Error('Failed to analyze resume');
+    });
+}
+
+
+// Handle analysis completion after HTMX swap
+// This function is called via hx-on::after-swap on #analysis-content element
+function handleAnalysisComplete() {
+    const analysisDiv = document.querySelector('#analysis-content #analysis-result-container');
+    if (!analysisDiv) return;
     
-//     if (mode === 'recommend') {
-//         // For recommend: must fetch resume first, then check
-//         // Resume fetch is auto-triggered by hx-trigger="load"
-//         // After fetch, htmx:afterSwap will handle the check
-//     } else if (mode === 'greet' || mode === 'reply' || mode === 'followup') {
-//         // For chat mode(greet, reply, followup): check by chat_id first, before fetching resume
-//         checkExistingCandidateRecord(chatId); //TODO: we can reuse exisiting record
-//     }
-// })();
+    try {
+        const analysis = JSON.parse(analysisDiv.getAttribute('data-analysis') || '{}');
+        const mode = analysisDiv.getAttribute('data-mode');
+        const conversationId = analysisDiv.getAttribute('data-conversation-id');
+        const chatId = analysisDiv.getAttribute('data-chat-id');
+        const name = analysisDiv.getAttribute('data-name');
+        const jobId = analysisDiv.getAttribute('data-job-id');
+        const assistantId = analysisDiv.getAttribute('data-assistant-id');
+        
+        // Get resume text from textarea if available, otherwise from data attribute
+        let resumeText = '';
+        const resumeTextarea = document.querySelector('#resume-section textarea');
+        if (resumeTextarea) {
+            resumeText = resumeTextarea.value || '';
+        }
+        if (!resumeText) {
+            resumeText = analysisDiv.getAttribute('data-resume-text') || '';
+        }
+        
+        // Get thresholds from UI inputs
+        const { chat, borderline, seek } = getThresholdValues();
+        
+        // Compute flags based on overall score and thresholds
+        const overallScore = analysis.overall || 0;
+        const shouldGenerateGreet = overallScore >= borderline;
+        const shouldRequestResume = overallScore >= seek;
+        const shouldGenerateChat = overallScore >= chat;
+        
+        // For recommend/greet mode, handle sequential actions
+        if (shouldGenerateChat) {
+            showToast(`评分 ${overallScore} >= ${chat}，生成招呼消息...`, 'success');
+            generateMessage(mode, conversationId, assistantId, jobId, chatId, name, resumeText, analysis);
+            requestFullResume(mode, chatId, jobId);
+        } else {
+            showToast(`评分 ${overallScore} < ${chat}，不推荐`, 'warning');
+            return;
+        }
+        
+        saveCandidateToCloud(mode, conversationId, chatId, name, jobId, resumeText, analysis);
+        
+    } catch (e) {
+        console.error('Error handling analysis complete:', e);
+    }
+}
+
+function generateMessage(mode, conversationId, assistantId, jobId, chatId, name, resumeText, analysis) {
+    const formData = new FormData();
+    formData.append('mode', mode);
+    formData.append('conversation_id', conversationId);
+    formData.append('job_id', jobId);
+    formData.append('purpose', 'CHAT_ACTION');
+    if (chatId) formData.append('chat_id', chatId);
+    
+    // Set up one-time event listener for message generation completion
+    const messageTarget = document.getElementById('message-content');
+    const handler = function() {
+        // After message is generated, save to cloud
+        setTimeout(() => {
+            saveCandidateToCloud(mode, conversationId, chatId, name, jobId, resumeText, analysis);
+        }, 500);
+        messageTarget.removeEventListener('htmx:afterSwap', handler);
+    };
+    
+    if (messageTarget) {
+        messageTarget.addEventListener('htmx:afterSwap', handler, { once: true });
+    }
+    
+    htmx.ajax('POST', '/candidates/generate-message', {
+        target: '#message-content',
+        swap: 'innerHTML',
+        values: Object.fromEntries(formData)
+    });
+}
+
+function requestFullResume(mode, chatId, jobId) {
+    if (!chatId) {
+        console.error('Cannot request full resume: chat_id is missing');
+        showToast('无法请求完整简历：缺少 chat_id', 'error');
+        return;
+    }
+
+    if (mode !== 'chat' && mode !== 'greet' && mode !== 'followup') {
+        console.error('Mode must be chat, greet, or followup');
+        return;
+    }
+    
+    // Call the browser action endpoint to request full resume from candidate
+    fetch('/chat/resume/request_full', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ chat_id: chatId })
+    })
+    .then(response => {
+        if (!response.ok) {
+            return response.json().then(err => {
+                throw new Error(err.detail || `HTTP ${response.status}: ${response.statusText}`);
+            });
+        }
+        return response.json();
+    })
+    .then(data => {
+        if (data === true || data === 'true') {
+            showToast('✅ 已成功请求完整简历', 'success');
+        } else {
+            showToast('请求完整简历失败', 'error');
+        }
+    })
+    .catch(error => {
+        console.error('Error requesting full resume:', error);
+        showToast('请求完整简历时出错: ' + error.message, 'error');
+    });
+}
+
+function saveCandidateToCloud(mode, conversationId, chatId, name, jobId, resumeText, analysis) {
+    const formData = new FormData();
+    formData.append('mode', mode);
+    formData.append('conversation_id', conversationId);
+    formData.append('name', name);
+    formData.append('job_id', jobId);
+    formData.append('resume_text', resumeText);
+    formData.append('analysis', JSON.stringify(analysis));
+    // Use the latest message content as last_message for saving
+    const messageElement = document.getElementById('message-content');
+    if (messageElement) {
+        formData.append('last_message', messageElement.innerText || messageElement.textContent || '');
+    }
+    if (chatId) formData.append('chat_id', chatId);
+    
+    fetch('/candidates/save-to-cloud', {
+        method: 'POST',
+        body: formData
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            showToast('✅ 候选人已保存到云端', 'success');
+        } else {
+            showToast('保存失败: ' + (data.error || '未知错误'), 'error');
+        }
+    })
+    .catch(err => {
+        console.error('Failed to save candidate:', err);
+        showToast('保存失败', 'error');
+    });
+}
+
+// ============================================================================
+// Candidate Detail Helper Functions
+// ============================================================================
 
 function updateFormData(record) {
     dataElement = document.getElementById('candidate-context');
@@ -189,267 +369,10 @@ function updateFormData(record) {
     }
 }
 
-/**
- * Check for existing chat candidate (chat mode)
- */
-function checkExistingCandidateRecord(chatId) {
-    if (!chatId) {
-        console.warn('No chat_id provided for checkChatCandidate');
-        return;
-    }
-
-    showToast('检查已有记录...', 'info');
-
-    fetch('/store/candidate/' + chatId, {
-        method: 'GET'
-    })
-        .then(response => response.json())
-        .then(existingRecord => {
-            if (existingRecord) {
-                const conversationId = existingRecord.conversation_id || existingRecord.thread_id;
-                if (!conversationId) {
-                    // ❌ NOT FOUND: Initialize new chat
-                    console.log('❌ No similar record, initializing new chat...' + existingRecord);
-                    showToast('no conversation_id for fetched candidate: ' + existingRecord, 'error');
-                    throw new Error('no conversation_id for fetched candidate: ' + existingRecord);
-                }
-                // ✅ FOUND: Reuse everything, skip resume fetch
-                console.log('✅ Found existing chat candidate, reusing conversation:', conversationId);
-                reuseExistingRecord(existingRecord);
-            } else {
-                // ❌ NOT FOUND: Proceed with resume fetch
-                console.log('❌ No existing chat candidate found, fetching resume...');
-                triggerResumeFetch();
-            }
-        })
-        .catch(err => {
-            console.error('Error checking chat candidate:', err);
-            triggerResumeFetch();
-        });
-}
-
-// Handle resume loaded event using HTMX's hx-on::after-swap
-// when resume is loaded, we need to initialize a new chat thread
-// Then start analysis
-function handleResumeLoaded() {
-
-    const textarea = document.querySelector('#resume-content textarea');
-
-    if (!textarea || !textarea.value) {
-        return;
-    }
-    resumeText = textarea.value;
-    const mode = document.querySelector('input[name="mode"]')?.value;
-    const chatId = document.querySelector('input[name="chat_id"]')?.value;
-    const name = document.querySelector('input[name="name"]')?.value;
-    const jobId = document.querySelector('input[name="job_id"]')?.value;
-    
-    initializeNewChat(mode, chatId, jobId, name, resumeText).then((conversation_id) => {
-        updateFormData({'conversation_id': conversation_id});
-        showToast('简历加载完成，正在分析简历...', 'success');
-        startAnalysis();
-    }).catch(err => {
-        console.error('Failed to analyze resume:', err);
-        showToast('初始化对话失败', 'error');
-        throw new Error('Failed to analyze resume');
-    });
-}
 
 
-// ============================================================================
-// Candidate-Specific Functions 
-// ============================================================================
-
-/**
- * Reuse existing candidate record (conversation_id, resume, analysis, history)
- */
-function reuseExistingRecord(existingRecord) {
-    console.log('Reusing existing record:', existingRecord);
-    
-    // 1. Store conversation_id (always available)
-    updateFormData(existingRecord)
-
-    // 2. Display saved resume (for chat mode only)
-    const mode = document.querySelector('input[name="mode"]')?.value;
-    if(mode == 'chat') {
-        if (existingRecord.online_resume) {
-                displayResume(existingRecord.online_resume, '✅ 使用已保存的简历');
-        }
-    }
-    // Note: For recommend mode, resume was already fetched
-    
-    // 3. Load all thread data in one call (messages, analysis, action)
-    const conversationId = existingRecord.conversation_id || existingRecord.thread_id;
-    loadThreadData(conversationId);
-}
-
-/**
- * Display resume in the resume section
- */
-function displayResume(resumeText, statusMessage = '') {
-    const resumeContent = document.getElementById('resume-content');
-    if (resumeContent) {
-        resumeContent.innerHTML = `
-            <textarea readonly class="w-full h-64 p-3 border rounded bg-gray-50 text-sm">${resumeText}</textarea>
-            ${statusMessage ? `<div class="mt-2 text-sm text-gray-500">${statusMessage}</div>` : ''}
-        `;
-    }
-}
-
-/**
- * Load thread data (messages, analysis, action) in one call
- */
-function loadThreadData(conversationId) {
-    showToast('正在加载对话数据...', 'info');
-    
-    fetch(`/assistant/${conversationId}/messages`)
-        .then(response => response.json())
-        .then(data => {
-            console.log('Thread data loaded:', data);
-            
-            // 1. Display messages if available
-            if (data.messages && data.messages.length > 0) {
-                displayThreadHistory(data.messages);
-                // show last message as the generated message
-                const lastMessage = data.messages[data.messages.length - 1];
-                const role = lastMessage.role;
-                const generatedMessage = lastMessage.content;
-                if (role === 'assistant') {
-                    console.log('last message is assistant:', lastMessage);
-                    updateFormData({ 'generated_message': generatedMessage });
-                    // show the generated message into div.message-content
-                    const messageContent = document.getElementById('message-content');
-                    if (messageContent) {
-                        messageContent.innerHTML = `
-                            <div class="space-y-4">
-                                <textarea id="message-text" name="message" class="w-full h-32 p-4 border rounded-lg">${generatedMessage}</textarea>
-                            </div>
-                        `;
-                    }
-                }
-            }
-            
-            // 2. Display analysis if available
-            if (data.analysis) {
-                console.log('Extracted analysis from thread:', data.analysis);
-                displayAnalysis(data.analysis);
-            } else {
-                console.warn('No analysis found in thread, triggering new analysis...', data.analysis);
-                showToast('提取分析失败，正在重新分析...', 'warning');
-                startAnalysis();
-            }
-            
-            // 3. Handle action if available
-            if (data.action) {
-                console.log('Action found in thread:', data.action);
-                // Handle action as needed
-            }
-        })
-        .catch(err => {
-            console.error('Failed to load thread data:', err);
-            showToast('加载对话数据失败', 'error');
-        })
-}
-
-/**
- * Display thread history from messages array
- */
-function displayThreadHistory(messages) {
-    // Convert messages to HTML and display
-    const messageSection = document.getElementById('message-section');
-    if (messageSection) {
-        // Remove old history if exists
-        const oldHistory = document.getElementById('thread-history-section');
-        if (oldHistory) oldHistory.remove();
-        
-        // Create thread history HTML
-        const historyHtml = createThreadHistoryHtml(messages);
-        messageSection.insertAdjacentHTML('afterend', historyHtml);
-    }
-}
-
-/**
- * Create HTML for thread history from messages
- */
-function createThreadHistoryHtml(messages) {
-    let html = `
-    <div id="thread-history-section" class="mt-6 p-4 bg-gray-50 rounded-lg">
-        <h3 class="text-lg font-semibold mb-3">对话历史</h3>
-        <div class="space-y-3">
-    `;
-    
-    messages.forEach(message => {
-        const roleClass = message.role === 'assistant' ? 'bg-blue-100' : 'bg-gray-100';
-        html += `
-            <div class="p-3 rounded ${roleClass}">
-                <div class="font-medium text-sm mb-1" style="height: 100px;">${message.role === 'assistant' ? '招聘顾问' : '候选人'}</div>
-                <div class="text-sm">${message.content}</div>
-            </div>
-        `;
-    });
-    
-    html += `
-        </div>
-    </div>
-    `;
-    
-    return html;
-}
 
 
-/**
- * Render and display analysis
- */
-function displayAnalysis(analysis) {
-    // Build analysis HTML manually
-    const analysisContent = document.getElementById('analysis-content');
-    if (!analysisContent) return;
-    
-    const borderline = 7;
-    
-    const analysisHtml = `
-        <div class="space-y-4">
-            <div class="grid grid-cols-4 gap-4">
-                <div class="bg-blue-50 p-4 rounded-lg">
-                    <div class="text-sm text-blue-600 font-medium">能力匹配度</div>
-                    <div class="text-2xl font-bold text-blue-700">${analysis.skill}</div>
-                </div>
-                <div class="bg-green-50 p-4 rounded-lg">
-                    <div class="text-sm text-green-600 font-medium">创业匹配度</div>
-                    <div class="text-2xl font-bold text-green-700">${analysis.startup_fit}</div>
-                </div>
-                <div class="bg-purple-50 p-4 rounded-lg">
-                    <div class="text-sm text-purple-600 font-medium">基础背景</div>
-                    <div class="text-2xl font-bold text-purple-600">${analysis.background}</div>
-                </div>
-                <div class="bg-purple-50 p-4 rounded-lg">
-                    <div class="text-sm text-purple-600 font-medium">综合评分</div>
-                    <div class="text-2xl font-bold text-purple-600">${analysis.overall}</div>
-                    <span class="inline-block px-2 py-1 text-xs rounded-full ${analysis.overall >= borderline ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}">
-                        ${analysis.overall >= borderline ? '推荐' : '不推荐'}
-                    </span>
-                </div>
-            </div>
-            <div class="bg-gray-50 p-4 rounded-lg">
-                <div class="text-sm text-gray-600 font-medium mb-2">分析理由</div>
-                <div class="text-sm text-gray-700">${analysis.summary}</div>
-            </div>
-        </div>
-    `;
-    
-    analysisContent.innerHTML = analysisHtml;
-    
-    // Trigger message generation if score passes
-    if (analysis.overall >= borderline) {
-        console.log(`Score ${analysis.overall} >= ${borderline}, auto-generating message...`);
-        showToast(`评分 ${analysis.overall} 达标，正在生成消息...`, 'success');
-        generateMessage();
-    } else {
-        console.log(`Score ${analysis.overall} < ${borderline}, showing manual generate button`);
-        showToast(`评分 ${analysis.overall} 未达标，不生成消息`, 'warning');
-        showManualGenerateButton();
-    }
-}
 
 /**
  * Start analysis (current flow)
@@ -463,65 +386,6 @@ function startAnalysis() {
     })
 }
 
-/**
- * Generate message
- */
-function generateMessage() {
-    const messageFormData = new FormData(document.getElementById('candidate-context'));
-    messageFormData.append('purpose', 'GREET_ACTION');
-    htmx.ajax('POST', '/candidates/generate-message', {
-        target: '#message-content',
-        swap: 'innerHTML',
-        values: Object.fromEntries(messageFormData)
-    });
-}
-
-/**
- * Show manual generate button
- */
-function showManualGenerateButton() {
-    const messageSection = document.getElementById('message-section');
-    if (messageSection) {
-        const mode = document.querySelector('input[name="mode"]')?.value;
-        const assistantId = document.querySelector('input[name="assistant_id"]')?.value;
-        const conversationId = document.querySelector('input[name="conversation_id"]')?.value;
-        const chatId = document.querySelector('input[name="chat_id"]')?.value;
-        
-        messageSection.innerHTML = `
-            <div class="text-center py-8">
-                <p class="text-gray-600 mb-4">评分未达标，是否手动生成消息？</p>
-                <button onclick="manualGenerateMessage('${mode}', '${assistantId}', '${conversationId}', '${chatId}')" 
-                        class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700">
-                    🔄 手动生成消息
-                </button>
-            </div>
-        `;
-    }
-}
-
-/**
- * Manual message generation function
- */
-function manualGenerateMessage(mode, assistantId, conversationId, chatId) {
-    console.log('Manual message generation triggered');
-    showToast('手动生成消息...', 'info');
-    
-    const messageFormData = new FormData();
-    messageFormData.append('mode', mode);
-    messageFormData.append('assistant_id', assistantId);
-    if (conversationId && conversationId !== 'null' && conversationId !== 'undefined') {
-        messageFormData.append('conversation_id', conversationId);
-    }
-    if (chatId && chatId !== 'null' && chatId !== 'undefined') {
-        messageFormData.append('chat_id', chatId);
-    }
-    
-    htmx.ajax('POST', '/candidates/generate-message', {
-        target: '#message-content',
-        swap: 'innerHTML',
-        values: Object.fromEntries(messageFormData)
-    });
-}
 
 /**
  * Initialize new chat (current flow)
@@ -557,14 +421,4 @@ function initializeNewChat(mode, chatId, jobId, name, resumeText) {
 }
 
 
-/**
- * Trigger resume fetch manually (for chat mode after checking existing record)
- */
-function triggerResumeFetch() {
-    const resumeContent = document.getElementById('resume-content');
-    if (resumeContent) {
-        // Trigger HTMX request manually
-        htmx.trigger(resumeContent, 'load');
-    }
-}
 </script>

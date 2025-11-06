@@ -305,9 +305,11 @@ async def apply_filters(frame: Frame, filters: Dict[str, Any]) -> bool:
     # open the filter panel
     filter_wrap = frame.locator("div.recommend-filter")
     filter_panel = filter_wrap.locator("div.filter-panel")
-    panel_down = filter_wrap.locator("div.filter-arrow-down")
+    panel_down = filter_wrap.locator("span.filter-arrow-down")
     if await panel_down.count() > 0:
-        await panel_down.click(timeout=1000)
+        # await panel_down.click(timeout=1000)
+        logger.info("Filter panel already applied")
+        return True
     if await filter_panel.count() == 0:
         # open the filter panel
         await filter_wrap.click(timeout=1000)

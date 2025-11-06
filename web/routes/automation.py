@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -23,6 +24,95 @@ templates = Jinja2Templates(directory="web/templates")
 # Global scheduler instance (singleton pattern)
 _scheduler: Optional[BRDWorkScheduler] = None
 _event_queue: Optional[asyncio.Queue] = None
+# =========================================================================
+# On-demand Cloudflare Tunnel Controls
+# =========================================================================
+_tunnel_url: Optional[str] = None
+_tunnel_process: Optional[asyncio.subprocess.Process] = None
+
+def _is_executable_available(cmd: str) -> bool:
+    from shutil import which
+    return which(cmd) is not None
+
+@router.get("/tunnel-url", response_class=JSONResponse)
+async def get_tunnel_url() -> JSONResponse:
+    return JSONResponse({"tunnel_url": _tunnel_url})
+
+@router.post("/tunnel/start", response_class=JSONResponse)
+async def start_tunnel(request: Request) -> JSONResponse:
+    global _tunnel_url, _tunnel_process
+    # Check if tunnel is already running
+    if _tunnel_process:
+        # Check if process is still alive
+        if _tunnel_process.returncode is None:
+            if _tunnel_url:
+                return JSONResponse({"success": True, "tunnel_url": _tunnel_url})
+        else:
+            # Process died, reset it
+            _tunnel_process = None
+            _tunnel_url = None
+    if not _is_executable_available("cloudflared"):
+        return JSONResponse(status_code=400, content={"success": False, "error": "cloudflared not installed"})
+    # Determine port from service base URL
+    base_url = settings.BOSS_SERVICE_BASE_URL or "http://127.0.0.1:5001"
+    try:
+        port = int(base_url.rsplit(":", 1)[-1])
+    except Exception:
+        port = 5001
+
+    # Start cloudflared
+    try:
+        _tunnel_process = await asyncio.create_subprocess_exec(
+            "cloudflared", "tunnel", "--url", f"http://127.0.0.1:{port}",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        # Parse URL from stderr lines
+        url_pattern = r"https://[a-zA-Z0-9-]+\.trycloudflare\.com"
+
+        async def _read_stderr():
+            global _tunnel_url
+            assert _tunnel_process and _tunnel_process.stderr
+            while True:
+                line = await _tunnel_process.stderr.readline()
+                if not line:
+                    break
+                try:
+                    text = line.decode("utf-8", errors="ignore")
+                except Exception:
+                    text = str(line)
+                m = re.search(url_pattern, text)
+                if m:
+                    _tunnel_url = m.group(0)
+                    break
+
+        # Race reading for a short period to get URL
+        try:
+            await asyncio.wait_for(_read_stderr(), timeout=5.0)
+        except asyncio.TimeoutError:
+            pass
+
+        return JSONResponse({"success": True, "tunnel_url": _tunnel_url})
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
+
+@router.post("/tunnel/stop", response_class=JSONResponse)
+async def stop_tunnel() -> JSONResponse:
+    global _tunnel_process, _tunnel_url
+    if _tunnel_process:
+        try:
+            _tunnel_process.terminate()
+            try:
+                await asyncio.wait_for(_tunnel_process.wait(), timeout=3.0)
+            except asyncio.TimeoutError:
+                _tunnel_process.kill()
+        except Exception:
+            pass
+        finally:
+            _tunnel_process = None
+            _tunnel_url = None
+    return JSONResponse({"success": True})
 
 
 # ============================================================================
