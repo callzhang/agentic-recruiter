@@ -361,8 +361,8 @@ def test_assistant_generate_message_endpoint(client: TestClient, monkeypatch: py
 def test_candidate_lookup_endpoint(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         candidate_store,
-        "get_candidate_by_id",
-        lambda chat_id, fields=None, candidate_id=None: {"chat_id": chat_id, "name": "Alice"},
+        "get_candidates",
+        lambda identifiers=None, names=None, job_applied=None, limit=None, fields=None: [{"chat_id": identifiers[0] if identifiers else None, "name": "Alice"}] if identifiers else [],
     )
 
     response = client.get("/candidate/chat-42")

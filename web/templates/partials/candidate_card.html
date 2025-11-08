@@ -3,21 +3,31 @@
   class="candidate-card p-4 border rounded-lg cursor-pointer bg-white hover:bg-blue-50 transition"
   data-candidate-id="{% if candidate.chat_id %}{{ candidate.chat_id }}{% else %}recommend_{{ candidate.index }}{% endif %}"
   data-candidate='{{ candidate | tojson }}'
-  hx-get="
-      /candidates/detail?mode={{ candidate.mode or 'chat' }}
-      {%- if candidate.chat_id %}&chat_id={{ candidate.chat_id }}{% endif %}
-      {%- if candidate.index is defined %}&index={{ candidate.index }}{% endif %}
-      &name={{ candidate.name | urlencode }}
-      &job_title={{ (candidate.job_applied or candidate.job_title or '') | urlencode }}
-      &text={{ (candidate.description or candidate.last_message or candidate.text or '') | urlencode }}
-      {%- if candidate.stage %}&stage={{ candidate.stage }}{% endif %}
-      {%- if candidate.viewed is defined %}&viewed={{ candidate.viewed }}{% endif %}
-      {%- if candidate.greeted is defined %}&greeted={{ candidate.greeted }}{% endif %}"
+  hx-get="/candidates/detail"
+  hx-vals='{{ {
+    "mode": candidate.mode,
+    "chat_id": candidate.chat_id | default("", true),
+    "index": candidate.index if candidate.index is not none else "",
+    "name": candidate.name,
+    "job_applied": candidate.job_applied,
+    "job_id": candidate.job_id,
+    "text": candidate.text or candidate.last_message or "",
+    "stage": candidate.stage | default("", true),
+    "viewed": candidate.viewed | default(false, true),
+    "greeted": candidate.greeted | default(false, true)
+  } | tojson }}'
   hx-target="#detail-pane"
-  hx-include="#job-selector,#assistant-selector"
+  hx-include="#job-selector,#assistant-selector,#threshold-chat,#threshold-borderline,#threshold-seek"
   hx-on::click="console.log('Candidate clicked:', JSON.parse(this.dataset.candidate));"
 >
-  <div class="flex items-start space-x-3">
+  <div class="flex items-start space-x-3 relative">
+    <!-- Score badge in upper-right corner -->
+    {% if candidate.score is defined and candidate.score is not none %}
+    <div class="absolute top-0 right-0 bg-gradient-to-r from-blue-500 to-indigo-600 text-white text-xs font-bold px-2 py-1 rounded-bl-lg rounded-tr-lg shadow-md" data-badge="score">
+      {{ candidate.score }}
+    </div>
+    {% endif %}
+    
     <div class="flex-shrink-0">
       <div
         class="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center"
@@ -30,7 +40,7 @@
         {{ candidate.name or '未知' }}
       </h3>
       <p class="text-sm text-gray-600 truncate">
-        {{ candidate.job_applied or candidate.job_title or '未指定岗位' }}
+        {{ candidate.job_applied or '未指定岗位' }}
       </p>
       <p class="text-xs text-gray-500 mt-1 line-clamp-2">
         {{ candidate.description or candidate.last_message or candidate.text or '暂无消息' }}
@@ -39,6 +49,7 @@
         {% if candidate.viewed is defined and candidate.viewed %}
         <span
           class="inline-block px-2 py-1 text-xs rounded-full bg-purple-100 text-purple-700"
+          data-tag="viewed"
         >
           👁️ 已查看
         </span>
@@ -48,6 +59,14 @@
           class="inline-block px-2 py-1 text-xs rounded-full bg-green-100 text-green-700"
         >
           👋 已打招呼
+        </span>
+        {% endif %}
+        {% if candidate.saved %}
+        <span
+          class="inline-block px-2 py-1 text-xs rounded-full bg-blue-100 text-blue-700"
+          data-tag="saved"
+        >
+          💾 已保存
         </span>
         {% endif %}
       </div>

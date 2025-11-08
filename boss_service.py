@@ -95,30 +95,15 @@ class BossServiceAsync:
         user_data_dir = os.path.join(tempfile.gettempdir(), "bosszhipin_playwright_user_data")
         os.makedirs(user_data_dir, exist_ok=True)
         
-        # Connect with timeout and retry to handle page reload deadlock
-        max_retries = 3
-        timeout_ms = 15000  # 15 seconds per attempt
-        
-        for attempt in range(max_retries):
-            try:
-                logger.info("连接 Chrome CDP (尝试 %d/%d): %s", attempt + 1, max_retries, settings.CDP_URL)
-                self.browser = await self.playwright.chromium.connect_over_cdp(
-                    settings.CDP_URL,
-                    timeout=timeout_ms
-                )
-                self.context = self.browser.contexts[0] if self.browser.contexts else await self.browser.new_context()
-                self.page = await self._ensure_page()
-                logger.info("持久化浏览器会话已建立。")
-                return
-            except Exception as e:
-                if attempt < max_retries - 1:
-                    wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
-                    logger.warning("CDP连接失败 (尝试 %d/%d): %s. %d秒后重试...", 
-                                 attempt + 1, max_retries, e, wait_time)
-                    await asyncio.sleep(wait_time)
-                else:
-                    logger.error("CDP连接失败，已达到最大重试次数: %s", e)
-                    raise RuntimeError(f"无法连接到Chrome CDP，已尝试{max_retries}次: {e}") from e
+
+        self.browser = await self.playwright.chromium.connect_over_cdp(
+            settings.CDP_URL,
+            timeout=15000
+        )
+        self.context = self.browser.contexts[0] if self.browser.contexts else await self.browser.new_context()
+        self.page = await self._ensure_page()
+        logger.info("持久化浏览器会话已建立。")
+        return True
 
     async def _shutdown_async(self) -> None:
         logger.info("正在关闭 Playwright...")
@@ -131,7 +116,7 @@ class BossServiceAsync:
             if self.browser:
                 await self.browser.close()
         except Exception as exc:  # noqa: BLE001
-            logger.debug("关闭浏览器失败（忽略）: %s", exc)
+            logger.error("关闭浏览器失败（忽略）: %s", exc)
         if self.playwright:
             await self.playwright.stop()
         self.browser = None
@@ -155,16 +140,31 @@ class BossServiceAsync:
         """
         if not self.context:
             raise RuntimeError("浏览器上下文不存在")
+        
         target_pages = {settings.CHAT_URL, settings.RECOMMEND_URL}
         candidate: Optional[Page] = None
-        for existing in self.context.pages:
-            if existing.is_closed():
-                continue
-            if existing.url in target_pages or existing.url.startswith(settings.BASE_URL):
-                candidate = existing
-                break
-        if not candidate:
-            candidate = await self.context.new_page()
+        
+        try:
+            for existing in self.context.pages:
+                if existing.is_closed():
+                    continue
+                if existing.url in target_pages or existing.url.startswith(settings.BASE_URL):
+                    candidate = existing
+                    break
+            if not candidate:
+                candidate = await self.context.new_page()
+        except Exception as e:
+            # Context or browser has been closed - reconnect
+            logger.warning(f"Browser context closed, reconnecting to CDP: {e}")
+            await self.start_browser()
+            # After reconnect, get page from the new context
+            for existing in self.context.pages:
+                if not existing.is_closed():
+                    candidate = existing
+                    break
+            if not candidate:
+                candidate = await self.context.new_page()
+        
         # Only navigate if we're not already on a target page
         if candidate.url not in target_pages and not candidate.url.startswith(settings.BASE_URL):
             await candidate.goto(settings.CHAT_URL, wait_until="domcontentloaded", timeout=20000)
@@ -279,13 +279,13 @@ class BossServiceAsync:
         start = asyncio.get_event_loop().time()
         while asyncio.get_event_loop().time() - start < max_wait_time:
             current_url = page.url
-            logger.info(f'等待登录: {current_url}')
+            logger.debug(f'等待登录: {current_url}')
             if settings.BASE_URL in current_url and await _page_contains_keywords():
                 await self._save_login_state_with_lock()
                 logger.info("检测到登录成功。")
                 return
             if any(token in current_url.lower() for token in ("login", "web/user", "bticket")):
-                logger.info("等待用户在浏览器中完成登录...")
+                logger.debug("等待用户在浏览器中完成登录...")
             await asyncio.sleep(3)
         raise TimeoutError("等待登录超时，请在浏览器中完成登录后重试")
 
@@ -458,7 +458,7 @@ class BossServiceAsync:
                     - timestamp: Message timestamp
             """
             page = await self._ensure_browser_session()
-            return await chat_actions.get_chat_list_action(page, limit, tab, status, job_title, new_only)
+            return await chat_actions.list_conversations_action(page, limit, tab, status, job_title, new_only)
 
         @self.app.get("/chat/{chat_id}/messages")
         async def get_message_history(chat_id: str):
@@ -718,7 +718,8 @@ class BossServiceAsync:
                 chat_id: Unique identifier for the chat/candidate
                 fields: Optional list of fields to return (default: all fields)
             """
-            return candidate_store.get_candidate_by_id(chat_id=chat_id, fields=fields)
+            results = candidate_store.get_candidates(identifiers=[chat_id], limit=1, fields=fields)
+            return results[0] if results else None
         
         @self.app.post("/store/candidate/get-by-resume")
         def check_candidate_by_resume_api(resume_text: str = Body(..., embed=True)):
@@ -730,9 +731,8 @@ class BossServiceAsync:
             Returns:
                 Optional[dict]: Matching candidate data if found, None otherwise
             """
-            return assistant_actions.get_candidate_by_resume(
-                chat_id=None,
-                candidate_resume=resume_text
+            return candidate_store.search_candidates_by_resume(
+                resume_text=resume_text
             )
 
         # ------------------ AI Assistant API ------------------
@@ -1051,20 +1051,148 @@ async def web_stats():
 async def web_recent_activity():
     """Get recent activity feed for the Web UI dashboard.
     
-    Currently returns a placeholder message. Future implementation should
-    track and display recent system activities like candidate processing,
-    message sending, etc.
+    Reads the latest changelog entries from CHANGELOG.md and displays
+    them in a formatted list.
     
     Returns:
-        HTMLResponse: HTML content with recent activity (placeholder)
+        HTMLResponse: HTML content with recent activity from changelog
     """
-    # TODO: Implement actual activity log
-    html = '''
-    <div class="text-gray-600 space-y-2">
-        <p>📊 系统已启动，等待操作...</p>
-        <p class="text-sm text-gray-500">提示：访问「候选人管理」或「自动化工作流」开始使用</p>
-    </div>
-    '''
+    import re
+    from pathlib import Path
+    
+    changelog_path = Path(__file__).parent / "CHANGELOG.md"
+    
+    if not changelog_path.exists():
+        html = '''
+        <div class="text-gray-600 space-y-2">
+            <p>📊 系统已启动，等待操作...</p>
+            <p class="text-sm text-gray-500">提示：访问「候选人管理」或「自动化工作流」开始使用</p>
+        </div>
+        '''
+        return HTMLResponse(content=html)
+    
+    try:
+        with open(changelog_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        # Extract the latest version section (first ## after # 更新日志)
+        # Match pattern: ## vX.X.X (date) - title
+        version_pattern = r'^## (v[\d.]+) \(([^)]+)\) - (.+)$'
+        sections = re.split(r'^## ', content, flags=re.MULTILINE)
+        
+        if len(sections) < 2:
+            html = '''
+            <div class="text-gray-600 space-y-2">
+                <p>📊 系统已启动，等待操作...</p>
+                <p class="text-sm text-gray-500">提示：访问「候选人管理」或「自动化工作流」开始使用</p>
+            </div>
+            '''
+            return HTMLResponse(content=html)
+        
+        # Get the first version section (most recent)
+        latest_section = sections[1]  # First section after split is the header
+        lines = latest_section.split('\n')
+        
+        # Extract version info from first line
+        first_line = lines[0] if lines else ""
+        version_match = re.match(r'^(v[\d.]+) \(([^)]+)\) - (.+)$', first_line)
+        
+        if not version_match:
+            html = '''
+            <div class="text-gray-600 space-y-2">
+                <p>📊 系统已启动，等待操作...</p>
+                <p class="text-sm text-gray-500">提示：访问「候选人管理」或「自动化工作流」开始使用</p>
+            </div>
+            '''
+            return HTMLResponse(content=html)
+        
+        version, date, title = version_match.groups()
+        
+        # Extract major updates (### 🚀 重大更新 section)
+        html_parts = [f'<div class="space-y-3">']
+        html_parts.append(f'<div class="border-b pb-2 mb-3">')
+        html_parts.append(f'<h3 class="text-lg font-bold text-gray-800">{version}</h3>')
+        html_parts.append(f'<p class="text-sm text-gray-600">{date} - {title}</p>')
+        html_parts.append(f'</div>')
+        
+        # Extract key points from all sections
+        items = []
+        current_section = None
+        skip_next_section = False
+        
+        for i, line in enumerate(lines[1:100]):  # Limit to first 100 lines
+            line = line.strip()
+            if not line:
+                continue
+            
+            # Stop at next version section
+            if line.startswith('## '):
+                break
+            
+            # Track section headers
+            if line.startswith('### '):
+                section_title = line.replace('### ', '').strip()
+                # Skip certain sections that are too detailed
+                if any(skip in section_title for skip in ['提交记录', '参考文档', '测试验证', '配置文件']):
+                    skip_next_section = True
+                    current_section = None
+                    continue
+                else:
+                    skip_next_section = False
+                    current_section = section_title
+                    continue
+            elif line.startswith('#### '):
+                current_section = line.replace('#### ', '').strip()
+                skip_next_section = False
+                continue
+            
+            # Skip if we're in a section to skip
+            if skip_next_section:
+                continue
+            
+            # Collect bullet points (with or without bold)
+            if line.startswith('- **') or line.startswith('- '):
+                # Clean up markdown formatting
+                clean_line = line.replace('- **', '- ').replace('**', '').strip()
+                # Remove nested markdown like `code` or [links]
+                clean_line = re.sub(r'`([^`]+)`', r'\1', clean_line)
+                clean_line = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', clean_line)
+                
+                if clean_line and len(clean_line) > 5:  # Minimum length
+                    # Add section context if available
+                    if current_section and not clean_line.startswith(current_section):
+                        items.append(f"{current_section}: {clean_line}")
+                    else:
+                        items.append(clean_line)
+        
+        # Display items (limit to 10 most recent)
+        if items:
+            html_parts.append('<ul class="space-y-2 text-sm text-gray-700">')
+            for item in items[:10]:
+                # Escape HTML and format
+                item_html = item.replace('<', '&lt;').replace('>', '&gt;')
+                html_parts.append(f'<li class="flex items-start">')
+                html_parts.append(f'<span class="mr-2 text-blue-500">▸</span>')
+                html_parts.append(f'<span class="flex-1">{item_html}</span>')
+                html_parts.append(f'</li>')
+            html_parts.append('</ul>')
+            if len(items) > 10:
+                html_parts.append(f'<p class="text-xs text-gray-400 mt-2">还有 {len(items) - 10} 项更新...</p>')
+        else:
+            html_parts.append('<p class="text-sm text-gray-500">暂无详细更新信息</p>')
+        
+        html_parts.append('</div>')
+        html = '\n'.join(html_parts)
+        
+    except Exception as e:
+        logger.warning(f"Failed to parse changelog: {e}")
+        html = '''
+        <div class="text-gray-600 space-y-2">
+            <p>📊 系统已启动，等待操作...</p>
+            <p class="text-sm text-gray-500">提示：访问「候选人管理」或「自动化工作流」开始使用</p>
+        </div>
+        '''
+    
     return HTMLResponse(content=html)
 
 if __name__ == "__main__":

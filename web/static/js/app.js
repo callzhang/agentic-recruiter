@@ -124,21 +124,21 @@ function candidateTabs() {
             this.loading = true;
             
             const jobSelector = document.getElementById('job-selector');
-            const jobId = jobSelector?.value || jobSelector?.options[0]?.value;
-            const jobTitle = jobSelector?.selectedOptions[0]?.getAttribute("data-title");
+            const job_id = jobSelector?.value || jobSelector?.options[0]?.value;
+            const job_title = jobSelector?.selectedOptions[0]?.getAttribute("data-title");
             
             // Check if job title is valid
-            if (!jobTitle || jobTitle === '加载中...') {
+            if (!job_title || job_title === '加载中...') {
                 console.error('Job title not loaded yet');
                 this.loading = false;
                 showToast('请等待岗位列表加载完成后再查询', 'warning');
                 return;
             }
             
-            let mode, chatType;
+            let mode, chat_type;
             if (this.activeTab === 'recommend') {
                 mode = 'recommend';
-                chatType = '';
+                chat_type = '';
             } else {
                 mode = this.activeTab; // Use the tab name directly as mode
                 const tabMap = {
@@ -146,14 +146,14 @@ function candidateTabs() {
                     'chat': '沟通中',
                     'followup': '牛人已读未回'
                 };
-                chatType = tabMap[this.activeTab] || '新招呼';
+                chat_type = tabMap[this.activeTab] || '新招呼';
             }
             
             const params = new URLSearchParams({
                 mode: mode,
-                chat_type: chatType,
-                job_title: jobTitle,
-                job_id: jobId
+                chat_type: chat_type,
+                job_applied: job_title,
+                job_id: job_id
             });
             
             console.log('Loading candidates, activeTab:', this.activeTab, 'params:', params);
@@ -195,14 +195,14 @@ function candidateTabs() {
                     let appendedCount = 0;
                     
                     newCards.forEach(newCard => {
-                        const candidateId = newCard.getAttribute('data-candidate-id');
-                        if (!candidateId) {
+                        const candidate_id = newCard.getAttribute('data-candidate-id');
+                        if (!candidate_id) {
                             // Skip cards without ID
                             return;
                         }
                         
                         // Check if candidate already exists
-                        const existingCard = candidateList.querySelector(`[data-candidate-id="${candidateId}"]`);
+                        const existingCard = candidateList.querySelector(`[data-candidate-id="${candidate_id}"]`);
                         
                         if (existingCard) {
                             // Update existing card with new content
@@ -271,25 +271,6 @@ function candidateTabs() {
     };
 }
 
-// Form validation helper
-function validateForm(formId) {
-    const form = document.getElementById(formId);
-    if (!form) return false;
-    
-    const inputs = form.querySelectorAll('[required]');
-    let isValid = true;
-    
-    inputs.forEach(input => {
-        if (!input.value.trim()) {
-            input.classList.add('border-red-500');
-            isValid = false;
-        } else {
-            input.classList.remove('border-red-500');
-        }
-    });
-    
-    return isValid;
-}
 
 // Toast notification
 function showToast(message, type = 'info') {
@@ -367,10 +348,10 @@ document.body.addEventListener('htmx:beforeRequest', function(event) {
         return;  // Not a candidate card, allow request normally
     }
     
-    const candidateId = event.detail.elt.getAttribute('data-candidate-id');
+    const candidate_id = event.detail.elt.getAttribute('data-candidate-id');
     
     // If clicking the same candidate, prevent redundant fetch
-    if (window.selectedCandidateId === candidateId) {
+    if (window.selectedCandidateId === candidate_id) {
         console.log('Same candidate already selected, skipping fetch');
         event.preventDefault();  // This cancels the HTMX request
         
@@ -394,8 +375,8 @@ document.body.addEventListener('htmx:beforeRequest', function(event) {
     event.detail.elt.classList.add('bg-blue-50', 'border-blue-500', 'ring-2', 'ring-blue-300');
     
     // Update selected ID
-    window.selectedCandidateId = candidateId;
-    console.log('Selected candidate:', candidateId);
+    window.selectedCandidateId = candidate_id;
+    console.log('Selected candidate:', candidate_id);
     
     // Allow HTMX to proceed
 });

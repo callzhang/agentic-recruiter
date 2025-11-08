@@ -16,7 +16,10 @@ from fastapi.templating import Jinja2Templates
 
 from src import assistant_actions
 from src.config import settings
+from src.global_logger import get_logger
 from src.scheduler import BRDWorkScheduler
+
+logger = get_logger()
 
 router = APIRouter()
 templates = Jinja2Templates(directory="web/templates")
@@ -29,6 +32,7 @@ _event_queue: Optional[asyncio.Queue] = None
 # =========================================================================
 _tunnel_url: Optional[str] = None
 _tunnel_process: Optional[asyncio.subprocess.Process] = None
+_tunnel_drain_tasks: list[asyncio.Task] = []
 
 def _is_executable_available(cmd: str) -> bool:
     from shutil import which
@@ -71,9 +75,29 @@ async def start_tunnel(request: Request) -> JSONResponse:
         # Parse URL from stderr lines
         url_pattern = r"https://[a-zA-Z0-9-]+\.trycloudflare\.com"
 
-        async def _read_stderr():
+        async def _drain_pipe(pipe, log_prefix: str):
+            """Continuously drain a pipe until EOF or process exits."""
+            if not pipe:
+                return
+            try:
+                while True:
+                    line = await pipe.readline()
+                    if not line:
+                        break
+                    try:
+                        text = line.decode("utf-8", errors="ignore").strip()
+                        if text:
+                            logger.debug(f"{log_prefix}: {text}")
+                    except Exception:
+                        pass
+            except Exception as e:
+                logger.debug(f"{log_prefix}: Error draining pipe: {e}")
+
+        async def _read_stderr_for_url():
+            """Read stderr to extract tunnel URL, then continue draining."""
             global _tunnel_url
             assert _tunnel_process and _tunnel_process.stderr
+            url_found = False
             while True:
                 line = await _tunnel_process.stderr.readline()
                 if not line:
@@ -82,16 +106,39 @@ async def start_tunnel(request: Request) -> JSONResponse:
                     text = line.decode("utf-8", errors="ignore")
                 except Exception:
                     text = str(line)
-                m = re.search(url_pattern, text)
-                if m:
-                    _tunnel_url = m.group(0)
-                    break
+                if not url_found:
+                    m = re.search(url_pattern, text)
+                    if m:
+                        _tunnel_url = m.group(0)
+                        logger.info(f"Cloudflare tunnel URL detected: {_tunnel_url}")
+                        url_found = True
+                # Continue draining after URL is found
+                if text.strip():
+                    logger.debug(f"cloudflared[stderr]: {text.strip()}")
 
-        # Race reading for a short period to get URL
+        # Spawn background tasks to drain both pipes continuously
+        global _tunnel_drain_tasks
+        # Cancel any existing drain tasks
+        for task in _tunnel_drain_tasks:
+            if not task.done():
+                task.cancel()
+        _tunnel_drain_tasks = []
+        
+        # Task to read stderr for URL (will continue draining after finding URL)
+        if _tunnel_process.stderr:
+            stderr_task = asyncio.create_task(_read_stderr_for_url())
+            _tunnel_drain_tasks.append(stderr_task)
+        
+        # Task to drain stdout
+        if _tunnel_process.stdout:
+            stdout_task = asyncio.create_task(_drain_pipe(_tunnel_process.stdout, "cloudflared[stdout]"))
+            _tunnel_drain_tasks.append(stdout_task)
+        
+        # Wait a short time for URL to be detected
         try:
-            await asyncio.wait_for(_read_stderr(), timeout=5.0)
+            await asyncio.wait_for(stderr_task, timeout=5.0)
         except asyncio.TimeoutError:
-            pass
+            logger.warning("Tunnel URL not detected within 5 seconds, but tunnel may still be starting")
 
         return JSONResponse({"success": True, "tunnel_url": _tunnel_url})
     except Exception as e:
@@ -99,9 +146,15 @@ async def start_tunnel(request: Request) -> JSONResponse:
 
 @router.post("/tunnel/stop", response_class=JSONResponse)
 async def stop_tunnel() -> JSONResponse:
-    global _tunnel_process, _tunnel_url
+    global _tunnel_process, _tunnel_url, _tunnel_drain_tasks
     if _tunnel_process:
         try:
+            # Cancel drain tasks
+            for task in _tunnel_drain_tasks:
+                if not task.done():
+                    task.cancel()
+            _tunnel_drain_tasks = []
+            
             _tunnel_process.terminate()
             try:
                 await asyncio.wait_for(_tunnel_process.wait(), timeout=3.0)
@@ -112,6 +165,7 @@ async def stop_tunnel() -> JSONResponse:
         finally:
             _tunnel_process = None
             _tunnel_url = None
+            _tunnel_drain_tasks = []
     return JSONResponse({"success": True})
 
 

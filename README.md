@@ -35,6 +35,16 @@ python start_service.py
 ### 5. 访问 Web UI
 打开浏览器访问: `http://127.0.0.1:5001/web`
 
+## HR 安装脚本
+
+向 HR 分发时，可直接发送单文件脚本 `install_hr.command`：
+
+1. HR 双击 `install_hr.command`（或在终端执行 `./install_hr.command`），脚本会自动克隆/更新仓库到 `~/bosszhipin_bot`（或自定义目录）。
+2. 根据提示录入 OpenAI/Zilliz 等敏感配置，脚本会生成 `.env` 和 `config/secrets.yaml`。
+3. 脚本会创建虚拟环境、安装 `requirements.txt` 依赖、安装 Playwright Chromium，并在完成后自动执行 `start_service.py`。
+
+脚本仅需本机已安装 Git 与 Python 3.11+；其余依赖将由脚本自动配置。
+
 ## 核心功能
 
 ### 聊天管理
@@ -140,9 +150,8 @@ sentry:
 
 ## 文档
 
-- [系统架构](ARCHITECTURE.md) - 架构概览
+- [系统架构](docs/architecture.md) - 架构概览和技术细节
 - [API 文档](docs/api.md) - REST API 完整参考
-- [系统架构详情](docs/architecture.md) - 架构和技术细节
 - [自动化工作流](docs/workflows.md) - 工作流和故障排查
 - [变更日志](CHANGELOG.md) - 版本历史
 - [贡献指南](CONTRIBUTING.md) - 如何贡献

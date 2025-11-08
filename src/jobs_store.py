@@ -72,7 +72,7 @@ class JobsStore:
     def _connect(self):
         """Connect to Zilliz Cloud."""
         try:
-            logger.info("Connecting to Zilliz endpoint %s", self.endpoint)
+            logger.debug("Connecting to Zilliz endpoint %s", self.endpoint)
             connect_args = {
                 "alias": "default",
                 "uri": self.endpoint,
@@ -81,7 +81,7 @@ class JobsStore:
                 "secure": True,
             }
             connections.connect(**connect_args)
-            logger.info("Connected to Zilliz successfully")
+            logger.debug("Connected to Zilliz successfully")
         except Exception as exc:
             logger.exception("Failed to connect to Zilliz: %s", exc)
             raise
@@ -90,13 +90,13 @@ class JobsStore:
         """Create collection if it doesn't exist."""
         try:
             if utility.has_collection(self.collection_name):
-                logger.info("Collection %s already exists, loading it", self.collection_name)
+                logger.debug("Collection %s already exists, loading it", self.collection_name)
                 self.collection = Collection(self.collection_name)
             else:
-                logger.info("Creating collection %s", self.collection_name)
+                logger.debug("Creating collection %s", self.collection_name)
                 schema = CollectionSchema(fields, description="Job profiles for Boss直聘 automation")
                 self.collection = Collection(self.collection_name, schema)
-                logger.info("Collection %s created successfully", self.collection_name)
+                logger.debug("Collection %s created successfully", self.collection_name)
                 
                 # Create indexes
                 index_params = {
@@ -107,11 +107,11 @@ class JobsStore:
                 self.collection.create_index(field_name="job_embedding", index_params=index_params)
                 self.collection.create_index(field_name="job_id")
                 self.collection.create_index(field_name="position")
-                logger.info("Indexes created successfully")
+                logger.debug("Indexes created successfully")
             
             # Load collection into memory
             self.collection.load()
-            logger.info("Collection %s loaded into memory", self.collection_name)
+            logger.debug("Collection %s loaded into memory", self.collection_name)
             
         except Exception as exc:
             logger.exception("Failed to ensure collection: %s", exc)
@@ -138,7 +138,7 @@ class JobsStore:
                 # Keywords are already JSON objects from Zilliz
                 jobs.append(job)
             
-            logger.info("Retrieved %d jobs from collection", len(jobs))
+            logger.debug("Retrieved %d jobs from collection", len(jobs))
             return jobs
             
         except Exception as exc:
@@ -200,7 +200,7 @@ class JobsStore:
             self.collection.insert([insert_data])
             self.collection.flush()
             
-            logger.info("Successfully inserted job: %s", job_data["id"])
+            logger.debug("Successfully inserted job: %s", job_data["id"])
             return True
             
         except Exception as exc:
@@ -243,7 +243,7 @@ class JobsStore:
             self.collection.upsert([update_data])
             self.collection.flush()
             
-            logger.info("Successfully updated job: %s", job_id)
+            logger.debug("Successfully updated job: %s", job_id)
             return True
             
         except Exception as exc:
@@ -261,7 +261,7 @@ class JobsStore:
             self.collection.delete(f'job_id == "{job_id}"')
             self.collection.flush()
             
-            logger.info("Successfully deleted job: %s", job_id)
+            logger.debug("Successfully deleted job: %s", job_id)
             return True
             
         except Exception as exc:

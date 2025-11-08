@@ -9,10 +9,7 @@ from openai import OpenAI
 from .candidate_store import candidate_store
 from .config import settings
 from .global_logger import logger
-from .assistant_utils import (
-        get_embedding,
-        _openai_client,
-)
+from .assistant_utils import _openai_client
 from pydantic import BaseModel, Field
 
 # Constants
@@ -65,12 +62,12 @@ ACTION_PROMPTS = {
 
 class AnalysisSchema(BaseModel):
     """Analysis schema for the candidate."""
-    skill: int = Field(description="技能、经验匹配度")
-    startup_fit: int = Field(description="创业公司契合度，抗压能力、对工作的热情程度")
-    background: int = Field(description="基础背景、学历优秀程度、逻辑思维能力")
-    overall: int = Field(description="综合评分")
-    summary: str = Field(description="分析总结")
-    followup_tips: str = Field(description="后续招聘顾问跟进的沟通策略")
+    skill: int = Field(description="技能、经验匹配度，满分10分")
+    startup_fit: int = Field(description="创业公司契合度，抗压能力、对工作的热情程度，满分10分")
+    background: int = Field(description="基础背景、学历优秀程度、逻辑思维能力，满分10分")
+    overall: int = Field(description="综合评分，满分10分")
+    summary: str = Field(description="分析总结，不要超过200字")
+    followup_tips: str = Field(description="后续招聘顾问跟进的沟通策略，不要超过100字")
 
 
 # Assistants ----------------------------------------------------
@@ -80,17 +77,6 @@ def get_assistants() -> List[Dict[str, Any]]:
     """Get all assistants."""
     return _openai_client.beta.assistants.list()
 
-
-
-
-# Candidate Management --------------------------------------
-def get_candidate_by_resume(chat_id: str, candidate_resume: str) -> Optional[Dict[str, Any]]:
-    """
-    Get candidate record by candidate_resume.
-    """
-    # Try semantic search by resume
-    embedding = get_embedding(candidate_resume)
-    return candidate_store.search_candidates(embedding, limit=1)
 
 # AI Generation with Responses API ------------------------------
 def init_chat(
@@ -137,9 +123,6 @@ def init_chat(
     candidate_message = {'type': 'message', 'role': 'user', 'content': candidate_resume_text}
 
     # Create/update Zilliz record
-    # Generate embedding for semantic search
-    embedding = get_embedding(resume_text)
-    
 
     conversation = _openai_client.conversations.create(metadata=conversation_metadata, items=[system_prompt, candidate_message])
 
@@ -147,10 +130,8 @@ def init_chat(
     success = candidate_store.upsert_candidate(
         chat_id=chat_id,
         name=name,
-        # last_message=last_message,
         job_applied=job_info["position"],
         resume_text=resume_text,
-        resume_vector=embedding,
         stage=None,  # Not analyzed yet
         thread_id=conversation.id,  # Store conversation_id in thread_id field for backward compatibility
     )
@@ -220,14 +201,10 @@ def generate_message(
         )
         return response.output_text
     
-    
-
 
 
 __all__ = [
     "get_assistants",
-    "get_embedding",
     "init_chat",
     "generate_message",
-    "get_candidate_by_resume",
 ]

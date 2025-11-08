@@ -7,8 +7,11 @@
      data-thread-id="{{ candidate.thread_id or '' }}"
      data-conversation-id="{{ candidate.conversation_id or candidate.thread_id or '' }}"
      data-chat-id="{{ candidate.chat_id or '' }}"
+     data-candidate-id="{{ candidate.candidate_id or '' }}"
+     data-index="{{ candidate.index or '' }}"
      data-name="{{ candidate.name or '' }}"
      data-job-id="{{ candidate.job_id or job_id or '' }}"
+     data-job-applied="{{ candidate.job_applied or job_applied or '' }}"
      data-assistant-id="{{ assistant_id }}"
      data-resume-text="{{ candidate.resume_text or '' | replace('"', '&quot;') }}">
     <div class="grid grid-cols-4 gap-4">

@@ -391,7 +391,7 @@ async def _setup_wasm_route(context: BrowserContext) -> None:
 
         filename = request.url.rsplit("/", 1)[-1]
         local_path = patched_map.get(filename)
-        logger.info("---->拦截 %s，使用本地 patched 版本 %s", filename, local_path)
+        logger.debug("---->拦截 %s，使用本地 patched 版本 %s", filename, local_path)
         await route.abort(error_code="timedout")
         return
         if not local_path:
@@ -409,7 +409,7 @@ async def _setup_wasm_route(context: BrowserContext) -> None:
                 if candidates:
                     # Pick the highest version <= requested
                     best = max((v, p) for v, p in candidates if v <= ver)
-                    logger.info("未找到 %s，回退到本地 patched 版本 %s", filename, best[1])
+                    logger.debug("未找到 %s，回退到本地 patched 版本 %s", filename, best[1])
                     local_path = best[1]
                     # await route.fulfill(path=str(best[1]), content_type="application/javascript; charset=utf-8")
                 else:
@@ -418,7 +418,7 @@ async def _setup_wasm_route(context: BrowserContext) -> None:
                     await route.continue_()
                     return
 
-        logger.info("---->拦截 %s，使用本地 patched 版本 %s", filename, local_path)
+        logger.debug("---->拦截 %s，使用本地 patched 版本 %s", filename, local_path)
         await route.fulfill(path=str(local_path), content_type="application/javascript; charset=utf-8")
         
     try:

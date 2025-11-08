@@ -21,7 +21,7 @@ from .resume_capture_async import (
     collect_resume_debug_info,
     extract_pdf_viewer_text,
 )
-from .boss_utils import close_overlay_dialogs, ensure_on_chat_page
+from .ui_utils import close_overlay_dialogs, ensure_on_chat_page
 
 CHAT_MENU_SELECTOR = "dl.menu-chat"
 CHAT_ITEM_SELECTORS = "div.geek-item"
@@ -214,7 +214,7 @@ async def discard_candidate_action(page: Page, chat_id: str) -> bool:
     raise ValueError("PASS失败: 未删除对话")
     
 
-async def get_chat_list_action(page: Page, limit: int = 999, tab: str = '新招呼', status: str = '未读', job_title: str = '全部', unread_only=True) -> List[Dict[str, Any]]:
+async def list_conversations_action(page: Page, limit: int = 999, tab: str = '新招呼', status: str = '未读', job_title: str = '全部', unread_only=True) -> List[Dict[str, Any]]:
     '''Get candidate list from chat page
     Args:
         page: Page - The Playwright Page instance representing the chat page.
@@ -234,10 +234,10 @@ async def get_chat_list_action(page: Page, limit: int = 999, tab: str = '新招�
         item = items.nth(index)
         try:
             data_id = await item.get_attribute("data-id")
-            name = await item.locator("span.geek-name").inner_text()
-            job_title = await item.locator("span.source-job").inner_text()
-            text = await item.locator("span.push-text").inner_text()
-            timestamp = await item.locator("span.time").inner_text()
+            name = (await item.locator("span.geek-name").inner_text()).strip()
+            job_title = (await item.locator("span.source-job").inner_text()).strip()
+            text = (await item.locator("span.push-text").inner_text()).strip()
+            timestamp = (await item.locator("span.time").inner_text()).strip()
             unread = await item.locator("span.badge-count").count() > 0
         except Exception as exc:  # noqa: BLE001
             logger.debug("读取列表项失败 #%s: %s", index, exc)
@@ -246,14 +246,14 @@ async def get_chat_list_action(page: Page, limit: int = 999, tab: str = '新招�
             messages.append(
                 {
                     "chat_id": data_id,
-                    "name": name.strip(),
-                    "job_applied": job_title.strip(),
-                    "last_message": text.strip(),
-                    "timestamp": timestamp.strip(),
+                    "name": name,
+                    "job_applied": job_title,
+                    "last_message": text,
+                    "timestamp": timestamp,
                 }
             )
         if len(messages) >= limit:
-            logger.info("成功获取 %s 条候选人", len(messages))
+            logger.debug("成功获取 %s 条候选人", len(messages))
             break
     else:
         logger.warning("获取的候选人数量少于需求量，实际获取数量: %d", len(messages))
@@ -273,7 +273,7 @@ async def get_chat_history_action(page: Page, chat_id: str) -> List[Dict[str, An
 
     for index in range(count):
         message = messages.nth(index)
-        await message.scroll_into_view_if_needed(timeout=200)
+        await message.scroll_into_view_if_needed(timeout=500)
         msg_type = None
         message_str = None
         status = None
@@ -346,7 +346,7 @@ async def view_online_resume_action(page: Page, chat_id: str, timeout: int = 200
 
     candidate_name_locator = page.locator("span.name-box").first
     if await candidate_name_locator.count() > 0:
-        candidate_name = await candidate_name_locator.inner_text(timeout=1000)
+        candidate_name = (await candidate_name_locator.inner_text(timeout=1000)).strip()
     else:
         candidate_name = ""
 
@@ -367,7 +367,7 @@ async def view_online_resume_action(page: Page, chat_id: str, timeout: int = 200
         raise RuntimeError(f"未知错误: 结果类型异常, debug: {debug}")
 
     result.update({"name": candidate_name, "chat_id": chat_id})
-    logger.info("处理在线简历结果: %s", result.get('text', '')[:100])
+    logger.debug("处理在线简历结果: %s", result.get('text', '')[:100])
     await close_overlay_dialogs(page)
     return result
 

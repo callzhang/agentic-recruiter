@@ -644,10 +644,10 @@ async function createJob(event) {
 }
 
 // Delete job
-async function deleteJob(jobId) {
+async function deleteJob(job_id) {
     if (confirm('⚠️ 您确定要删除这个岗位吗？\n此操作无法撤销！')) {
         try {
-            const response = await fetch(`/jobs/${jobId}/delete`, {
+            const response = await fetch(`/jobs/${job_id}/delete`, {
                 method: 'DELETE',
                 headers: {
                     'Content-Type': 'application/json',

@@ -35,7 +35,7 @@ ruff check .
 
 ## Commit & Pull Request Guidelines
 - Use conventional commits (`feat:`, `fix:`, `docs:`, `test:`, `chore:`); keep messages imperative and scoped to a single change set.
-- Branch from `main` with `feature/<topic>` or `fix/<issue-id>`, and update related docs (`docs/`, `README.md`, `ARCHITECTURE.md`) when behavior changes.
+- Branch from `main` with `feature/<topic>` or `fix/<issue-id>`, and update related docs (`docs/`, `README.md`, `docs/architecture.md`) when behavior changes.
 - Pull requests must summarize intent, call out config impacts, link issues or Sentry events, and include screenshots/GIFs for UI updates.
 - Confirm linting, tests, and migration notes are complete before requesting review.
 

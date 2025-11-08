@@ -18,7 +18,7 @@ from .resume_capture_async import (
     _setup_wasm_route,
     collect_resume_debug_info,
 )
-from .boss_utils import IFRAME_OVERLAY_SELECTOR, close_overlay_dialogs
+from .ui_utils import IFRAME_OVERLAY_SELECTOR, close_overlay_dialogs
 
 logger = get_logger()
 
@@ -28,7 +28,7 @@ JOB_SELECTOR = "div.ui-dropmenu >> ul.job-list > li"
 
 
 
-async def _prepare_recommendation_page(page: Page, job_title: str = None, *, wait_timeout: int = 8000) -> Frame:
+async def _prepare_recommendation_page(page: Page, job_title: str = None, *, wait_timeout: int = 15000) -> Frame:
     """
     Navigates and configures the recommendation page for automated actions.
 
@@ -88,7 +88,7 @@ async def _prepare_recommendation_page(page: Page, job_title: str = None, *, wai
                 raise ValueError(f"职位选择可能失败。当前选择: {current_selected_job}")
             
     
-    logger.info("已导航到推荐页面")
+    logger.debug("已导航到推荐页面")
     return frame
 
 
@@ -142,7 +142,7 @@ async def list_recommended_candidates_action(page: Page, *, limit: int = 999, jo
         classes = await card.get_attribute("class") or ""
         viewed = "viewed" in classes
         greeted = await card.locator("button:has-text('继续沟通')").count() > 0
-        name = await card.locator("span.name").inner_text()
+        name = (await card.locator("span.name").inner_text()).strip()
         text = (await card.inner_text()).replace(name, "")
         
         # Create candidate dict with standardized field names for web UI
@@ -189,11 +189,11 @@ async def view_recommend_candidate_resume_action(page: Page, index: int) -> Dict
         debug = await collect_resume_debug_info(page)
         raise RuntimeError(f"处理简历失败: {result.get('details', '未知错误')}, debug: {debug}")
     
-    logger.info("处理推荐候选人简历结果: %s", result.get('text', '')[:100])
+    logger.debug("处理推荐候选人简历结果: %s", result.get('text', '')[:100])
     return result
 
 
-async def greet_recommend_candidate_action(page: Page, index: int, message: str) -> bool:
+async def greet_recommend_candidate_action(page: Page, index: int, message: str = None) -> bool:
     """Greet recommended candidate with message. Returns True on success, raises ValueError on failure."""
     frame = await _prepare_recommendation_page(page)
     cards = frame.locator(CANDIDATE_CARD_SELECTOR)
@@ -308,7 +308,10 @@ async def apply_filters(frame: Frame, filters: Dict[str, Any]) -> bool:
     panel_down = filter_wrap.locator("span.filter-arrow-down")
     if await panel_down.count() > 0:
         # await panel_down.click(timeout=1000)
-        logger.info("Filter panel already applied")
+        logger.debug("Filter panel already applied")
+        cancel_btn = filter_panel.locator("div.btn:has-text('取消')")
+        if await cancel_btn.count() > 0:
+            await cancel_btn.click(timeout=1000)
         return True
     if await filter_panel.count() == 0:
         # open the filter panel
@@ -318,7 +321,7 @@ async def apply_filters(frame: Frame, filters: Dict[str, Any]) -> bool:
         await filter_panel.wait_for(state="visible", timeout=1000)
     
     # apply filters
-    logger.info("开始应用筛选条件: %s", filters)
+    logger.debug("开始应用筛选条件: %s", filters)
     for key, value in filters.items():
         if key == "只看第一学历":
             await filter_panel.locator("div.first-degree-wrap").click(timeout=1000)

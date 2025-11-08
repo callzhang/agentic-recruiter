@@ -5,7 +5,7 @@
     <div class="flex justify-between items-start">
         <div>
             <h2 class="text-2xl font-bold text-gray-900">{{ candidate.name or '未知候选人' }}</h2>
-            <p class="text-gray-600">{{ candidate.job_applied or candidate.job_title or '未指定岗位' }}</p>
+            <p class="text-gray-600">{{ candidate.job_applied or '未指定岗位' }}</p>
         </div>
         <div class="flex space-x-2">
             {% if candidate.stage %}
@@ -24,12 +24,13 @@
     <!-- Hidden context for HTMX requests -->
     <form id="candidate-context" class="hidden">
         <input type="hidden" name="chat_id" value="{{ candidate.chat_id or '' }}">
-        <input type="hidden" name="mode" value="{{ candidate.mode or 'chat' }}">
-        <input type="hidden" name="name" value="{{ candidate.name or '' }}">
+        <input type="hidden" name="mode" value="{{ candidate.mode}}">
+        <input type="hidden" name="name" value="{{ candidate.name}}">
         <input type="hidden" name="assistant_id" value="{{ assistant_id }}">
         <input type="hidden" name="job_id" value="{{ job_id }}">
+        <input type="hidden" name="job_applied" value="{{ job_applied or candidate.job_applied }}">
         <input type="hidden" name="conversation_id" value="{{ candidate.conversation_id or candidate.thread_id or '' }}">
-        <input type="hidden" name="index" value="{{ candidate.index}}">
+        <input type="hidden" name="index" value="{{ candidate.index if candidate.index is not none else '' }}">
     </form>
     
     <!-- 1. Resume Section -->
@@ -99,21 +100,6 @@
         </div>
     </div>
 
-    <!-- 4. Chat History (for chat mode only) -->
-    {% if candidate.mode != 'recommend' %}
-    <!-- <div class="bg-white rounded-lg border shadow-sm">
-        <div class="p-4 border-b bg-gray-50">
-            <h3 class="font-bold text-gray-800">💬 聊天记录</h3>
-        </div>
-        <div id="chat-history" 
-             hx-get="/candidates/history/{{ candidate.chat_id or candidate.id }}"
-             hx-trigger="load"
-             hx-swap="innerHTML"
-             class="p-4">
-            <div class="text-center text-gray-500">加载中...</div>
-        </div>
-    </div> -->
-    {% endif %}
 
     <!-- Manual Actions (always available) -->
     <div class="bg-gray-50 rounded-lg p-4 space-y-2">
@@ -153,42 +139,30 @@
 // Centralized Candidate Analysis & Workflow Logic
 // ============================================================================
 
-// Get threshold values from UI inputs in candidates.html (same document, loaded via HTMX)
 function getThresholdValues() {
-    const chatInput = document.getElementById('threshold-chat');
-    const borderlineInput = document.getElementById('threshold-borderline');
-    const seekInput = document.getElementById('threshold-seek');
-
     return {
-        chat: chatInput ? (parseFloat(chatInput.value) || 5.0) : 5.0,
-        borderline: borderlineInput ? (parseFloat(borderlineInput.value) || 7.0) : 7.0,
-        seek: seekInput ? (parseFloat(seekInput.value) || 9.0) : 9.0
+        chat: parseFloat(document.getElementById('threshold-chat')?.value) || 5.0,
+        borderline: parseFloat(document.getElementById('threshold-borderline')?.value) || 7.0,
+        seek: parseFloat(document.getElementById('threshold-seek')?.value) || 9.0
     };
 }
-// Handle resume loaded event using HTMX's hx-on::after-swap
-// when resume is loaded, we need to initialize a new chat thread
-// Then start analysis
+
 function handleResumeLoaded() {
-
     const textarea = document.querySelector('#resume-content textarea');
-
-    if (!textarea || !textarea.value) {
-        return;
-    }
-    resumeText = textarea.value;
-    const mode = document.querySelector('input[name="mode"]')?.value;
-    const chatId = document.querySelector('input[name="chat_id"]')?.value;
-    const name = document.querySelector('input[name="name"]')?.value;
-    const jobId = document.querySelector('input[name="job_id"]')?.value;
-
-    initializeNewChat(mode, chatId, jobId, name, resumeText).then((conversation_id) => {
+    if (!textarea?.value) return;
+    
+    const form = document.getElementById('candidate-context');
+    const resume_text = textarea.value;
+    const mode = form.querySelector('input[name="mode"]').value;
+    const chat_id = form.querySelector('input[name="chat_id"]').value;
+    const name = form.querySelector('input[name="name"]').value;
+    const job_id = form.querySelector('input[name="job_id"]').value;
+    console.log('handleResumeLoaded: job_id', job_id);
+    initializeNewChat(mode, chat_id, job_id, name, resume_text)
+    .then((conversation_id) => {
         updateFormData({'conversation_id': conversation_id});
-        showToast('简历加载完成，正在分析简历...', 'success');
+        showToast('简历加载完成，正在分析...', 'success');
         startAnalysis();
-    }).catch(err => {
-        console.error('Failed to analyze resume:', err);
-        showToast('初始化对话失败', 'error');
-        throw new Error('Failed to analyze resume');
     });
 }
 
@@ -199,152 +173,204 @@ function handleAnalysisComplete() {
     const analysisDiv = document.querySelector('#analysis-content #analysis-result-container');
     if (!analysisDiv) return;
     
-    try {
-        const analysis = JSON.parse(analysisDiv.getAttribute('data-analysis') || '{}');
-        const mode = analysisDiv.getAttribute('data-mode');
-        const conversationId = analysisDiv.getAttribute('data-conversation-id');
-        const chatId = analysisDiv.getAttribute('data-chat-id');
-        const name = analysisDiv.getAttribute('data-name');
-        const jobId = analysisDiv.getAttribute('data-job-id');
-        const assistantId = analysisDiv.getAttribute('data-assistant-id');
-        
-        // Get resume text from textarea if available, otherwise from data attribute
-        let resumeText = '';
-        const resumeTextarea = document.querySelector('#resume-section textarea');
-        if (resumeTextarea) {
-            resumeText = resumeTextarea.value || '';
+    const analysis = JSON.parse(analysisDiv.getAttribute('data-analysis'));
+    const mode = analysisDiv.getAttribute('data-mode');
+    const conversation_id = analysisDiv.getAttribute('data-conversation-id');
+    const chat_id = analysisDiv.getAttribute('data-chat-id');
+    const name = analysisDiv.getAttribute('data-name');
+    const job_applied = analysisDiv.getAttribute('data-job-applied');
+    const resumeTextarea = document.querySelector('#resume-section textarea');
+    const resume_text = resumeTextarea?.value || analysisDiv.getAttribute('data-resume-text');
+    
+    const { chat, seek } = getThresholdValues();
+    const overall_score = analysis.overall || 0;
+    
+    updateCandidateCard(chat_id, conversation_id, { score: overall_score });
+    
+    if (overall_score >= chat) {
+        showToast(`评分 ${overall_score} >= ${chat}，生成消息...`, 'success');
+        generateMessage(mode, conversation_id, job_applied, chat_id, name, resume_text, analysis);
+        if (overall_score >= seek) {
+            requestFullResume(mode, chat_id, job_applied);
         }
-        if (!resumeText) {
-            resumeText = analysisDiv.getAttribute('data-resume-text') || '';
-        }
-        
-        // Get thresholds from UI inputs
-        const { chat, borderline, seek } = getThresholdValues();
-        
-        // Compute flags based on overall score and thresholds
-        const overallScore = analysis.overall || 0;
-        const shouldGenerateGreet = overallScore >= borderline;
-        const shouldRequestResume = overallScore >= seek;
-        const shouldGenerateChat = overallScore >= chat;
-        
-        // For recommend/greet mode, handle sequential actions
-        if (shouldGenerateChat) {
-            showToast(`评分 ${overallScore} >= ${chat}，生成招呼消息...`, 'success');
-            generateMessage(mode, conversationId, assistantId, jobId, chatId, name, resumeText, analysis);
-            requestFullResume(mode, chatId, jobId);
-        } else {
-            showToast(`评分 ${overallScore} < ${chat}，不推荐`, 'warning');
-            return;
-        }
-        
-        saveCandidateToCloud(mode, conversationId, chatId, name, jobId, resumeText, analysis);
-        
-    } catch (e) {
-        console.error('Error handling analysis complete:', e);
+    } else {
+        showToast(`评分 ${overall_score} < ${chat}，不推荐`, 'warning');
     }
 }
 
-function generateMessage(mode, conversationId, assistantId, jobId, chatId, name, resumeText, analysis) {
-    const formData = new FormData();
-    formData.append('mode', mode);
-    formData.append('conversation_id', conversationId);
-    formData.append('job_id', jobId);
-    formData.append('purpose', 'CHAT_ACTION');
-    if (chatId) formData.append('chat_id', chatId);
-    
-    // Set up one-time event listener for message generation completion
+function generateMessage(mode, conversation_id, job_applied, chat_id, name, resume_text, analysis) {
     const messageTarget = document.getElementById('message-content');
-    const handler = function() {
-        // After message is generated, save to cloud
-        setTimeout(() => {
-            saveCandidateToCloud(mode, conversationId, chatId, name, jobId, resumeText, analysis);
-        }, 500);
+    messageTarget.addEventListener('htmx:afterSwap', function handler() {
+        setTimeout(() => saveCandidateToCloud(mode, conversation_id, chat_id, name, job_applied, resume_text, analysis), 500);
         messageTarget.removeEventListener('htmx:afterSwap', handler);
-    };
-    
-    if (messageTarget) {
-        messageTarget.addEventListener('htmx:afterSwap', handler, { once: true });
-    }
+    });
     
     htmx.ajax('POST', '/candidates/generate-message', {
         target: '#message-content',
         swap: 'innerHTML',
-        values: Object.fromEntries(formData)
+        values: { mode, conversation_id: conversation_id, job_applied: job_applied, purpose: 'CHAT_ACTION', chat_id: chat_id }
     });
 }
 
-function requestFullResume(mode, chatId, jobId) {
-    if (!chatId) {
-        console.error('Cannot request full resume: chat_id is missing');
-        showToast('无法请求完整简历：缺少 chat_id', 'error');
-        return;
-    }
-
-    if (mode !== 'chat' && mode !== 'greet' && mode !== 'followup') {
-        console.error('Mode must be chat, greet, or followup');
-        return;
-    }
+function requestFullResume(mode, chat_id, job_applied) {
+    if (!chat_id || !['chat', 'greet', 'followup'].includes(mode)) return;
     
-    // Call the browser action endpoint to request full resume from candidate
     fetch('/chat/resume/request_full', {
         method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ chat_id: chatId })
-    })
-    .then(response => {
-        if (!response.ok) {
-            return response.json().then(err => {
-                throw new Error(err.detail || `HTTP ${response.status}: ${response.statusText}`);
-            });
-        }
-        return response.json();
-    })
-    .then(data => {
-        if (data === true || data === 'true') {
-            showToast('✅ 已成功请求完整简历', 'success');
-        } else {
-            showToast('请求完整简历失败', 'error');
-        }
-    })
-    .catch(error => {
-        console.error('Error requesting full resume:', error);
-        showToast('请求完整简历时出错: ' + error.message, 'error');
-    });
-}
-
-function saveCandidateToCloud(mode, conversationId, chatId, name, jobId, resumeText, analysis) {
-    const formData = new FormData();
-    formData.append('mode', mode);
-    formData.append('conversation_id', conversationId);
-    formData.append('name', name);
-    formData.append('job_id', jobId);
-    formData.append('resume_text', resumeText);
-    formData.append('analysis', JSON.stringify(analysis));
-    // Use the latest message content as last_message for saving
-    const messageElement = document.getElementById('message-content');
-    if (messageElement) {
-        formData.append('last_message', messageElement.innerText || messageElement.textContent || '');
-    }
-    if (chatId) formData.append('chat_id', chatId);
-    
-    fetch('/candidates/save-to-cloud', {
-        method: 'POST',
-        body: formData
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({chat_id: chat_id})
     })
     .then(response => response.json())
-    .then(data => {
-        if (data.success) {
-            showToast('✅ 候选人已保存到云端', 'success');
-        } else {
-            showToast('保存失败: ' + (data.error || '未知错误'), 'error');
+    .then(data => showToast(data ? '✅ 已请求完整简历' : '请求失败', data ? 'success' : 'error'));
+}
+
+function saveCandidateToCloud(mode, conversation_id, chat_id, name, job_applied, resume_text, analysis) {
+    const formData = new FormData();
+    formData.append('conversation_id', conversation_id);
+    
+    // Get candidate_id from form if available
+    const form = document.getElementById('candidate-context');
+    const candidate_id = form?.querySelector('input[name="candidate_id"]')?.value;
+    if (candidate_id) formData.append('candidate_id', candidate_id);
+    
+    formData.append('name', name);
+    formData.append('job_applied', job_applied);
+    formData.append('resume_text', resume_text);
+    formData.append('analysis', JSON.stringify(analysis));
+    
+    if (chat_id) formData.append('chat_id', chat_id);
+    
+    const lastMessage = document.getElementById('message-text')?.value?.trim() || 
+                       document.getElementById('message-content')?.innerText?.trim();
+    if (lastMessage) formData.append('last_message', lastMessage);
+    
+    fetch('/candidates/save-to-cloud', {method: 'POST', body: formData})
+        .then(response => response.json())
+        .then(data => {
+            showToast('✅ 已保存', 'success');
+            updateCandidateCard(chat_id, conversation_id, {saved: true, score: data.score, viewed: true});
+        });
+}
+
+function updateCandidateCard(chat_id, conversation_id, updates) {
+    // Find the candidate card by chat_id, candidate_id, conversation_id, thread_id, or name+job
+    const candidateCards = document.querySelectorAll('.candidate-card');
+    let found = false;
+    
+    // Get name and job_applied from the form for fallback matching
+    const form = document.getElementById('candidate-context');
+    const name = form?.querySelector('input[name="name"]')?.value;
+    const job_applied = form?.querySelector('input[name="job_applied"]')?.value;
+    
+    // Debug: log what we're looking for
+    console.log('updateCandidateCard: searching for', { chat_id, conversation_id, name, job_applied, updates });
+    
+    candidateCards.forEach(card => {
+        const candidateData = JSON.parse(card.getAttribute('data-candidate') || '{}');
+        const cardId = card.getAttribute('data-candidate-id');
+        
+        // Match by multiple identifiers:
+        // 1. chat_id match (in data or cardId)
+        // 2. conversation_id match (direct, via thread_id, or in cardId)
+        // 3. Fallback: name + job_applied match (for cases where conversation_id isn't in card yet)
+        const matches = (chat_id && (candidateData.chat_id === chat_id || cardId === chat_id)) ||
+                       (conversation_id && (
+                           candidateData.conversation_id === conversation_id ||
+                           candidateData.thread_id === conversation_id ||
+                           cardId === conversation_id
+                       )) ||
+                       // Fallback: match by name and job_applied if we have them
+                       (name && job_applied && 
+                        candidateData.name === name && 
+                        candidateData.job_applied === job_applied);
+        
+        if (matches) {
+            console.log('Found matching candidate card:', { chat_id, conversation_id, candidateData, cardId });
+            // Update the card's data attributes
+            candidateData.saved = updates.saved;
+            candidateData.viewed = updates.viewed;
+            candidateData.score = updates.score;
+            // Store conversation_id in card data for future lookups
+            if (conversation_id && !candidateData.conversation_id && !candidateData.thread_id) {
+                candidateData.thread_id = conversation_id; // Store as thread_id for backward compatibility
+            }
+            card.setAttribute('data-candidate', JSON.stringify(candidateData));
+            
+            // Update saved tag
+            if (updates.saved !== undefined) {
+                const tagsContainer = card.querySelector('.flex.flex-wrap.gap-1');
+                if (tagsContainer) {
+                    let savedTag = tagsContainer.querySelector('[data-tag="saved"]');
+                    if (updates.saved && !savedTag) {
+                        savedTag = document.createElement('span');
+                        savedTag.className = 'inline-block px-2 py-1 text-xs rounded-full bg-blue-100 text-blue-700';
+                        savedTag.setAttribute('data-tag', 'saved');
+                        savedTag.textContent = '💾 已保存';
+                        tagsContainer.appendChild(savedTag);
+                    } else if (!updates.saved && savedTag) {
+                        savedTag.remove();
+                    }
+                }
+            }
+            
+            // Update viewed tag
+            if (updates.viewed !== undefined) {
+                candidateData.viewed = updates.viewed;
+                const tagsContainer = card.querySelector('.flex.flex-wrap.gap-1');
+                if (tagsContainer) {
+                    let viewedTag = tagsContainer.querySelector('[data-tag="viewed"]');
+                    if (updates.viewed && !viewedTag) {
+                        viewedTag = document.createElement('span');
+                        viewedTag.className = 'inline-block px-2 py-1 text-xs rounded-full bg-purple-100 text-purple-700';
+                        viewedTag.setAttribute('data-tag', 'viewed');
+                        viewedTag.textContent = '👁️ 已查看';
+                        tagsContainer.appendChild(viewedTag);
+                    } else if (!updates.viewed && viewedTag) {
+                        viewedTag.remove();
+                    }
+                }
+            }
+            
+            // Update score badge
+            if (updates.score !== undefined) {
+                const cardContainer = card.querySelector('.flex.items-start.space-x-3');
+                if (cardContainer) {
+                    let scoreBadge = cardContainer.querySelector('[data-badge="score"]');
+                    if (updates.score !== null && updates.score !== undefined && !scoreBadge) {
+                        scoreBadge = document.createElement('div');
+                        scoreBadge.className = 'absolute top-0 right-0 bg-gradient-to-r from-blue-500 to-indigo-600 text-white text-xs font-bold px-2 py-1 rounded-bl-lg rounded-tr-lg shadow-md';
+                        scoreBadge.setAttribute('data-badge', 'score');
+                        scoreBadge.textContent = updates.score.toString();
+                        cardContainer.appendChild(scoreBadge);
+                    } else if (scoreBadge) {
+                        if (updates.score !== null && updates.score !== undefined) {
+                            scoreBadge.textContent = updates.score.toString();
+                        } else {
+                            scoreBadge.remove();
+                        }
+                    }
+                }
+            }
+            found = true;
+            console.log('Updated candidate card:', candidateData);
         }
-    })
-    .catch(err => {
-        console.error('Failed to save candidate:', err);
-        showToast('保存失败', 'error');
     });
+    if (!found) {
+        const identifier = chat_id || conversation_id || 'unknown';
+        console.warn('updateCandidateCard: could not find card with identifier', identifier, 'total cards:', candidateCards.length);
+        // Debug: log all candidate data to help diagnose
+        candidateCards.forEach((card, index) => {
+            const candidateData = JSON.parse(card.getAttribute('data-candidate') || '{}');
+            const cardId = card.getAttribute('data-candidate-id');
+            console.log(`Card ${index}:`, {
+                cardId,
+                chat_id: candidateData.chat_id,
+                conversation_id: candidateData.conversation_id,
+                thread_id: candidateData.thread_id,
+                name: candidateData.name
+            });
+        });
+    }
 }
 
 // ============================================================================
@@ -378,26 +404,30 @@ function updateFormData(record) {
  * Start analysis (current flow)
  */
 function startAnalysis() {
-    const messageFormData = new FormData(document.getElementById('candidate-context'));
+    const form = document.getElementById('candidate-context');
+    const resumeTextarea = document.querySelector('#resume-content textarea');
+    const formData = new FormData(form);
+    formData.append('resume_text', resumeTextarea?.value || '');
+    
     htmx.ajax('POST', '/candidates/analyze', {
         target: '#analysis-content',
         swap: 'innerHTML',
-        values: Object.fromEntries(messageFormData)
-    })
+        values: Object.fromEntries(formData)
+    });
 }
 
 
 /**
  * Initialize new chat (current flow)
  */
-function initializeNewChat(mode, chatId, jobId, name, resumeText) {
+function initializeNewChat(mode, chat_id, job_id, name, resume_text) {
     showToast('初始化对话线程...', 'info');
     const formData = new FormData();
     formData.append('mode', mode);
-    if (chatId) formData.append('chat_id', chatId);
-    formData.append('job_id', jobId);
+    if (chat_id) formData.append('chat_id', chat_id);
+    formData.append('job_id', job_id);
     formData.append('name', name);
-    formData.append('resume_text', resumeText);
+    formData.append('resume_text', resume_text);
 
     return fetch('/candidates/init-chat', {
         method: 'POST',
@@ -407,12 +437,12 @@ function initializeNewChat(mode, chatId, jobId, name, resumeText) {
         return response.json();
     }).then(data => {
         console.log('Chat initialized:', data);
-        const conversationId = data.conversation_id;
-        if (conversationId) {
+        const conversation_id = data.conversation_id;
+        if (conversation_id) {
             // Add conversation_id to context
-            updateFormData({'conversation_id': conversationId})
+            updateFormData({'conversation_id': conversation_id})
         }
-        return conversationId;
+        return conversation_id;
     }).catch(err => {
         console.error('Failed to init chat:', err);
         showToast('初始化对话失败', 'error');

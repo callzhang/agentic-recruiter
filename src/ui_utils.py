@@ -14,11 +14,12 @@ RESUME_OVERLAY_SELECTOR = "div.boss-popup__wrapper"
 CLOSE_BTN = "div.boss-popup__close"
 
 
-async def ensure_on_chat_page(page: Page, settings, logger=logger, timeout_ms: int = 6000) -> bool:
+async def ensure_on_chat_page(page: Page, settings, logger=logger, timeout_ms: int = 15000) -> bool:
     """Navigate to the chat page when current URL is off target."""
     if settings.CHAT_URL not in getattr(page, "url", ""):
         await page.goto(settings.CHAT_URL, wait_until="domcontentloaded", timeout=timeout_ms)
-        await page.wait_for_load_state("networkidle", timeout=5000)
+        await page.wait_for_load_state("networkidle", timeout=timeout_ms)
+        await page.wait_for_selector('div.chat-user', timeout=timeout_ms)
     return True
 
 
@@ -74,6 +75,16 @@ async def close_overlay_dialogs(page: Page, timeout_ms: int = 1000) -> bool:
             return True
     except Exception:
         return False
+    
+    # Close recommendation page's popup dialog
+    try:
+        close_btn = page.locator("div.iboss-close").first
+        if await close_btn.count() > 0:
+            await close_btn.click(timeout=1000)
+            return True
+    except Exception:
+        pass
+    
     return False
 
 

@@ -135,7 +135,7 @@ pytest test/ -v
 ## 获取帮助
 
 - 📖 查看 [文档](docs/README.md)
-- 🏗️ 阅读 [架构文档](ARCHITECTURE.md)
+- 🏗️ 阅读 [架构文档](docs/architecture.md)
 - 🐛 查看 [Sentry Dashboard](https://sentry.io)
 
 ## 问题反馈
@@ -147,6 +147,6 @@ pytest test/ -v
 
 ---
 
-**快速链接**: [README](README.md) | [ARCHITECTURE](ARCHITECTURE.md) | [API 文档](docs/api.md)
+**快速链接**: [README](README.md) | [架构文档](docs/architecture.md) | [API 文档](docs/api.md)
 
 
