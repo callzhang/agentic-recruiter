@@ -358,38 +358,18 @@ async def analyze_candidate(
 
 
 @router.post("/save-to-cloud", response_class=JSONResponse)
-async def save_candidate_to_cloud(
-    candidate_id: str = Form(...),
-    conversation_id: str = Form(...),
-    chat_id: Optional[str] = Form(None),
-    name: str = Form(...),
-    job_applied: str = Form(...),
-    resume_text: str = Form(...),
-    analysis: str = Form(...),
-    last_message: Optional[str] = Form(None),
-):
-    """Save candidate record to Zilliz cloud."""
-    assert job_applied.strip(), "job_applied is required"
-    analysis_data = json.loads(analysis) if isinstance(analysis, str) else analysis
-    
-    candidate_store.upsert_candidate(
-        candidate_id=candidate_id,
-        chat_id=chat_id,
-        name=name,
-        job_applied=job_applied,
-        last_message=last_message or "",
-        resume_text=resume_text,
-        thread_id=conversation_id,
-        analysis=analysis_data,
-        stage=analysis_data.get("stage"),
-    )
-    
-    results = candidate_store.get_candidates(identifiers=[conversation_id], limit=1)
-    score = None
-    if results and results[0].get("analysis"):
-        score = results[0]["analysis"].get("overall")
-    
-    return JSONResponse(content={"success": True, "saved": True, "score": score})
+async def save_candidate_to_cloud(**kwargs):
+    """Save candidate record to Zilliz cloud using all form kwargs."""
+    # Parse analysis back to dict if sent as JSON string
+    analysis = kwargs.get("analysis")
+    if isinstance(analysis, str):
+        kwargs["analysis"] = json.loads(analysis)
+    # Only require job_applied and at least one ID
+    assert 'job_applied' in kwargs, "job_applied is required"
+
+    # upsert_candidate passes all relevant kwargs
+    candidate_id = candidate_store.upsert_candidate(**kwargs)
+    return candidate_id
 
 
 @router.post("/generate-message", response_class=HTMLResponse)

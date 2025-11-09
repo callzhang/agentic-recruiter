@@ -144,7 +144,7 @@ class CandidateStore:
             resume_text: Will be truncated to 25000 characters if longer (field max_length).
         """
         if not self.enabled or not self.collection:
-            return False
+            return None
         
         kwargs['resume_text'] = kwargs['resume_text'][:8000]
         kwargs['updated_at'] = datetime.now().isoformat()
@@ -156,10 +156,10 @@ class CandidateStore:
         try:
             result = self.collection.insert([data])
             self.collection.flush()
-            return result.insert_count == 1
+            return result.primary_keys[0]
         except Exception as exc:
             logger.exception("Failed to insert candidate %s: %s", kwargs['name'], exc)
-            return False
+            return None
 
     def _update_candidate(
         self,
@@ -175,12 +175,12 @@ class CandidateStore:
         
         try:
             # Use Milvus native upsert - it handles insert/update automatically
-            self.collection.upsert([data], partial_update=True)
+            result = self.collection.upsert([data], partial_update=True)
             self.collection.flush()
-            return True
+            return result.primary_keys[0]
         except Exception as exc:
             logger.exception("Failed to update candidate %s: %s", candidate_id, exc)
-            return False
+            return None
 
 
     def upsert_candidate(self, **kwargs) -> bool:
@@ -213,8 +213,11 @@ class CandidateStore:
             
             # Query using get_candidates
             results = self.get_candidates(identifiers=identifiers, limit=1)
-            # assert len(results) <= 1, "Multiple candidates found for the same identifiers"
-            existing_candidate = results[0] if results else None
+            if not results:
+                existing_candidate = None
+                logger.error(f"Candidate not found: {identifiers}")
+            else:
+                existing_candidate = results[0]
         else:
             existing_candidate = None
 
@@ -229,10 +232,10 @@ class CandidateStore:
                 kwargs["resume_vector"] = resume_vector
             
             logger.debug(f"Creating new candidate: {kwargs['name']}-{kwargs['job_applied']}")
-            result = self._insert_candidate(**kwargs)
-            if not result:
+            pk = self._insert_candidate(**kwargs)
+            if not pk:
                 logger.error(f"Failed to create new candidate: {kwargs['name']}")
-            return result
+            return pk
         else:
             # Update existing candidate
             if kwargs.get("resume_text") and (existing_candidate.get("resume_text") != kwargs.get("resume_text")):
@@ -240,10 +243,10 @@ class CandidateStore:
                 resume_vector = get_embedding(kwargs.get("resume_text"))
                 kwargs["resume_vector"] = resume_vector
             existing_candidate.update(kwargs)
-            result = self._update_candidate(**existing_candidate)
-            if not result:
+            pk = self._update_candidate(**existing_candidate)
+            if not pk:
                 logger.error("Failed to update existing candidate: %s", kwargs['name'])
-            return result
+            return pk
 
 # ------------------------------------------------------------------
 # Candidate record search operations

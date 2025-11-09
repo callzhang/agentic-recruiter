@@ -77,7 +77,9 @@
         <div class="p-4 border-b bg-gray-50">
             <h3 class="font-bold text-gray-800">✨ 自动生成消息</h3>
         </div>
-        <div id="message-content" class="p-4">
+        <div id="message-content" 
+             class="p-4"
+             hx-on::after-swap="handleMessageGenerated()">
             {% if generated_message %}
             <div class="space-y-4">
                 <textarea id="message-text" name="message" class="w-full h-32 p-4 border rounded-lg">{{ generated_message }}</textarea>
@@ -182,15 +184,15 @@ function handleAnalysisComplete() {
     const resumeTextarea = document.querySelector('#resume-section textarea');
     const resume_text = resumeTextarea?.value || analysisDiv.getAttribute('data-resume-text');
     
-    const { chat, seek } = getThresholdValues();
+    const { chat_threshold, borderline_threshold, seek_threshold } = getThresholdValues();
     const overall_score = analysis.overall || 0;
     
     updateCandidateCard(chat_id, conversation_id, { score: overall_score });
     
-    if (overall_score >= chat) {
-        showToast(`评分 ${overall_score} >= ${chat}，生成消息...`, 'success');
+    if (overall_score >= chat_threshold) {
+        showToast(`评分 ${overall_score} >= ${chat_threshold}，生成消息...`, 'success');
         generateMessage(mode, conversation_id, job_applied, chat_id, name, resume_text, analysis);
-        if (overall_score >= seek) {
+        if (overall_score >= borderline_threshold) {
             requestFullResume(mode, chat_id, job_applied);
         }
     } else {
@@ -199,17 +201,33 @@ function handleAnalysisComplete() {
 }
 
 function generateMessage(mode, conversation_id, job_applied, chat_id, name, resume_text, analysis) {
-    const messageTarget = document.getElementById('message-content');
-    messageTarget.addEventListener('htmx:afterSwap', function handler() {
-        setTimeout(() => saveCandidateToCloud(mode, conversation_id, chat_id, name, job_applied, resume_text, analysis), 500);
-        messageTarget.removeEventListener('htmx:afterSwap', handler);
-    });
-    
+
+    showToast('生成消息...', 'info');
     htmx.ajax('POST', '/candidates/generate-message', {
         target: '#message-content',
         swap: 'innerHTML',
         values: { mode, conversation_id: conversation_id, job_applied: job_applied, purpose: 'CHAT_ACTION', chat_id: chat_id }
     });
+}
+
+function handleMessageGenerated() {
+    // Called via hx-on::after-swap when message is generated
+    const messageTarget = document.getElementById('message-content');
+    const analysis = JSON.parse(messageTarget.getAttribute('data-analysis') || '{}');
+    const mode = messageTarget.getAttribute('data-mode');
+    const conversation_id = messageTarget.getAttribute('data-conversation-id');
+    const chat_id = messageTarget.getAttribute('data-chat-id');
+    const name = messageTarget.getAttribute('data-name');
+    const job_applied = messageTarget.getAttribute('data-job-applied');
+    
+    // Get resume_text from textarea
+    const resumeTextarea = document.querySelector('#resume-section textarea');
+    const resume_text = resumeTextarea?.value || '';
+    
+    // Save candidate after a short delay to ensure message is rendered
+    setTimeout(() => {
+        saveCandidateToCloud(mode, conversation_id, chat_id, name, job_applied, resume_text, analysis);
+    }, 500);
 }
 
 function requestFullResume(mode, chat_id, job_applied) {
@@ -220,8 +238,12 @@ function requestFullResume(mode, chat_id, job_applied) {
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({chat_id: chat_id})
     })
-    .then(response => response.json())
-    .then(data => showToast(data ? '✅ 已请求完整简历' : '请求失败', data ? 'success' : 'error'));
+    .then(handleApiResponse)
+    .then(data => showToast(data ? '✅ 已请求完整简历' : '请求失败', data ? 'success' : 'error'))
+    .catch(err => {
+        console.error('Request full resume failed:', err);
+        showToast(`请求完整简历失败: ${err.message}`, 'error');
+    });
 }
 
 function saveCandidateToCloud(mode, conversation_id, chat_id, name, job_applied, resume_text, analysis) {
@@ -245,10 +267,14 @@ function saveCandidateToCloud(mode, conversation_id, chat_id, name, job_applied,
     if (lastMessage) formData.append('last_message', lastMessage);
     
     fetch('/candidates/save-to-cloud', {method: 'POST', body: formData})
-        .then(response => response.json())
-        .then(data => {
+        .then(handleApiResponse)
+        .then(candidate_id => {
             showToast('✅ 已保存', 'success');
-            updateCandidateCard(chat_id, conversation_id, {saved: true, score: data.score, viewed: true});
+            updateCandidateCard(chat_id, conversation_id, {saved: true, score: analysis.overall, viewed: true});
+        })
+        .catch(err => {
+            console.error('Save failed:', err);
+            showToast(`保存失败: ${err.message}`, 'error');
         });
 }
 
@@ -396,10 +422,6 @@ function updateFormData(record) {
 }
 
 
-
-
-
-
 /**
  * Start analysis (current flow)
  */
@@ -432,10 +454,9 @@ function initializeNewChat(mode, chat_id, job_id, name, resume_text) {
     return fetch('/candidates/init-chat', {
         method: 'POST',
         body: formData
-    }).then(response => {
-        if (!response.ok) throw new Error('Init chat failed');
-        return response.json();
-    }).then(data => {
+    })
+    .then(handleApiResponse)
+    .then(data => {
         console.log('Chat initialized:', data);
         const conversation_id = data.conversation_id;
         if (conversation_id) {
@@ -445,8 +466,8 @@ function initializeNewChat(mode, chat_id, job_id, name, resume_text) {
         return conversation_id;
     }).catch(err => {
         console.error('Failed to init chat:', err);
-        showToast('初始化对话失败', 'error');
-        throw new Error('Failed to init chat');
+        showToast(`初始化对话失败: ${err.message}`, 'error');
+        throw err;
     });
 }
 

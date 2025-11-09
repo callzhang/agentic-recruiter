@@ -382,6 +382,53 @@ document.body.addEventListener('htmx:beforeRequest', function(event) {
 });
 
 // ============================================================================
+// Unified API Error Handler
+// ============================================================================
+
+/**
+ * Unified error handler for fetch() calls to FastAPI
+ * 
+ * Handles FastAPI validation errors (422) and other server errors,
+ * providing consistent error messages across the application.
+ * 
+ * @param {Response} response - Fetch Response object
+ * @returns {Promise<any>} Parsed JSON response data
+ * @throws {Error} Error with descriptive message
+ * 
+ * @example
+ * fetch('/api/endpoint', { method: 'POST', body: formData })
+ *     .then(handleApiResponse)
+ *     .then(data => console.log('Success:', data))
+ *     .catch(err => showToast(`Error: ${err.message}`, 'error'));
+ */
+window.handleApiResponse = async function handleApiResponse(response) {
+    if (response.ok) {
+        // FastAPI normal response
+        return await response.json();
+    }
+    
+    // Try parse the JSON error body
+    let errorData;
+    try {
+        errorData = await response.json();
+    } catch {
+        throw new Error(`HTTP ${response.status} ${response.statusText}`);
+    }
+    
+    // 422: ValidationError or custom detail structure
+    if (response.status === 422 && errorData.detail) {
+        const errors = errorData.detail
+            .map(e => `${e.loc.join('.')}: ${e.msg}`)
+            .join(', ');
+        throw new Error(`Validation failed: ${errors}`);
+    }
+    
+    // Other server errors
+    const message = errorData.error || errorData.detail || response.statusText;
+    throw new Error(`Server error (${response.status}): ${message}`);
+}
+
+// ============================================================================
 // Global HTMX Event Listeners
 // ============================================================================
 
