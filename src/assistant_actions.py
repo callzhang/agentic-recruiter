@@ -43,12 +43,10 @@ ACTION_PROMPTS = {
 请直接生成一条可以发送给候选人的自然语言消息，不要超过100字。不要发模板或者嵌入占位符，不要使用任何格式化、引号、JSON或括号。
 """,
     "ANALYZE_ACTION": f"""请根据岗位描述，对候选人的简历进行打分，用于决定是否继续推进。
-尤其是keyword里面的正负向关键词要进行加分和减分。
-另外也要仔细查看候选人的项目经历，检查是否有言过其词的情况。
-最后，还要查看候选人的过往工作经历，判断是否符合岗位要求。
-请给出 1-10 的四个评分：技能匹配度、创业契合度、基础背景、综合评分，并提供简要分析。
-整体文字不要超过500字。
-""",
+        重点关注keyword里面的正负向关键词要进行加分和减分。
+        仔细查看候选人的项目经历，检查是否有言过其词的情况。
+        最后，还要查看候选人的过往工作经历，判断是否符合岗位要求。
+        请给出 1-10 的四个评分：技能匹配度、创业契合度、基础背景、综合评分，并提供简要分析。""",
     "CONTACT_ACTION": "请发出一条请求候选人电话或者微信的消息。不要超过50字。且能够直接发送给候选人的文字，不要发模板或者嵌入占位符。请用纯文本回复，不要使用markdown、json格式。",
     "FINISH_ACTION": "已经完成所有动作，等待候选人回复。",
     "PLAN_PROMPTS": f"""请根据上述沟通历史，决定下一步操作。输出格式：
@@ -67,7 +65,7 @@ class AnalysisSchema(BaseModel):
     background: int = Field(description="基础背景、学历优秀程度、逻辑思维能力，满分10分")
     overall: int = Field(description="综合评分，满分10分")
     summary: str = Field(description="分析总结，不要超过200字")
-    followup_tips: str = Field(description="后续招聘顾问跟进的沟通策略，不要超过100字")
+    followup_tips: str = Field(description="后续招聘顾问跟进的沟通策略，不要超过200字")
 
 
 # Assistants ----------------------------------------------------
@@ -91,7 +89,7 @@ def init_chat(
     Initialize conversation and Zilliz record.
     
     Creates OpenAI conversation with job description and resume, then creates/updates Zilliz record
-    with conversation_id (stored as thread_id field) for future message generation.
+    with conversation_id for future message generation.
     
     Note: This function is called ONLY when we have the resume_text and BEFORE analyzing it.
     
@@ -133,7 +131,7 @@ def init_chat(
         job_applied=job_info["position"],
         resume_text=resume_text,
         stage=None,  # Not analyzed yet
-        thread_id=conversation.id,  # Store conversation_id in thread_id field for backward compatibility
+        conversation_id=conversation.id,
     )
     if not success:
         raise ValueError("Failed to create candidate record")
@@ -143,7 +141,7 @@ def init_chat(
 ## ------------Main Message Generation----------------------------------
 
 def generate_message(
-    input_message: str,
+    input_message: str|list[dict[str, str]],
     conversation_id: str,
     purpose: str
 ) -> Dict[str, Any]:
@@ -178,19 +176,26 @@ def generate_message(
         json_schema = AnalysisSchema
     else:
         json_schema = None
+
+    # check input_message if list: { "type": "message", "role": "user", "content": "This is my new input." },
+    if isinstance(input_message, list):
+        for item in input_message:
+            assert 'role' in item and 'content' in item, "input_message must be a list of dict with role, content"
     
     # Create a new run
     if json_schema:
-        response = _openai_client.responses.parse(
-            conversation=conversation_id,
-            instructions=instruction,
-            input= f'请查看我的简历:\n{input_message}',
-            text_format=json_schema,
-            model="gpt-5-mini",
-        )
-        result = response.output_parsed.model_dump() 
         if purpose == "ANALYZE_ACTION":
-            candidate_store.upsert_candidate(thread_id=conversation_id, analysis=result)
+            response = _openai_client.responses.parse(
+                conversation=conversation_id,
+                instructions=instruction,
+                input= input_message,
+                text_format=json_schema,
+                model="gpt-5-mini",
+            )
+            result = response.output_parsed.model_dump() 
+            candidate_store.upsert_candidate(conversation_id=conversation_id, analysis=result)
+        else:
+            raise NotImplementedError(f"Unsupported purpose: {purpose}")
         return result
     else:
         response = _openai_client.responses.create(

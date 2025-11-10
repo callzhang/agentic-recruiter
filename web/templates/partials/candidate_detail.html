@@ -26,48 +26,39 @@
         <input type="hidden" name="chat_id" value="{{ candidate.chat_id or '' }}">
         <input type="hidden" name="mode" value="{{ candidate.mode}}">
         <input type="hidden" name="name" value="{{ candidate.name}}">
-        <input type="hidden" name="assistant_id" value="{{ assistant_id }}">
-        <input type="hidden" name="job_id" value="{{ job_id }}">
-        <input type="hidden" name="job_applied" value="{{ job_applied or candidate.job_applied }}">
-        <input type="hidden" name="conversation_id" value="{{ candidate.conversation_id or candidate.thread_id or '' }}">
-        <input type="hidden" name="index" value="{{ candidate.index if candidate.index is not none else '' }}">
+        <!-- <input type="hidden" name="assistant_id" value="{{ assistant_id }}"> -->
+        <input type="hidden" name="job_id" value="{{ candidate.job_id }}">
+        <input type="hidden" name="job_applied" value="{{ candidate.job_applied }}">
+        <input type="hidden" name="conversation_id" value="{{ candidate.conversation_id or '' }}">
+        <input type="hidden" name="index" value="{{ candidate.index or '' }}">
+        <input type="hidden" name="candidate_id" value="{{ candidate.candidate_id or '' }}">
     </form>
     
     <!-- 1. Resume Section -->
     <div id="resume-section" class="bg-white rounded-lg border shadow-sm">
-        <div class="p-4 border-b bg-gray-50">
+        <div class="p-2 border-b bg-gray-50">
             <h3 class="font-bold text-gray-800">📄 候选人简历</h3>
         </div>
-        {% if candidate.resume_text or candidate.full_resume %}
-        <textarea readonly class="w-full h-64 p-4 bg-gray-50 border rounded-lg font-mono text-sm">{{ candidate.full_resume or candidate.resume_text }}</textarea>
-        {% else %}
-        <div id="resume-content" class="text-center py-8 text-gray-500" 
-            hx-post="{% if candidate.mode == 'recommend' %}/candidates/fetch-recommend-resume{% else %}/candidates/fetch-online-resume{% endif %}" 
-            hx-trigger="load"
-            hx-include="#candidate-context"
-            hx-target="#resume-content"
-            hx-swap="innerHTML"
-            hx-on::after-swap="handleResumeLoaded()"
-            hx-on::htmx:after-swap="handleResumeLoaded()"> 
-            ⏳ 正在加载简历...
+        <div id="resume-content" class="p-2" hx-on::after-swap="saveCandidateToCloud();"> 
+            {% if candidate.resume_text or candidate.full_resume %}
+            <textarea readonly class="w-full h-64 p-2 bg-gray-50 border rounded-lg font-mono text-sm">{{ candidate.full_resume or candidate.resume_text }}</textarea>
+            {% else %}
+            <div class="text-center py-8 text-gray-500">⏳ 正在加载简历...</div>
+            {% endif %}
         </div>
-        {% endif %}
     </div>
 
     <!-- 2. Analysis Section -->
     <div id="analysis-section" class="bg-white rounded-lg border shadow-sm">
-        <div class="p-4 border-b bg-gray-50">
+        <div class="p-2 border-b bg-gray-50">
             <h3 class="font-bold text-gray-800">📊 AI 分析结果</h3>
         </div>
-        <div id="analysis-content" 
-             class="p-4"
-             hx-on::after-swap="handleAnalysisComplete()">
+        <div id="analysis-content" class="p-2"
+             hx-on::after-swap="saveCandidateToCloud(); ">
             {% if candidate.analysis %}
                 {% include 'partials/analysis_result.html' %}
             {% else %}
-            <div class="text-center py-8 text-gray-500" id="analysis-trigger">
-                ⏳ 等待简历加载完成后自动分析...
-            </div>
+            <div class="text-center py-8 text-gray-500">⏳ 等待简历加载完成后自动分析...</div>
             {% endif %}
         </div>
     </div>
@@ -77,61 +68,48 @@
         <div class="p-4 border-b bg-gray-50">
             <h3 class="font-bold text-gray-800">✨ 自动生成消息</h3>
         </div>
-        <div id="message-content" 
-             class="p-4"
-             hx-on::after-swap="handleMessageGenerated()">
-            {% if generated_message %}
-            <div class="space-y-4">
-                <textarea id="message-text" name="message" class="w-full h-32 p-4 border rounded-lg">{{ generated_message }}</textarea>
-                <div class="flex space-x-2">
-                    <button hx-post="/candidates/send"
-                            hx-include="#candidate-context,#message-text"
-                            class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700">
-                        📤 发送消息
-                    </button>
-                    <button hx-post="/candidates/pass"
-                            hx-include="#candidate-context"
-                            class="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700">
-                        ⏭️ PASS
-                    </button>
-                </div>
-            </div>
+        <div id="message-content" class="p-2" hx-on::after-swap="saveCandidateToCloud();">
+            {% if candidate.last_message %}
+            <textarea id="message-text" name="message" class="w-full h-32 p-2 border rounded-lg">{{ candidate.last_message }}</textarea>
             {% else %}
-            <div class="text-center py-8 text-gray-500">分析完成后，如果匹配度达标将自动生成...</div>
+            <div class="text-center py-8 text-gray-500">⏳分析完成后，如果匹配度达标，将自动生成...</div>
             {% endif %}
         </div>
-    </div>
-
-
-    <!-- Manual Actions (always available) -->
-    <div class="bg-gray-50 rounded-lg p-4 space-y-2">
-        <h3 class="font-bold text-gray-800 mb-2">🔧 手动操作</h3>
-        <div class="flex flex-wrap gap-2">
-            <button hx-post="{% if candidate.mode == 'recommend' %}/candidates/fetch-recommend-resume{% else %}/candidates/fetch-online-resume{% endif %}"
-                    hx-include="#candidate-context"
-                    hx-target="#resume-content"
-                    hx-swap="innerHTML"
-                    class="px-3 py-1 bg-blue-600 text-white text-sm rounded hover:bg-blue-700">
-                🔄 重新获取简历
+        <div class="flex p-2 gap-2">
+            <button onclick="sendGreetAndMessage()"
+                    class="px-4 py-1 bg-green-400 text-white text-sm rounded hover:bg-green-700">
+                📤 打招呼+发送消息
             </button>
-            <button hx-post="/candidates/analyze"
+            <button hx-post="/candidates/pass"
                     hx-include="#candidate-context"
-                    hx-target="#analysis-content"
-                    hx-swap="innerHTML"
-                    onclick="this.setAttribute('hx-vals', JSON.stringify({resume_text: document.querySelector('#resume-content textarea')?.value || ''}))"
-                    class="px-3 py-1 bg-purple-600 text-white text-sm rounded hover:bg-purple-700">
-                🔄 重新分析
+                    hx-target="body"
+                    hx-swap="none"
+                    class="px-4 py-1 bg-gray-400 text-white text-sm rounded hover:bg-gray-700">
+                ❌ PASS
             </button>
-            <button hx-post="/candidates/generate-message"
-                    hx-include="#candidate-context"
-                    hx-target="#message-content"
-                    hx-swap="innerHTML"
-                    hx-vals='{"purpose": "CHAT_ACTION"}'
-                    class="px-3 py-1 bg-indigo-600 text-white text-sm rounded hover:bg-indigo-700">
+            <button onclick="generateMessage()"
+                    class="px-3 py-1 bg-indigo-400 text-white text-sm rounded hover:bg-indigo-700">
                 🔄 重新生成消息
             </button>
         </div>
     </div>
+
+
+    <!-- Manual Actions (always available)
+    <div class="bg-gray-50 rounded-lg p-4 space-y-2">
+        <h3 class="font-bold text-gray-800 mb-2">🔧 手动操作</h3>
+        <div class="flex flex-wrap gap-2">
+            <button onclick="fetchResume()"
+                    class="px-3 py-1 bg-yellow-400 text-white text-sm rounded hover:bg-yellow-700">
+                🔄 重新获取简历
+            </button>
+            <button onclick="startAnalysis()"
+                    class="px-3 py-1 bg-purple-400 text-white text-sm rounded hover:bg-purple-700">
+                🔄 重新分析
+            </button>
+            
+        </div>
+    </div> -->
 
 </div>
 
@@ -141,222 +119,289 @@
 // Centralized Candidate Analysis & Workflow Logic
 // ============================================================================
 
-function getThresholdValues() {
-    return {
-        chat: parseFloat(document.getElementById('threshold-chat')?.value) || 5.0,
-        borderline: parseFloat(document.getElementById('threshold-borderline')?.value) || 7.0,
-        seek: parseFloat(document.getElementById('threshold-seek')?.value) || 9.0
-    };
-}
-
-function handleResumeLoaded() {
-    const textarea = document.querySelector('#resume-content textarea');
-    if (!textarea?.value) return;
-    
+async function process_candidate() {
     const form = document.getElementById('candidate-context');
-    const resume_text = textarea.value;
-    const mode = form.querySelector('input[name="mode"]').value;
-    const chat_id = form.querySelector('input[name="chat_id"]').value;
-    const name = form.querySelector('input[name="name"]').value;
-    const job_id = form.querySelector('input[name="job_id"]').value;
-    console.log('handleResumeLoaded: job_id', job_id);
-    initializeNewChat(mode, chat_id, job_id, name, resume_text)
-    .then((conversation_id) => {
-        updateFormData({'conversation_id': conversation_id});
-        showToast('简历加载完成，正在分析...', 'success');
-        startAnalysis();
-    });
-}
-
-
-// Handle analysis completion after HTMX swap
-// This function is called via hx-on::after-swap on #analysis-content element
-function handleAnalysisComplete() {
-    const analysisDiv = document.querySelector('#analysis-content #analysis-result-container');
-    if (!analysisDiv) return;
+    const formData = new FormData(form);
+    const mode = formData.get('mode');
     
-    const analysis = JSON.parse(analysisDiv.getAttribute('data-analysis'));
-    const mode = analysisDiv.getAttribute('data-mode');
-    const conversation_id = analysisDiv.getAttribute('data-conversation-id');
-    const chat_id = analysisDiv.getAttribute('data-chat-id');
-    const name = analysisDiv.getAttribute('data-name');
-    const job_applied = analysisDiv.getAttribute('data-job-applied');
-    const resumeTextarea = document.querySelector('#resume-section textarea');
-    const resume_text = resumeTextarea?.value || analysisDiv.getAttribute('data-resume-text');
-    
-    const { chat_threshold, borderline_threshold, seek_threshold } = getThresholdValues();
-    const overall_score = analysis.overall || 0;
-    
-    updateCandidateCard(chat_id, conversation_id, { score: overall_score });
-    
-    if (overall_score >= chat_threshold) {
-        showToast(`评分 ${overall_score} >= ${chat_threshold}，生成消息...`, 'success');
-        generateMessage(mode, conversation_id, job_applied, chat_id, name, resume_text, analysis);
-        if (overall_score >= borderline_threshold) {
-            requestFullResume(mode, chat_id, job_applied);
+    try {
+        // Step 1: Ensure resume is loaded
+        const resume_div = document.getElementById('resume-content');
+        if (resume_div && resume_div.textContent.includes('⏳')) {
+            await fetchResume().then(() => {
+                //TODO: check for candidate_id by resume_text if not exists
+            });
         }
-    } else {
-        showToast(`评分 ${overall_score} < ${chat}，不推荐`, 'warning');
+        
+        // Step 2: Initialize chat if no conversation_id
+        let conversation_id = formData.get('conversation_id');
+        if (!conversation_id) {
+            conversation_id = await initializeNewChat();
+            updateCandidateData({'conversation_id': conversation_id});
+        }
+        
+        // Step 3: Start analysis if pending
+        const analysisDiv = document.getElementById('analysis-content');
+        if (analysisDiv.textContent.includes('⏳') && !resume_div.textContent.includes('⏳')) {
+            await startAnalysis();
+            // saveCandidateToCloud() is called by hx-on::after-swap
+        }
+        
+        // Step 4: Check threshold and generate message if needed
+        const analysis_container = document.querySelector('#analysis-content #analysis-result-container');
+        const analysis = analysis_container ? JSON.parse(analysis_container.getAttribute('data-analysis')) : null;
+        const overall_score = analysis?.overall || 0;
+        const { chat_threshold, borderline_threshold } = getThresholdValues();
+        
+        if (overall_score >= chat_threshold) {
+            const messageDiv = document.getElementById('message-content');
+            if (messageDiv && messageDiv.textContent.includes('⏳')) {
+                await generateMessage();
+            }
+            if (overall_score >= borderline_threshold) {
+                requestFullResume();
+            }
+        }
+    } catch (err) {
+        console.error('Workflow error:', err);
+        showToast(`处理失败: ${err.message}`, 'error');
     }
 }
 
-function generateMessage(mode, conversation_id, job_applied, chat_id, name, resume_text, analysis) {
-
-    showToast('生成消息...', 'info');
-    htmx.ajax('POST', '/candidates/generate-message', {
-        target: '#message-content',
+function fetchResume() {
+    showToast('抓取在线简历...', 'info');
+    form = document.getElementById('candidate-context');
+    const formData = new FormData(form);
+    const mode = formData.get('mode');
+    return htmxAjaxPromise('POST', mode == 'recommend'?"/candidates/fetch-recommend-resume":"/candidates/fetch-online-resume", {
+        target: '#resume-content',
         swap: 'innerHTML',
-        values: { mode, conversation_id: conversation_id, job_applied: job_applied, purpose: 'CHAT_ACTION', chat_id: chat_id }
+        source: '#candidate-context'
     });
 }
 
-function handleMessageGenerated() {
-    // Called via hx-on::after-swap when message is generated
-    const messageTarget = document.getElementById('message-content');
-    const analysis = JSON.parse(messageTarget.getAttribute('data-analysis') || '{}');
-    const mode = messageTarget.getAttribute('data-mode');
-    const conversation_id = messageTarget.getAttribute('data-conversation-id');
-    const chat_id = messageTarget.getAttribute('data-chat-id');
-    const name = messageTarget.getAttribute('data-name');
-    const job_applied = messageTarget.getAttribute('data-job-applied');
-    
-    // Get resume_text from textarea
-    const resumeTextarea = document.querySelector('#resume-section textarea');
-    const resume_text = resumeTextarea?.value || '';
-    
-    // Save candidate after a short delay to ensure message is rendered
-    setTimeout(() => {
-        saveCandidateToCloud(mode, conversation_id, chat_id, name, job_applied, resume_text, analysis);
-    }, 500);
+function generateMessage() {
+    showToast('生成消息...', 'info');
+    const chat_id = getCandidateData('chat_id');
+    fetch(`/chat/${chat_id}/messages`, {
+        method: 'GET',
+        headers: {'Content-Type': 'application/json'}
+    }).then(window.handleApiResponse)
+    .then(data => {
+        showToast(data ? '✅ 已获得对话记录' : '请求失败', data ? 'success' : 'error');
+        return htmxAjaxPromise('POST', '/candidates/generate-message', {
+            target: '#message-content',
+            swap: 'innerHTML',
+            source: '#candidate-context',
+            values: {'purpose': 'CHAT_ACTION'}
+        });
+    });
 }
 
-function requestFullResume(mode, chat_id, job_applied) {
-    if (!chat_id || !['chat', 'greet', 'followup'].includes(mode)) return;
+function sendGreetAndMessage() {
+    showToast('打招呼+发送消息...', 'info');
+    const message_textarea = document.getElementById('message-text');
+    const message = message_textarea.value.trim();
+    const chat_id = getCandidateData('chat_id');
+    return htmxAjaxPromise('POST', '/candidates/send', {
+            target: '#message-content',
+            swap: 'none',
+            source: '#candidate-context',
+            values: {'message': message}
+    }).then(() => {
+        showToast('消息发送成功！', 'success');
+        updateCandidateData({'stage': 'GREET', 'greeted': true});
+        updateCandidateCard({stage: 'GREET', greeted: true});
+    }).catch(err => {
+        showToast('消息发送失败！', 'error');
+    });
+}
+
+function requestFullResume() {
+    debugger;
+    const chat_id = getCandidateData('chat_id');
+    const mode = getCandidateData('mode');
     
+    if (!chat_id || !['chat', 'greet', 'followup'].includes(mode)) {
+        console.log('Skip requestFullResume: not a chat mode or no chat_id');
+        return;
+    }
+    showToast('请求完整简历...', 'info');
     fetch('/chat/resume/request_full', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({chat_id: chat_id})
     })
-    .then(handleApiResponse)
-    .then(data => showToast(data ? '✅ 已请求完整简历' : '请求失败', data ? 'success' : 'error'))
-    .catch(err => {
-        console.error('Request full resume failed:', err);
-        showToast(`请求完整简历失败: ${err.message}`, 'error');
+    .then(window.handleApiResponse)
+    .then(data => showToast(data ? '✅ 已请求完整简历' : '请求失败', data ? 'success' : 'error'));
+}
+
+
+
+/**
+ * Start analysis (current flow)
+ */
+ function startAnalysis() {
+    showToast('开始分析...', 'info');
+    // const resumeTextarea = document.querySelector('#resume-content textarea');
+    return htmxAjaxPromise('POST', '/candidates/analyze', {
+        source: '#candidate-context',
+        target: '#analysis-content',
+        swap: 'innerHTML',
+        // values: {'resume_text': resumeTextarea.value }
     });
 }
 
-function saveCandidateToCloud(mode, conversation_id, chat_id, name, job_applied, resume_text, analysis) {
-    const formData = new FormData();
-    formData.append('conversation_id', conversation_id);
-    
-    // Get candidate_id from form if available
+/**
+ * Initialize new chat - reads all data from DOM
+ */
+function initializeNewChat() {
+    showToast('初始化对话线程...', 'info');
     const form = document.getElementById('candidate-context');
-    const candidate_id = form?.querySelector('input[name="candidate_id"]')?.value;
-    if (candidate_id) formData.append('candidate_id', candidate_id);
+    const formData = new FormData(form);
+    const resumeTextarea = document.querySelector('#resume-content textarea');
+    formData.append('resume_text', resumeTextarea.value);
+
+    return fetch('/candidates/init-chat', {
+        method: 'POST',
+        body: formData
+    })
+    .then(window.handleApiResponse)
+    .then(data => {
+        console.log('Chat initialized:', data);
+        if (data.conversation_id) {
+            updateCandidateData({'conversation_id': data.conversation_id});
+        }
+        return data.conversation_id;
+    });
+}
+
+function saveCandidateToCloud() {
+    const form = document.getElementById('candidate-context');
+    const formData = new FormData(form);
     
-    formData.append('name', name);
-    formData.append('job_applied', job_applied);
-    formData.append('resume_text', resume_text);
-    formData.append('analysis', JSON.stringify(analysis));
+    // Add resume_text from #resume-content
+    const resume_textarea = document.querySelector('#resume-section textarea');
+    if (resume_textarea?.value) {
+        formData.set('resume_text', resume_textarea.value);
+    }
     
-    if (chat_id) formData.append('chat_id', chat_id);
+    // Add analysis from #analysis-content
+    const analysis_container = document.querySelector('#analysis-content #analysis-result-container');
+    const analysis = analysis_container ? analysis_container.getAttribute('data-analysis') : null;
+    if (analysis) {
+        formData.set('analysis', analysis);
+    }
     
-    const lastMessage = document.getElementById('message-text')?.value?.trim() || 
-                       document.getElementById('message-content')?.innerText?.trim();
-    if (lastMessage) formData.append('last_message', lastMessage);
+    // Add last_message from #message-content
+    const message_textarea = document.getElementById('message-text');
+    const message = message_textarea?.value.trim();
+    if (message) {
+        formData.set('last_message', message);
+    }
+    
+    const chat_id = formData.get('chat_id');
+    const conversation_id = formData.get('conversation_id');
     
     fetch('/candidates/save-to-cloud', {method: 'POST', body: formData})
-        .then(handleApiResponse)
-        .then(candidate_id => {
+        .then(window.handleApiResponse)
+        .then(data => {
             showToast('✅ 已保存', 'success');
-            updateCandidateCard(chat_id, conversation_id, {saved: true, score: analysis.overall, viewed: true});
-        })
-        .catch(err => {
-            console.error('Save failed:', err);
-            showToast(`保存失败: ${err.message}`, 'error');
+            if (data.candidate_id) {
+                updateCandidateData({'candidate_id': data.candidate_id});
+            }
+            // Update card in list
+            const score = analysis_container ? JSON.parse(analysis_container.getAttribute('data-analysis')).overall : null;
+            updateCandidateCard({
+                saved: true, 
+                score: score, 
+                viewed: true,
+                last_message: message_textarea?.value.trim()
+            });
         });
 }
 
-function updateCandidateCard(chat_id, conversation_id, updates) {
-    // Find the candidate card by chat_id, candidate_id, conversation_id, thread_id, or name+job
+
+function updateCandidateCard(updates) {
+    // Remove keys from updates where value is null or undefined (like {k:v for k,v in updates.items() if v} in Python)
+    updates = Object.fromEntries(
+        Object.entries(updates).filter(([_, v]) => v !== null && v !== undefined && v !== false && v !== '')
+    );
+    // Find the candidate card by chat_id, candidate_id, conversation_id, or name+job
     const candidateCards = document.querySelectorAll('.candidate-card');
     let found = false;
     
     // Get name and job_applied from the form for fallback matching
-    const form = document.getElementById('candidate-context');
-    const name = form?.querySelector('input[name="name"]')?.value;
-    const job_applied = form?.querySelector('input[name="job_applied"]')?.value;
-    
-    // Debug: log what we're looking for
-    console.log('updateCandidateCard: searching for', { chat_id, conversation_id, name, job_applied, updates });
+    const chat_id = getCandidateData('chat_id');
+    const conversation_id = getCandidateData('conversation_id');
+    const candidate_id = getCandidateData('candidate_id');
+    const name = getCandidateData('name');
+    const job_applied = getCandidateData('job_applied');
     
     candidateCards.forEach(card => {
-        const candidateData = JSON.parse(card.getAttribute('data-candidate') || '{}');
-        const cardId = card.getAttribute('data-candidate-id');
+        const cardData = JSON.parse(card.getAttribute('hx-vals'));
         
         // Match by multiple identifiers:
         // 1. chat_id match (in data or cardId)
-        // 2. conversation_id match (direct, via thread_id, or in cardId)
+        // 2. conversation_id match (direct or in cardId)
         // 3. Fallback: name + job_applied match (for cases where conversation_id isn't in card yet)
-        const matches = (chat_id && (candidateData.chat_id === chat_id || cardId === chat_id)) ||
-                       (conversation_id && (
-                           candidateData.conversation_id === conversation_id ||
-                           candidateData.thread_id === conversation_id ||
-                           cardId === conversation_id
-                       )) ||
+        const matches = (chat_id && cardData.chat_id === chat_id) ||
+                       (conversation_id && cardData.conversation_id === conversation_id) ||
+                       (candidate_id && cardData.candidate_id === candidate_id) ||
                        // Fallback: match by name and job_applied if we have them
-                       (name && job_applied && 
-                        candidateData.name === name && 
-                        candidateData.job_applied === job_applied);
+                       (name && job_applied &&  cardData.name === name && cardData.job_applied === job_applied);
         
         if (matches) {
-            console.log('Found matching candidate card:', { chat_id, conversation_id, candidateData, cardId });
+            console.log('Found matching candidate card:', { chat_id, conversation_id, cardData, candidate_id });
             // Update the card's data attributes
-            candidateData.saved = updates.saved;
-            candidateData.viewed = updates.viewed;
-            candidateData.score = updates.score;
+            Object.assign(cardData, updates);
             // Store conversation_id in card data for future lookups
-            if (conversation_id && !candidateData.conversation_id && !candidateData.thread_id) {
-                candidateData.thread_id = conversation_id; // Store as thread_id for backward compatibility
+            if (conversation_id && !cardData.conversation_id) {
+                cardData.conversation_id = conversation_id;
             }
-            card.setAttribute('data-candidate', JSON.stringify(candidateData));
+            // apply updates to candidateData
+            card.setAttribute('hx-vals', JSON.stringify(cardData));
             
             // Update saved tag
+            const tagsContainer = card.querySelector('.flex.flex-wrap.gap-1');
             if (updates.saved !== undefined) {
-                const tagsContainer = card.querySelector('.flex.flex-wrap.gap-1');
-                if (tagsContainer) {
-                    let savedTag = tagsContainer.querySelector('[data-tag="saved"]');
-                    if (updates.saved && !savedTag) {
-                        savedTag = document.createElement('span');
-                        savedTag.className = 'inline-block px-2 py-1 text-xs rounded-full bg-blue-100 text-blue-700';
-                        savedTag.setAttribute('data-tag', 'saved');
-                        savedTag.textContent = '💾 已保存';
-                        tagsContainer.appendChild(savedTag);
-                    } else if (!updates.saved && savedTag) {
-                        savedTag.remove();
-                    }
+                let savedTag = tagsContainer.querySelector('[data-tag="saved"]');
+                if (updates.saved && !savedTag) {
+                    savedTag = document.createElement('span');
+                    savedTag.className = 'inline-block px-2 py-1 text-xs rounded-full bg-blue-100 text-blue-700';
+                    savedTag.setAttribute('data-tag', 'saved');
+                    savedTag.textContent = '💾 已保存';
+                    tagsContainer.appendChild(savedTag);
+                } else if (!updates.saved && savedTag) {
+                    savedTag.remove();
                 }
             }
-            
             // Update viewed tag
             if (updates.viewed !== undefined) {
-                candidateData.viewed = updates.viewed;
-                const tagsContainer = card.querySelector('.flex.flex-wrap.gap-1');
-                if (tagsContainer) {
-                    let viewedTag = tagsContainer.querySelector('[data-tag="viewed"]');
-                    if (updates.viewed && !viewedTag) {
-                        viewedTag = document.createElement('span');
-                        viewedTag.className = 'inline-block px-2 py-1 text-xs rounded-full bg-purple-100 text-purple-700';
-                        viewedTag.setAttribute('data-tag', 'viewed');
-                        viewedTag.textContent = '👁️ 已查看';
-                        tagsContainer.appendChild(viewedTag);
-                    } else if (!updates.viewed && viewedTag) {
-                        viewedTag.remove();
-                    }
+                let viewedTag = tagsContainer.querySelector('[data-tag="viewed"]');
+                if (updates.viewed && !viewedTag) {
+                    viewedTag = document.createElement('span');
+                    viewedTag.className = 'inline-block px-2 py-1 text-xs rounded-full bg-purple-100 text-purple-700';
+                    viewedTag.setAttribute('data-tag', 'viewed');
+                    viewedTag.textContent = '👁️ 已查看';
+                    tagsContainer.appendChild(viewedTag);
+                } else if (!updates.viewed && viewedTag) {
+                    viewedTag.remove();
                 }
             }
-            
+            // Update greeted tag
+            if (updates.greeted !== undefined) {
+                let greetedTag = tagsContainer.querySelector('[data-tag="greeted"]');
+                if (updates.greeted && !greetedTag) {
+                    greetedTag = document.createElement('span');
+                    greetedTag.className = 'inline-block px-2 py-1 text-xs rounded-full bg-green-100 text-green-700';
+                    greetedTag.setAttribute('data-tag', 'greeted');
+                    greetedTag.textContent = '👋 已打招呼';
+                    tagsContainer.appendChild(greetedTag);
+                } else if (!updates.greeted && greetedTag) {
+                    greetedTag.remove();
+                }
+            }
             // Update score badge
             if (updates.score !== undefined) {
                 const cardContainer = card.querySelector('.flex.items-start.space-x-3');
@@ -378,24 +423,12 @@ function updateCandidateCard(chat_id, conversation_id, updates) {
                 }
             }
             found = true;
-            console.log('Updated candidate card:', candidateData);
+            console.log('Updated candidate card:', cardData);
         }
     });
     if (!found) {
-        const identifier = chat_id || conversation_id || 'unknown';
+        const identifier = chat_id || conversation_id || candidate_id;
         console.warn('updateCandidateCard: could not find card with identifier', identifier, 'total cards:', candidateCards.length);
-        // Debug: log all candidate data to help diagnose
-        candidateCards.forEach((card, index) => {
-            const candidateData = JSON.parse(card.getAttribute('data-candidate') || '{}');
-            const cardId = card.getAttribute('data-candidate-id');
-            console.log(`Card ${index}:`, {
-                cardId,
-                chat_id: candidateData.chat_id,
-                conversation_id: candidateData.conversation_id,
-                thread_id: candidateData.thread_id,
-                name: candidateData.name
-            });
-        });
     }
 }
 
@@ -403,7 +436,7 @@ function updateCandidateCard(chat_id, conversation_id, updates) {
 // Candidate Detail Helper Functions
 // ============================================================================
 
-function updateFormData(record) {
+function updateCandidateData(record) {
     dataElement = document.getElementById('candidate-context');
     const formData = new FormData(dataElement);
     for (const [key, value] of Object.entries(record)) {
@@ -421,55 +454,64 @@ function updateFormData(record) {
     }
 }
 
-
-/**
- * Start analysis (current flow)
- */
-function startAnalysis() {
+function getCandidateData(key) {
     const form = document.getElementById('candidate-context');
-    const resumeTextarea = document.querySelector('#resume-content textarea');
     const formData = new FormData(form);
-    formData.append('resume_text', resumeTextarea?.value || '');
-    
-    htmx.ajax('POST', '/candidates/analyze', {
-        target: '#analysis-content',
-        swap: 'innerHTML',
-        values: Object.fromEntries(formData)
-    });
+    return formData.get(key);
 }
 
+
+function getThresholdValues() {
+    return {
+        chat_threshold: parseFloat(document.getElementById('threshold-chat')?.value) || 5.0,
+        borderline_threshold: parseFloat(document.getElementById('threshold-borderline')?.value) || 7.0,
+        seek_threshold: parseFloat(document.getElementById('threshold-seek')?.value) || 9.0
+    };
+}
+
+// ============================================================================
+// HTMX Promise Wrapper
+// ============================================================================
 
 /**
- * Initialize new chat (current flow)
+ * Wrap htmx.ajax to return a Promise that resolves when swap completes
  */
-function initializeNewChat(mode, chat_id, job_id, name, resume_text) {
-    showToast('初始化对话线程...', 'info');
-    const formData = new FormData();
-    formData.append('mode', mode);
-    if (chat_id) formData.append('chat_id', chat_id);
-    formData.append('job_id', job_id);
-    formData.append('name', name);
-    formData.append('resume_text', resume_text);
-
-    return fetch('/candidates/init-chat', {
-        method: 'POST',
-        body: formData
-    })
-    .then(handleApiResponse)
-    .then(data => {
-        console.log('Chat initialized:', data);
-        const conversation_id = data.conversation_id;
-        if (conversation_id) {
-            // Add conversation_id to context
-            updateFormData({'conversation_id': conversation_id})
+ function htmxAjaxPromise(method, url, options) {
+    return new Promise((resolve, reject) => {
+        const target = document.querySelector(options.target);
+        if (!target) {
+            reject(new Error(`Target element not found: ${options.target}`));
+            return;
         }
-        return conversation_id;
-    }).catch(err => {
-        console.error('Failed to init chat:', err);
-        showToast(`初始化对话失败: ${err.message}`, 'error');
-        throw err;
+        
+        // Listen for swap completion
+        const afterSwap = () => {
+            target.removeEventListener('htmx:afterSwap', afterSwap);
+            target.removeEventListener('htmx:responseError', onError);
+            resolve();
+        };
+        
+        const onError = (evt) => {
+            target.removeEventListener('htmx:afterSwap', afterSwap);
+            target.removeEventListener('htmx:responseError', onError);
+            reject(new Error(evt.detail.error || 'HTMX request failed'));
+        };
+        
+        target.addEventListener('htmx:afterSwap', afterSwap, { once: true });
+        target.addEventListener('htmx:responseError', onError, { once: true });
+        
+        // Trigger the ajax call
+        htmx.ajax(method, url, options);
     });
 }
 
+// Trigger workflow when this partial is loaded via HTMX
+// Since this script runs when HTMX swaps content, we can call it directly
+// Use requestAnimationFrame to ensure DOM is ready
+requestAnimationFrame(() => {
+    setTimeout(() => {
+        process_candidate();
+    }, 100);
+});
 
 </script>

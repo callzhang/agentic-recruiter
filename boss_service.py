@@ -982,6 +982,19 @@ app.include_router(candidates.router, prefix="/candidates", tags=["web-candidate
 app.include_router(automation.router, prefix="/automation", tags=["web-automation"])
 app.include_router(jobs.router, prefix="/jobs", tags=["web-jobs"])
 
+# Chrome DevTools configuration endpoint
+@app.get("/.well-known/appspecific/com.chrome.devtools.json", tags=["system"])
+async def chrome_devtools_config():
+    """Handle Chrome DevTools configuration request.
+    
+    Chrome DevTools automatically requests this file when inspecting pages.
+    Returning an empty JSON response prevents 404 errors in logs.
+    
+    Returns:
+        dict: Empty JSON object
+    """
+    return {}
+
 # Web UI root endpoint
 @app.get("/", response_class=HTMLResponse, tags=["web"])
 async def web_index(request: Request):

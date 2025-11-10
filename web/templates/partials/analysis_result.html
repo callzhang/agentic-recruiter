@@ -4,8 +4,7 @@
      data-action-flags='{{ candidate.analysis.action_flags | tojson if candidate.analysis.action_flags else "{}" }}'
      data-analysis='{{ candidate.analysis | tojson }}'
      data-mode="{{ candidate.mode }}"
-     data-thread-id="{{ candidate.thread_id or '' }}"
-     data-conversation-id="{{ candidate.conversation_id or candidate.thread_id or '' }}"
+     data-conversation-id="{{ candidate.conversation_id or '' }}"
      data-chat-id="{{ candidate.chat_id or '' }}"
      data-candidate-id="{{ candidate.candidate_id or '' }}"
      data-index="{{ candidate.index or '' }}"
@@ -42,11 +41,8 @@
         <h4 class="font-bold text-gray-800 mb-2">后续沟通策略</h4>
         <p class="text-gray-700 whitespace-pre-wrap">{{ candidate.analysis.followup_tips or '暂无策略' }}</p>
     </div>
-    <button hx-post="/candidates/analyze"
-            hx-include="#candidate-context"
-            hx-target="#analysis-content"
-            hx-swap="innerHTML"
-            class="w-full px-4 py-2 bg-purple-100 text-purple-700 rounded-lg hover:bg-purple-200">
+    <button onclick="startAnalysis()"
+            class="w-full p-2 bg-purple-100 text-purple-700 rounded-lg hover:bg-purple-200">
         🔄 重新分析
     </button>
 </div>

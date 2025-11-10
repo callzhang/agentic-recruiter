@@ -109,7 +109,7 @@ async def _go_to_chat_dialog(page: Page, chat_id: str, wait_timeout: int = 5000)
         f"{CHAT_ITEM_SELECTORS}[data-id=\"{chat_id}\"]",
         f"[role='listitem'][data-id=\"{chat_id}\"]",
     ]
-    target: Optional[Locator] = None    
+    target: Optional[Locator] = None
     for selector in direct_selectors:
         locator = page.locator(selector).first
         if await locator.count() > 0:
@@ -227,7 +227,7 @@ async def list_conversations_action(page: Page, limit: int = 999, tab: str = 'æ–
         List[Dict[str, Any]]: A list of candidate items.
     '''
     await _prepare_chat_page(page, tab, status, job_title)
-    items = page.locator("div.geek-item")
+    items = page.locator(CHAT_ITEM_SELECTORS)
     count = await items.count()
     messages: List[Dict[str, Any]] = []
     for index in range(count):

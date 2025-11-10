@@ -2,7 +2,6 @@
 `chat_id` is the id from boss zhipin website, in mode = chat, greet, followup
 `index` is the index of the candidate in the recommended list, in mode = recommend
 `conversation_id` is from openai responses api, used to continue the conversation from openai
-`thread_id` is the field in zilliz cloud object, used to store the `conversation_id`
 `candidate_id` is the primary key in zilliz cloud object, used to store the candidate data
 `job_applied` is the job position title that candidate is applying for, used consistently throughout
 """
@@ -143,9 +142,10 @@ async def list_candidates(
     # Batch query candidates from cloud store
     identifiers = [c["chat_id"] for c in candidates if c.get("chat_id")]
     identifiers += [c["candidate_id"] for c in candidates if c.get("candidate_id")]
-    identifiers += [c["thread_id"] for c in candidates if c.get("thread_id")]
+    identifiers += [c["conversation_id"] for c in candidates if c.get("conversation_id")]
     names: list[str] = [c["name"] for c in candidates if c.get("name")]
     job_applied = candidates[0].get("job_applied")
+    # Check if candidate is saved to cloud using batch query results
     stored_candidates = candidate_store.get_candidates(identifiers=identifiers, names=names, job_applied=job_applied)
     
     # Render candidate cards
@@ -155,17 +155,16 @@ async def list_candidates(
         candidate["mode"] = mode
         candidate["job_id"] = job_id
         candidate["index"] = i
-        # Check if candidate is saved to cloud using batch query results
         candidate["saved"] = False
+        # match stored candidate by chat_id, or name + job_applied
         stored_candidate = next((c for c in stored_candidates if \
-            c.get("candidate_id") == candidate.get("candidate_id") or \
-                c.get("thread_id") == candidate.get("thread_id") or \
-                    c.get("chat_id") == candidate.get("chat_id") or\
-                        c.get("name") == candidate.get("name")), None)
+            (candidate.get("chat_id") and c.get("chat_id") == candidate.get("chat_id")) or\
+            (c.get("name") == candidate.get("name")) and c.get("job_applied") == candidate.get("job_applied")), None)
         
         
         if stored_candidate:
             candidate.update(stored_candidate)
+            candidate["conversation_id"] = stored_candidate.get("conversation_id")
             candidate["saved"] = True
             # Extract score from analysis if available
             analysis = stored_candidate.get("analysis")
@@ -185,60 +184,30 @@ async def list_candidates(
 # ============================================================================
 
 @router.get("/detail", response_class=HTMLResponse)
-async def get_candidate_detail(
-    request: Request,
-    mode: str = Query("chat", description="Candidate source mode: chat, greet, followup, or recommend"),
-    chat_id: Optional[str] = Query(None, description="Chat ID for chat candidates"),
-    index: Optional[int] = Query(None, description="Index for recommend candidates"),
-    name: str = Query(..., description="Candidate name from list"),
-    job_applied: str = Query(..., description="Job title from list"),
-    job_id: str = Query(..., description="Job ID from list"),
-    candidate_id: Optional[str] = Query(None, description="Candidate ID from list"),
-    thread_id: Optional[str] = Query(None, description="Thread ID from list"),
-    text: Optional[str] = Query(None, description="Last message/text from list"),
-    stage: Optional[str] = Query(None, description="Candidate stage"),
-    viewed: Optional[bool] = Query(None, description="Viewed status (recommend only)"),
-    greeted: Optional[bool] = Query(None, description="Greeted status (recommend only)"),
-    threshold_chat: Optional[float] = Query(..., description="Chat threshold from UI"),
-    threshold_borderline: Optional[float] = Query(..., description="Borderline threshold from UI"),
-    threshold_seek: Optional[float] = Query(..., description="Seek threshold from UI"),
-):
+async def get_candidate_detail(request: Request):
     """Get candidate detail view."""
     # Parse index if provided
-    
+    data = dict(request.query_params)
+    if not data:
+        form_data = await request.form()
+        data = dict(form_data)
+    data = {k:v for k, v in data.items() if v}
     # Try to find existing candidate
-    candidate_data = candidate_store.get_candidates(identifiers=[chat_id, candidate_id, thread_id], limit=1)
-    candidate_data = candidate_data[0] if candidate_data else {}
-    # Create new if not found
-    candidate_data.update({
-        "mode": mode,
-        "chat_id": chat_id,
-        "index": index,
-        "name": name,
-        "job_applied": job_applied,
-        "job_id": job_id,
-        "candidate_id": candidate_id,
-        "thread_id": thread_id,
-        "text": text,
-        "stage": stage,
-        "viewed": viewed,
-        "greeted": greeted,
-        "saved": bool(candidate_data.get("candidate_id")),
-        "score": candidate_data.get("analysis", {}).get("overall"),
-        "description": text or candidate_data.get("description") or candidate_data.get("last_message"),
-        "last_message": candidate_data.get("last_message"),
-    })
+    results = candidate_store.get_candidates(
+        identifiers=[data.get('candidate_id'), data.get('chat_id'), data.get('conversation_id')], 
+        names=[data.get('name')], 
+        job_applied=data.get('job_applied'), 
+        limit=1
+    )
+    candidate_data = results[0] if results else {}
+    candidate_data = {k:v for k, v in candidate_data.items() if v}
+    data.update(candidate_data)
+    data['score'] = candidate_data.get("analysis", {}).get("overall")
     
     return templates.TemplateResponse("partials/candidate_detail.html", {
         "request": request,
-        "candidate": candidate_data,
-        "chat_id": chat_id,
-        "job_id": job_id,
-        "job_applied": job_applied,
-        "generated_message": candidate_data.get("last_message"),
-        "threshold_chat": threshold_chat,
-        "threshold_borderline": threshold_borderline,
-        "threshold_seek": threshold_seek
+        "candidate": data,
+        "generated_message": data.get("last_message"),
     })
 
 
@@ -322,12 +291,12 @@ async def analyze_candidate(
     chat_id: Optional[str] = Form(None),
     conversation_id: str = Form(...),
     job_applied: str = Form(...),
-    resume_text: str = Form(...),
+    # resume_text: str = Form(...),
     name: Optional[str] = Form(None),
 ):
     """Analyze candidate and return analysis result."""
     analysis_result = assistant_actions.generate_message(
-        input_message=resume_text,
+        input_message='你看我是否匹配{job_applied}这个岗位？',
         conversation_id=conversation_id,
         purpose="ANALYZE_ACTION"
     )
@@ -343,11 +312,9 @@ async def analyze_candidate(
         "analysis": analysis_data,
         "chat_id": chat_id,
         "mode": mode,
-        "thread_id": conversation_id,
         "conversation_id": conversation_id,
         "candidate_id": candidate_id,
         "job_applied": job_applied,
-        "resume_text": resume_text,
         "name": name
     }
     
@@ -358,78 +325,75 @@ async def analyze_candidate(
 
 
 @router.post("/save-to-cloud", response_class=JSONResponse)
-async def save_candidate_to_cloud(**kwargs):
-    """Save candidate record to Zilliz cloud using all form kwargs."""
+async def save_candidate_to_cloud(request: Request):
+    """Save candidate record to Zilliz cloud using all form data."""
+    # Parse form data
+    form_data = await request.form()
+    kwargs = dict(form_data)
+    
     # Parse analysis back to dict if sent as JSON string
     analysis = kwargs.get("analysis")
-    if isinstance(analysis, str):
+    if analysis and isinstance(analysis, str):
         kwargs["analysis"] = json.loads(analysis)
     # Only require job_applied and at least one ID
     assert 'job_applied' in kwargs, "job_applied is required"
 
     # upsert_candidate passes all relevant kwargs
     candidate_id = candidate_store.upsert_candidate(**kwargs)
-    return candidate_id
+    return JSONResponse(content={
+        "candidate_id": candidate_id,
+        "success": True
+    })
 
 
 @router.post("/generate-message", response_class=HTMLResponse)
 async def generate_message(
     mode: str = Form(...),
     chat_id: Optional[str] = Form(None),
+    index: Optional[int] = Form(None),
     conversation_id: str = Form(...),
-    purpose: str = Form(...),
-    job_applied: str = Form(...),
+    purpose: str = Form(...)
 ):
     """Generate message for candidate."""
     # Get chat history
+    default_user_message = {"content": f"请问你有什么问题可以让我进一步解答吗？", "role": "user"}
+    history = []
+    last_assistant_message = None
+    page = await boss_service.service._ensure_browser_session()
+    # { "type": "candidate/recruiter", "timestamp": "2025-11-10 10:00:00", "message": "你好，我叫张三", "status": "未读" }
     if mode == "recommend":
-        history = [{"message": f"你觉得我符合{job_applied}这个岗位吗？", "role": "user"}]
+        # assert index is not None, "index is required for recommend mode"
+        # result = await recommendation_actions.get_recommend_history_action(page, index) # no history
+        history = [default_user_message]
     else:
-        page = await boss_service.service._ensure_browser_session()
-        history = await chat_actions.get_chat_history_action(page, chat_id)
+        assert chat_id is not None, "chat_id is required for chat mode"
+        result = await chat_actions.get_chat_history_action(page, chat_id)
+        for msg in result[::-1]:
+            content = f'{msg.get("timestamp")}: {msg.get("message")}'
+            type = {"candidate": "user", "recruiter": "assistant", "system": "developer"}.get(msg.get("type"))
+            if type == "assistant":
+                last_assistant_message = msg.get("message")
+                break
+            else:
+                history.insert(0, {"content": content, "role": type})
     
-    # Generate message
-    input_message = history[-1].get("message", "") if history else ""
-    message = assistant_actions.generate_message(
-        input_message=input_message,
-        conversation_id=conversation_id,
-        purpose=purpose
-    )
-    
-    # Save to candidate store
-    results = candidate_store.get_candidates(identifiers=[conversation_id], limit=1)
-    if results:
-        candidate_store.upsert_candidate(
-            candidate_id=results[0].get("candidate_id"),
-            last_message=message
+    # generate message if history is not empty
+    if history:
+        # Generate message
+        message = assistant_actions.generate_message(
+            input_message=history,
+            conversation_id=conversation_id,
+            purpose=purpose
         )
-    
+    else:
+        logger.warning("No new message found for conversation_id: %s", conversation_id)
+        message = last_assistant_message
     # Return textarea with generated message and send button
     html = f'''
     <div class="space-y-4">
-        <div>
-            <label class="block text-sm font-medium text-gray-700 mb-2">生成的消息</label>
-            <textarea id="message-text" name="message" class="w-full h-32 p-4 border rounded-lg">{message}</textarea>
-        </div>
-        <div class="flex space-x-2">
-            <button hx-post="/candidates/send"
-                    hx-include="#candidate-context,#message-text"
-                    hx-target="body"
-                    hx-swap="none"
-                    class="flex-1 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700">
-                📤 发送消息
-            </button>
-            <button hx-post="/candidates/pass"
-                    hx-include="#candidate-context"
-                    hx-target="body"
-                    hx-swap="none"
-                    class="flex-1 px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300">
-                ❌ PASS
-            </button>
-        </div>
+        <textarea id="message-text" name="message" class="w-full h-32 p-4 border rounded-lg">{message}</textarea>
     </div>
     '''
-    
     return HTMLResponse(content=html)
 
 
@@ -591,38 +555,20 @@ async def next_candidate(
 
 
 
-@router.get("/thread-history/{thread_id}", response_class=HTMLResponse)
+@router.get("/thread-history/{conversation_id}", response_class=HTMLResponse)
 async def get_thread_history(
     request: Request,
-    thread_id: str
+    conversation_id: str
 ):
     """Get conversation history HTML.
     
-    Note: URL parameter is named 'thread_id' for backward compatibility,
-    but it accepts a conversation_id (stored as thread_id field).
+    Args:
+        conversation_id: OpenAI conversation ID
     """
-    messages_data = assistant_utils.get_conversation_messages(thread_id)
+    messages_data = assistant_utils.get_conversation_messages(conversation_id)
     
     return templates.TemplateResponse("partials/thread_history.html", {
         "request": request,
         "messages": messages_data.get("messages", []),
-        "thread_id": thread_id
-    })
-
-
-@router.post("/render-analysis", response_class=HTMLResponse)
-async def render_analysis(
-    request: Request,
-    analysis: dict = Form(...)
-):
-    """Render analysis template."""
-    # Parse JSON if it's a string
-    if isinstance(analysis, str):
-        import json
-        analysis = json.loads(analysis)
-    
-    candidate_data = {"analysis": analysis}
-    return templates.TemplateResponse("partials/analysis_result.html", {
-        "request": request,
-        "candidate": candidate_data
+        "conversation_id": conversation_id
     })

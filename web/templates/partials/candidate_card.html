@@ -1,21 +1,9 @@
 <!-- Candidate card for list view -->
 <div
   class="candidate-card p-4 border rounded-lg cursor-pointer bg-white hover:bg-blue-50 transition"
-  data-candidate-id="{% if candidate.chat_id %}{{ candidate.chat_id }}{% else %}recommend_{{ candidate.index }}{% endif %}"
-  data-candidate='{{ candidate | tojson }}'
+  data-candidate-id="{% if candidate.chat_id %}{{ candidate.chat_id }}{% else %}recommend_{{ candidate.candidate_id }}{% endif %}"
   hx-get="/candidates/detail"
-  hx-vals='{{ {
-    "mode": candidate.mode,
-    "chat_id": candidate.chat_id | default("", true),
-    "index": candidate.index if candidate.index is not none else "",
-    "name": candidate.name,
-    "job_applied": candidate.job_applied,
-    "job_id": candidate.job_id,
-    "text": candidate.text or candidate.last_message or "",
-    "stage": candidate.stage | default("", true),
-    "viewed": candidate.viewed | default(false, true),
-    "greeted": candidate.greeted | default(false, true)
-  } | tojson }}'
+  hx-vals='{{ candidate | tojson }}'
   hx-target="#detail-pane"
   hx-include="#job-selector,#assistant-selector,#threshold-chat,#threshold-borderline,#threshold-seek"
   hx-on::click="console.log('Candidate clicked:', JSON.parse(this.dataset.candidate));"
@@ -27,7 +15,7 @@
       {{ candidate.score }}
     </div>
     {% endif %}
-    
+    <!-- avatar -->
     <div class="flex-shrink-0">
       <div
         class="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center"
@@ -35,6 +23,7 @@
         <span class="text-lg">👤</span>
       </div>
     </div>
+    <!-- name and job applied -->
     <div class="flex-1 min-w-0">
       <h3 class="font-bold text-gray-900 truncate">
         {{ candidate.name or '未知' }}
@@ -45,6 +34,7 @@
       <p class="text-xs text-gray-500 mt-1 line-clamp-2">
         {{ candidate.description or candidate.last_message or candidate.text or '暂无消息' }}
       </p>
+      <!-- tags: viewed, greeted, saved -->
       <div class="mt-2 flex flex-wrap gap-1">
         {% if candidate.viewed is defined and candidate.viewed %}
         <span

@@ -102,22 +102,114 @@ function candidateTabs() {
         activeTab: 'recommend',
         loading: false,
         
-            switchTab(tab) {
+        init() {
+            // Read URL parameters on page load
+            this.restoreFromURL();
+            
+            // Listen for browser back/forward buttons
+            window.addEventListener('popstate', () => {
+                this.restoreFromURL();
+            });
+        },
+        
+        restoreFromURL() {
+            const urlParams = new URLSearchParams(window.location.search);
+            
+            // Set active tab from URL
+            const tab = urlParams.get('tab');
+            if (tab && ['recommend', 'greet', 'chat', 'followup'].includes(tab)) {
                 this.activeTab = tab;
-                // Reset selected candidate
-                window.selectedCandidateId = null;
-                // Clear list when switching tabs
-                const list = document.getElementById('candidate-list');
-                if (list) {
-                    list.innerHTML = '';
-                    // Re-add initial message
-                    const initialMsg = document.createElement('div');
-                    initialMsg.id = 'initial-message';
-                    initialMsg.className = 'text-center text-gray-500 py-12';
-                    initialMsg.textContent = '点击下方"查询候选人"按钮加载数据';
-                    list.appendChild(initialMsg);
-                }
-            },
+            }
+            
+            // Set thresholds from URL
+            const thresholdChat = urlParams.get('threshold_chat');
+            if (thresholdChat) {
+                const chatInput = document.getElementById('threshold-chat');
+                if (chatInput) chatInput.value = thresholdChat;
+            }
+            
+            const thresholdBorderline = urlParams.get('threshold_borderline');
+            if (thresholdBorderline) {
+                const borderlineInput = document.getElementById('threshold-borderline');
+                if (borderlineInput) borderlineInput.value = thresholdBorderline;
+            }
+            
+            const thresholdSeek = urlParams.get('threshold_seek');
+            if (thresholdSeek) {
+                const seekInput = document.getElementById('threshold-seek');
+                if (seekInput) seekInput.value = thresholdSeek;
+            }
+            
+            // Set job selector from URL (after jobs are loaded)
+            const jobId = urlParams.get('job_id');
+            if (jobId) {
+                // Wait for job selector to be populated
+                const checkJobSelector = setInterval(() => {
+                    const jobSelector = document.getElementById('job-selector');
+                    if (jobSelector && jobSelector.options.length > 1) {
+                        // Check if the job_id exists in options
+                        for (let option of jobSelector.options) {
+                            if (option.value === jobId) {
+                                jobSelector.value = jobId;
+                                clearInterval(checkJobSelector);
+                                break;
+                            }
+                        }
+                        clearInterval(checkJobSelector);
+                    }
+                }, 100);
+                
+                // Stop checking after 5 seconds
+                setTimeout(() => clearInterval(checkJobSelector), 5000);
+            }
+        },
+        
+        updateURL() {
+            const params = new URLSearchParams();
+            
+            // Add tab
+            params.set('tab', this.activeTab);
+            
+            // Add thresholds
+            const thresholdChat = document.getElementById('threshold-chat')?.value;
+            if (thresholdChat) params.set('threshold_chat', thresholdChat);
+            
+            const thresholdBorderline = document.getElementById('threshold-borderline')?.value;
+            if (thresholdBorderline) params.set('threshold_borderline', thresholdBorderline);
+            
+            const thresholdSeek = document.getElementById('threshold-seek')?.value;
+            if (thresholdSeek) params.set('threshold_seek', thresholdSeek);
+            
+            // Add job_id
+            const jobSelector = document.getElementById('job-selector');
+            const jobId = jobSelector?.value;
+            if (jobId && jobId !== '加载中...') {
+                params.set('job_id', jobId);
+            }
+            
+            // Update URL without page reload
+            const newURL = window.location.pathname + (params.toString() ? '?' + params.toString() : '');
+            window.history.pushState({}, '', newURL);
+        },
+        
+        switchTab(tab) {
+            this.activeTab = tab;
+            // Reset selected candidate
+            window.selectedCandidateId = null;
+            // Clear list when switching tabs
+            const list = document.getElementById('candidate-list');
+            if (list) {
+                list.innerHTML = '';
+                // Re-add initial message
+                const initialMsg = document.createElement('div');
+                initialMsg.id = 'initial-message';
+                initialMsg.className = 'text-center text-gray-500 py-12';
+                initialMsg.textContent = '点击下方"查询候选人"按钮加载数据';
+                list.appendChild(initialMsg);
+            }
+            // Update URL
+            this.updateURL();
+        },
         
         loadCandidates() {
             
@@ -271,6 +363,17 @@ function candidateTabs() {
     };
 }
 
+// Global function for HTMX events to call updateURL
+window.updateCandidateURL = function() {
+    // Find the Alpine component instance
+    const candidateTabsElement = document.querySelector('[x-data*="candidateTabs"]');
+    if (candidateTabsElement && candidateTabsElement._x_dataStack) {
+        const component = candidateTabsElement._x_dataStack[0];
+        if (component && component.updateURL) {
+            component.updateURL();
+        }
+    }
+};
 
 // Toast notification
 function showToast(message, type = 'info') {

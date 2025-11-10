@@ -280,9 +280,49 @@ def start_service(*, scheduler_options: Optional[Dict[str, Any]] | None = None):
         service_url = f"http://{host}:{port}"
         import uvicorn
         
+        def _check_existing_tab(url: str) -> bool:
+            """Check if a browser tab with URL starting with the given URL already exists.
+            
+            Returns:
+                bool: True if a tab exists, False otherwise
+            """
+            if sys.platform == "darwin":
+                # Use AppleScript to check Chrome tabs on macOS
+                try:
+                    applescript = f'''
+                    tell application "Google Chrome"
+                        repeat with w in windows
+                            repeat with t in tabs of w
+                                if URL of t starts with "{url}" then
+                                    set active tab of w to t
+                                    return true
+                                end if
+                            end repeat
+                        end repeat
+                        return false
+                    end tell
+                    '''
+                    result = subprocess.run(
+                        ["osascript", "-e", applescript],
+                        capture_output=True,
+                        text=True,
+                        timeout=2
+                    )
+                    return result.returncode == 0 and result.stdout.strip() == "true"
+                except Exception:
+                    # If check fails, assume no tab exists
+                    return False
+            # For other platforms, we can't easily check, so return False
+            return False
+        
         def open_browser_after_ready():
             """Open browser after service is ready."""
             if _wait_for_service_ready(service_url, timeout=15):
+                # Check if tab already exists
+                if _check_existing_tab(service_url):
+                    logger.info(f"[*] 浏览器中已有该页面，跳过自动打开: {service_url}")
+                    return
+                
                 try:
                     if sys.platform == "darwin":
                         subprocess.Popen(["open", service_url])

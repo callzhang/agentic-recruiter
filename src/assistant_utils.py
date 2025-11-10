@@ -303,14 +303,3 @@ def get_analysis_from_conversation(conversation_id: str) -> Optional[Dict[str, A
         return None
 
 
-# ------------------------Candidate management---------------------------------
-def update_candidate_resume(chat_id: str, conversation_id: str, resume_text: str=None, full_resume: str=None) -> bool:
-    """Update candidate resume in store and conversation."""
-    assert resume_text or full_resume, "resume_text or full_resume is required"
-    if not candidate_store.enabled:
-        return False
-    if resume_text:
-        candidate_store._update_candidate(chat_id=chat_id, thread_id=conversation_id, resume_text=resume_text)
-    if full_resume:
-        candidate_store._update_candidate(chat_id=chat_id, thread_id=conversation_id, full_resume=full_resume)
-    return True

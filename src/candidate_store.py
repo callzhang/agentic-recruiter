@@ -42,12 +42,12 @@ fields = [
     # Additional fields
     FieldSchema(name="stage", dtype=DataType.VARCHAR, max_length=20, nullable=True),
     FieldSchema(name="full_resume", dtype=DataType.VARCHAR, max_length=10000, nullable=True),
-    FieldSchema(name="thread_id", dtype=DataType.VARCHAR, max_length=100, nullable=True),
+    FieldSchema(name="conversation_id", dtype=DataType.VARCHAR, max_length=100, nullable=True),
 ]
 
 # List of all field names except "resume_vector"
-_all_fields = [f.name for f in fields if f.dtype != DataType.FLOAT_VECTOR]
-
+_readable_fields = [f.name for f in fields if f.dtype != DataType.FLOAT_VECTOR]
+_all_fields = [f.name for f in fields]
 
 class CandidateStore:
     def __init__(
@@ -119,7 +119,7 @@ class CandidateStore:
             }
             collection.create_index(field_name="resume_vector", index_params=index_params)
             collection.create_index(field_name="chat_id")
-            collection.create_index(field_name="thread_id")
+            collection.create_index(field_name="conversation_id")
             collection.create_index(field_name="stage")
             collection.load()
             logger.info("✅ Created and loaded collection %s", name)
@@ -146,15 +146,8 @@ class CandidateStore:
         if not self.enabled or not self.collection:
             return None
         
-        kwargs['resume_text'] = kwargs['resume_text'][:8000]
-        kwargs['updated_at'] = datetime.now().isoformat()
-        
-        # Remove None values except for nullable fields (chat_id can be None)
-        # Keep chat_id even if None, as it's a valid nullable field
-        data = {k: v.strip() if isinstance(v, str) else v for k, v in kwargs.items() if v is not None}
-        
         try:
-            result = self.collection.insert([data])
+            result = self.collection.insert([kwargs])
             self.collection.flush()
             return result.primary_keys[0]
         except Exception as exc:
@@ -167,15 +160,11 @@ class CandidateStore:
         **kwargs,
     ) -> bool:
         """update candidate data using Milvus native upsert."""
-        
-        # Only include fields that are not None
-        data = {k: v.strip() if isinstance(v, str) else v for k, v in kwargs.items() if v is not None}
-        data['updated_at'] = datetime.now().isoformat()
-        data['candidate_id'] = candidate_id
+        kwargs['candidate_id'] = candidate_id
         
         try:
             # Use Milvus native upsert - it handles insert/update automatically
-            result = self.collection.upsert([data], partial_update=True)
+            result = self.collection.upsert([kwargs], partial_update=True)
             self.collection.flush()
             return result.primary_keys[0]
         except Exception as exc:
@@ -197,25 +186,40 @@ class CandidateStore:
         Returns:
             bool: True if successful, False otherwise
         """
-        # Check if candidate exists by candidate_id, chat_id, or thread_id (conversation_id)
+        # Check if candidate exists by candidate_id, chat_id, or conversation_id
         candidate_id = kwargs.get("candidate_id")
         chat_id = kwargs.get("chat_id")
-        thread_id = kwargs.get("thread_id")
-        if chat_id or candidate_id or thread_id:
+        conversation_id = kwargs.get("conversation_id")
+        if kwargs.get("resume_text"):
+            kwargs['resume_text'] = kwargs['resume_text'][:8000]
+        if kwargs.get("full_resume"):
+            kwargs['full_resume'] = kwargs['full_resume'][:8000]
+        if kwargs.get("analysis") and isinstance(kwargs['analysis'], str):
+            kwargs['analysis'] = json.loads(kwargs['analysis'])
+        if kwargs.get("metadata") and isinstance(kwargs['metadata'], str):
+            kwargs['metadata'] = json.loads(kwargs['metadata'])
+        kwargs['updated_at'] = datetime.now().isoformat()
+        
+        # Remove None values except for nullable fields (chat_id can be None)
+        kwargs = {k:v for k, v in kwargs.items() if k in _all_fields}
+        kwargs = {k: v.strip() if isinstance(v, str) else v for k, v in kwargs.items() if v or v == 0}
+
+        if chat_id or candidate_id or conversation_id:
             # Collect identifiers
             identifiers = []
             if chat_id:
                 identifiers.append(chat_id)
             if candidate_id:
                 identifiers.append(candidate_id)
-            if thread_id:
-                identifiers.append(thread_id)
+            if conversation_id:
+                identifiers.append(conversation_id)
             
             # Query using get_candidates
-            results = self.get_candidates(identifiers=identifiers, limit=1)
+            results = self.get_candidates(identifiers=identifiers, limit=1, fields=_all_fields)
             if not results:
                 existing_candidate = None
-                logger.error(f"Candidate not found: {identifiers}")
+                if candidate_id:
+                    logger.error(f"Candidate not found: {identifiers}")
             else:
                 existing_candidate = results[0]
         else:
@@ -223,7 +227,7 @@ class CandidateStore:
 
         if not existing_candidate:
             # Create new candidate - need to generate embedding and truncate resume if needed
-            resume_text = kwargs.get("resume_text", "")
+            resume_text = kwargs.get("resume_text")
             resume_vector = kwargs.get("resume_vector")
             
             # Generate embedding if not provided
@@ -245,7 +249,7 @@ class CandidateStore:
             existing_candidate.update(kwargs)
             pk = self._update_candidate(**existing_candidate)
             if not pk:
-                logger.error("Failed to update existing candidate: %s", kwargs['name'])
+                logger.error("Failed to update existing candidate: %s", kwargs)
             return pk
 
 # ------------------------------------------------------------------
@@ -267,7 +271,7 @@ class CandidateStore:
             anns_field="resume_vector",
             limit=limit,
             param=search_params,
-            output_fields=_all_fields,
+            output_fields=_readable_fields,
         )
         hits = [result['entity'] for result in results[0][:limit] if result.score > similarity_threshold]
         
@@ -282,13 +286,13 @@ class CandidateStore:
         names: Optional[List[str]] = None,
         job_applied: Optional[str] = None,
         limit: Optional[int] = None,
-        fields = _all_fields
+        fields = _readable_fields
     ) -> List[Dict[str, Any]]:
         """
-        Query candidates by identifiers (chat_id/candidate_id/thread_id) or by names/job_applied.
+        Query candidates by identifiers (chat_id/candidate_id/conversation_id) or by names/job_applied.
         
         Args:
-            identifiers: List of chat_id, candidate_id, or thread_id values (mutually exclusive with names/job_applied)
+            identifiers: List of chat_id, candidate_id, or conversation_id values (mutually exclusive with names/job_applied)
             names: List of candidate names (requires job_applied)
             job_applied: Single job_applied value (required with names)
             limit: Maximum number of results to return
@@ -300,26 +304,26 @@ class CandidateStore:
         if not self.enabled or not self.collection:
             return []
         if fields is None:
-            fields = _all_fields
-        
-        # Validate mutually exclusive parameters
-        if identifiers and (names or job_applied):
-            assert len(identifiers) == len(names), "identifiers and names must have the same length"
-        if not identifiers and not names:
-            raise ValueError("Either identifiers or names must be provided")
-        if names and not job_applied:
-            raise ValueError("job_applied is required when names is provided")
+            fields = _readable_fields
+
+        # remove None from identifiers, names, and job_applied
+        if identifiers:
+            identifiers = [id for id in identifiers if id] or None
+        if names:
+            names = [name for name in names if name] or None
+        if job_applied:
+            job_applied = job_applied or None
         
         # Build query expression
         if identifiers:
-            # Query by identifiers: chat_id IN [...] OR candidate_id IN [...] OR thread_id IN [...]
+            # Query by identifiers: chat_id IN [...] OR candidate_id IN [...] OR conversation_id IN [...]
             identifiers = [str(id).strip() for id in identifiers if id and str(id).strip()]
             if not identifiers:
                 return []
             
             quoted_ids = [f"'{id}'" for id in identifiers]
             ids_str = ', '.join(quoted_ids)
-            expr_1 = f"chat_id IN [{ids_str}] OR candidate_id IN [{ids_str}] OR thread_id IN [{ids_str}]"
+            expr_1 = f"chat_id IN [{ids_str}] OR candidate_id IN [{ids_str}] OR conversation_id IN [{ids_str}]"
             query_limit = limit or len(identifiers)
         else:
             expr_1 = None
@@ -405,4 +409,4 @@ def get_embedding(text: str) -> Optional[List[float]]:
 
 candidate_store = _create_candidate_store()
 
-__all__ = ["candidate_store", "CandidateStore", "update_candidate_resume", "upsert_candidate"]
+__all__ = ["candidate_store", "CandidateStore", "upsert_candidate"]

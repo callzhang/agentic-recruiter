@@ -152,7 +152,7 @@ async def list_recommended_candidates_action(page: Page, *, limit: int = 999, jo
                 "chat_id": None,  # Recommend candidates don't have a chat_id yet
                 "name": name,
                 "job_applied": job_title,  # Standardized field name
-                "description": text,
+                "last_message": text,
                 "viewed": viewed,
                 "greeted": greeted,
                 'mode': 'recommend',
@@ -225,7 +225,7 @@ async def greet_recommend_candidate_action(page: Page, index: int, message: str 
     if message:
         try:
             # 点击继续沟通按钮
-            asyncio.sleep(3)
+            await asyncio.sleep(3)
             chat_btn = card.locator(chat_selectors)
             await chat_btn.click(timeout=1000)
             # input_box = page.locator("div.conversation-bd-content").first
@@ -241,8 +241,8 @@ async def greet_recommend_candidate_action(page: Page, index: int, message: str 
                 await page.keyboard.press("Enter")
             close_btn = page.locator("div.iboss-close").first
             await close_btn.click(timeout=1000)
-        except:
-            logger.error("发送消息失败")
+        except Exception as e:
+            logger.error("发送消息失败: %s", e)
     logger.info("打招呼成功")
     return True
 
