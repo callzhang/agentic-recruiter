@@ -13,7 +13,7 @@ import requests
 
 from src.config import settings
 from .global_logger import logger
-
+from .candidate_store import upsert_candidate
 if TYPE_CHECKING:  # pragma: no cover - import guard
     from .assistant_actions import AssistantActions
 
@@ -301,7 +301,7 @@ class BRDWorkScheduler:
                 "greeted": greeted,
             }
 
-            self.assistant.upsert_candidate(
+            upsert_candidate(
                 candidate_id=candidate_id,
                 scores=analysis,
                 resume_text=resume_text,

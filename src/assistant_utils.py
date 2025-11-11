@@ -10,7 +10,6 @@ from functools import lru_cache
 from typing import Any, Dict, List, Optional
 from .config import settings
 from .global_logger import logger
-from .candidate_store import CandidateStore, candidate_store
 from openai import OpenAI
 _openai_client = OpenAI(api_key=settings.OPENAI_API_KEY, base_url=settings.OPENAI_BASE_URL)
 

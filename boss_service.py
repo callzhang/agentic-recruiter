@@ -18,7 +18,7 @@ from fastapi.templating import Jinja2Templates
 from playwright.async_api import Browser, BrowserContext, Page, Playwright, TimeoutError as PlaywrightTimeoutError, async_playwright
 
 from src import assistant_actions
-from src.candidate_store import candidate_store
+from src.candidate_store import get_candidates, get_candidate_count, search_candidates_by_resume, upsert_candidate
 from src.config import settings
 from src.global_logger import logger
 import src.chat_actions as chat_actions
@@ -64,7 +64,6 @@ class BossServiceAsync:
         self.is_logged_in = False
         self.browser_lock = asyncio.Lock()
         self.startup_complete = asyncio.Event()
-        self.candidate_store = candidate_store
         self.event_manager = None  # Placeholder for legacy debug endpoint
         self.setup_routes()
         self.setup_exception_handlers()
@@ -718,7 +717,7 @@ class BossServiceAsync:
                 chat_id: Unique identifier for the chat/candidate
                 fields: Optional list of fields to return (default: all fields)
             """
-            results = candidate_store.get_candidates(identifiers=[chat_id], limit=1, fields=fields)
+            results = get_candidates(identifiers=[chat_id], limit=1, fields=fields)
             return results[0] if results else None
         
         @self.app.post("/store/candidate/get-by-resume")
@@ -731,7 +730,7 @@ class BossServiceAsync:
             Returns:
                 Optional[dict]: Matching candidate data if found, None otherwise
             """
-            return candidate_store.search_candidates_by_resume(
+            return search_candidates_by_resume(
                 resume_text=resume_text
             )
 
@@ -1032,8 +1031,7 @@ async def web_stats():
     # Try to get total candidates from store
     total_candidates = 0
     try:
-        if candidate_store and candidate_store.collection:
-            total_candidates = candidate_store.collection.num_entities
+        total_candidates = get_candidate_count()
     except Exception as e:
         logger.warning(f"Failed to get candidate count: {e}")
     

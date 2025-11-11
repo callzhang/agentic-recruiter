@@ -397,28 +397,35 @@ async def request_full_resume_action(page: Page, chat_id: str) -> bool:
         return True  # Already requested (button disabled)
     
     await btn.click()
-    await page.wait_for_timeout(1000)
-    
-    # 境外提醒
-    confirm_continue = page.locator("div.btn-v2:has-text('继续交换')").first
-    if await confirm_continue.count() > 0:
-        await confirm_continue.click()
-        await page.wait_for_timeout(1000)
-    
-    # Confirm dialog
-    confirm = page.locator("span.boss-btn-primary:has-text('确定')").first
-    if await confirm.count() > 0:
-        await confirm.click()
-    else:
-        await page.keyboard.press("Enter")
+    t0 = time.time()
+    while time.time() - t0 < 10:
+        # 境外提醒
+        confirm_continue = page.locator("div.btn-sure-v2:has-text('继续交换')")
+        if await confirm_continue.count() > 0:
+            try:
+                await confirm_continue.click(timeout=1000)
+            except:
+                pass
+        
+        # Confirm dialog
+        confirm = page.locator("span.boss-btn-primary:has-text('确定')")
+        if await confirm.count() > 0:
+            try:
+                await confirm.click(timeout=1000)
+            except:
+                pass
+        else:
+            await page.keyboard.press("Enter")
 
-    # Verify success
-    await page.wait_for_timeout(2000)
-    success_indicator = page.locator("div.item-system >> span:has-text('简历请求已发送')")
-    if await success_indicator.count() == 0:
+        # Verify success
+        success_indicator = page.locator("div.item-system >> span:has-text('简历请求已发送')")
+        if await success_indicator.count() >= 0:
+            return True
+        await asyncio.sleep(0.5)
+    else:
         logger.error("简历请求未发送或超时")
     
-    return True
+    return False
     
 #TODO: fix this
 async def accept_full_resume_action(page: Page, chat_id: str) -> bool:

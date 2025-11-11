@@ -11,7 +11,7 @@ from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 import boss_service
 from src import assistant_actions, chat_actions, recommendation_actions
-from src.candidate_store import candidate_store
+from src.candidate_store import get_candidate_count, get_candidates
 
 
 def make_dummy_page() -> Any:
@@ -359,14 +359,8 @@ def test_assistant_generate_message_endpoint(client: TestClient, monkeypatch: py
 
 
 def test_candidate_lookup_endpoint(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        candidate_store,
-        "get_candidates",
-        lambda identifiers=None, names=None, job_applied=None, limit=None, fields=None: [{"chat_id": identifiers[0] if identifiers else None, "name": "Alice"}] if identifiers else [],
-    )
-
     response = client.get("/candidate/chat-42")
-
+    monkeypatch.setattr(get_candidates, "get_candidates", lambda identifiers=None, names=None, job_applied=None, limit=None, fields=None: [{"chat_id": identifiers[0] if identifiers else None, "name": "Alice"}] if identifiers else [])
     assert response.status_code == 200
     assert response.json() == {"chat_id": "chat-42", "name": "Alice"}
 
@@ -546,8 +540,8 @@ def test_web_stats_route_uses_service_status(
     )
     
     # Mock candidate store
-    original_collection = getattr(candidate_store, "collection", None)
-    candidate_store.collection = types.SimpleNamespace(num_entities=42)
+    original_count = get_candidate_count()
+    monkeypatch.setattr(get_candidate_count, "get_candidate_count", lambda: 42)
 
     response = client.get("/web/stats")
 
@@ -556,7 +550,7 @@ def test_web_stats_route_uses_service_status(
     assert "7" in response.text
     assert "4" in response.text
 
-    candidate_store.collection = original_collection
+    monkeypatch.setattr(get_candidate_count, "get_candidate_count", original_count)
 
 
 def test_web_recent_activity_route(client: TestClient) -> None:

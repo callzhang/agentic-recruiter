@@ -14,7 +14,7 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, Form, Query, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
-from src.candidate_store import candidate_store
+from src.candidate_store import get_candidates, get_candidate_id_by_dict, upsert_candidate
 from src.config import settings
 from src.jobs_store import jobs_store
 from src.global_logger import logger    
@@ -146,7 +146,7 @@ async def list_candidates(
     names: list[str] = [c["name"] for c in candidates if c.get("name")]
     job_applied = candidates[0].get("job_applied")
     # Check if candidate is saved to cloud using batch query results
-    stored_candidates = candidate_store.get_candidates(identifiers=identifiers, names=names, job_applied=job_applied)
+    stored_candidates = get_candidates(identifiers=identifiers, names=names, job_applied=job_applied)
     
     # Render candidate cards
     html = ""
@@ -193,7 +193,7 @@ async def get_candidate_detail(request: Request):
         data = dict(form_data)
     data = {k:v for k, v in data.items() if v}
     # Try to find existing candidate
-    results = candidate_store.get_candidates(
+    results = get_candidates(
         identifiers=[data.get('candidate_id'), data.get('chat_id'), data.get('conversation_id')], 
         names=[data.get('name')], 
         job_applied=data.get('job_applied'), 
@@ -305,8 +305,7 @@ async def analyze_candidate(
     analysis_data["action_flags"] = {}
     
     # Get candidate_id if exists
-    results = candidate_store.get_candidates(identifiers=[conversation_id], limit=1)
-    candidate_id = results[0].get("candidate_id") if results else None
+    candidate_id = get_candidate_id_by_dict({"conversation_id": conversation_id, "job_applied": job_applied, "name": name})
     
     candidate_data = {
         "analysis": analysis_data,
@@ -338,8 +337,8 @@ async def save_candidate_to_cloud(request: Request):
     # Only require job_applied and at least one ID
     assert 'job_applied' in kwargs, "job_applied is required"
 
-    # upsert_candidate passes all relevant kwargs
-    candidate_id = candidate_store.upsert_candidate(**kwargs)
+    # update candidate passes all relevant kwargs
+    candidate_id = upsert_candidate(**kwargs)
     return JSONResponse(content={
         "candidate_id": candidate_id,
         "success": True
@@ -385,6 +384,7 @@ async def generate_message(
             conversation_id=conversation_id,
             purpose=purpose
         )
+        logger.debug("Generated message: %s", message)
     else:
         logger.warning("No new message found for conversation_id: %s", conversation_id)
         message = last_assistant_message
@@ -491,7 +491,7 @@ async def fetch_full_resume(
     resume_text = await chat_actions.get_full_resume_action(page, chat_id)
 
     # Fetch latest candidate metadata for display
-    results = candidate_store.get_candidates(identifiers=[chat_id], limit=1)
+    results = get_candidates(identifiers=[chat_id], limit=1)
     candidate_data = results[0] if results else {"chat_id": chat_id}
 
     # Re-render detail with full resume

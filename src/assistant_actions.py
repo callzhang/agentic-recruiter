@@ -6,7 +6,7 @@ import json
 from functools import lru_cache
 from typing import Any, Dict, List, Optional
 from openai import OpenAI
-from .candidate_store import candidate_store
+from .candidate_store import upsert_candidate
 from .config import settings
 from .global_logger import logger
 from .assistant_utils import _openai_client
@@ -125,7 +125,7 @@ def init_chat(
     conversation = _openai_client.conversations.create(metadata=conversation_metadata, items=[system_prompt, candidate_message])
 
     # create candidate record
-    success = candidate_store.upsert_candidate(
+    success = upsert_candidate(
         chat_id=chat_id,
         name=name,
         job_applied=job_info["position"],
@@ -193,7 +193,7 @@ def generate_message(
                 model="gpt-5-mini",
             )
             result = response.output_parsed.model_dump() 
-            candidate_store.upsert_candidate(conversation_id=conversation_id, analysis=result)
+            upsert_candidate(conversation_id=conversation_id, analysis=result)
         else:
             raise NotImplementedError(f"Unsupported purpose: {purpose}")
         return result

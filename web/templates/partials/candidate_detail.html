@@ -124,47 +124,48 @@ async function process_candidate() {
     const formData = new FormData(form);
     const mode = formData.get('mode');
     
-    try {
-        // Step 1: Ensure resume is loaded
-        const resume_div = document.getElementById('resume-content');
-        if (resume_div && resume_div.textContent.includes('⏳')) {
-            await fetchResume().then(() => {
-                //TODO: check for candidate_id by resume_text if not exists
-            });
-        }
-        
-        // Step 2: Initialize chat if no conversation_id
-        let conversation_id = formData.get('conversation_id');
-        if (!conversation_id) {
-            conversation_id = await initializeNewChat();
-            updateCandidateData({'conversation_id': conversation_id});
-        }
-        
-        // Step 3: Start analysis if pending
-        const analysisDiv = document.getElementById('analysis-content');
-        if (analysisDiv.textContent.includes('⏳') && !resume_div.textContent.includes('⏳')) {
-            await startAnalysis();
-            // saveCandidateToCloud() is called by hx-on::after-swap
-        }
-        
-        // Step 4: Check threshold and generate message if needed
-        const analysis_container = document.querySelector('#analysis-content #analysis-result-container');
-        const analysis = analysis_container ? JSON.parse(analysis_container.getAttribute('data-analysis')) : null;
-        const overall_score = analysis?.overall || 0;
-        const { chat_threshold, borderline_threshold } = getThresholdValues();
-        
-        if (overall_score >= chat_threshold) {
-            const messageDiv = document.getElementById('message-content');
-            if (messageDiv && messageDiv.textContent.includes('⏳')) {
-                await generateMessage();
+    // Step 1: Ensure resume is loaded
+    const resume_div = document.getElementById('resume-content');
+    if (resume_div && resume_div.textContent.includes('⏳')) {
+        await fetchResume().then(() => {
+            const candidate_id = formData.get('candidate_id');
+            if (!candidate_id) {
+                // candidate_id = await getCandidateIdByResumeText();
+                // updateCandidateData({'candidate_id': candidate_id});
+                showToast('TODO: Candidate ID not found, will be fetched later', 'warning');
             }
-            if (overall_score >= borderline_threshold) {
-                requestFullResume();
-            }
+        }).then(() => {
+            //TODO: fetch full resume
+        });
+    }
+    
+    // Step 2: Initialize chat if no conversation_id
+    let conversation_id = formData.get('conversation_id');
+    if (!conversation_id) {
+        conversation_id = await initializeNewChat();
+        updateCandidateData({'conversation_id': conversation_id});
+    }
+    
+    // Step 3: Start analysis if pending
+    const analysisDiv = document.getElementById('analysis-content');
+    if (analysisDiv.textContent.includes('⏳') && !resume_div.textContent.includes('⏳')) {
+        await startAnalysis();
+    }
+    
+    // Step 4: Check threshold and generate message if needed
+    const analysis_container = document.querySelector('#analysis-content #analysis-result-container');
+    const analysis = analysis_container ? JSON.parse(analysis_container.getAttribute('data-analysis')) : null;
+    const overall_score = analysis?.overall || 0;
+    const { chat_threshold, borderline_threshold } = getThresholdValues();
+    
+    if (overall_score >= chat_threshold) {
+        const messageDiv = document.getElementById('message-content');
+        if (messageDiv && messageDiv.textContent.includes('⏳')) {
+            await generateMessage();
         }
-    } catch (err) {
-        console.error('Workflow error:', err);
-        showToast(`处理失败: ${err.message}`, 'error');
+        if (overall_score >= borderline_threshold) {
+            requestFullResume();
+        }
     }
 }
 
@@ -302,12 +303,14 @@ function saveCandidateToCloud() {
     
     const chat_id = formData.get('chat_id');
     const conversation_id = formData.get('conversation_id');
+    const candidate_id = formData.get('candidate_id');
     
     fetch('/candidates/save-to-cloud', {method: 'POST', body: formData})
         .then(window.handleApiResponse)
         .then(data => {
             showToast('✅ 已保存', 'success');
-            if (data.candidate_id) {
+            if (data.candidate_id && data.candidate_id !== candidate_id) {
+                console.log('Candidate saved to cloud:', data.candidate_id);
                 updateCandidateData({'candidate_id': data.candidate_id});
             }
             // Update card in list
