@@ -65,6 +65,43 @@
 
 ### 🐛 Bug 修复
 
+#### 代码审查修复（第二轮）
+- **修复全局变量泄漏问题**
+  - `fetchOnlineResume()` 和 `fetchFullResume()` 中的 `form`, `formData`, `url` 添加 `const` 声明
+  - 防止批量处理时并发请求相互干扰
+  - 确保每个候选人的上下文隔离
+  
+- **修复批量处理按钮问题**
+  - 添加函数存在性检查: `typeof processAllCandidates === 'function'`
+  - 点击时显示友好提示而非抛出 "not defined" 错误
+  - 用户需要先选择一个候选人以加载批处理功能
+  
+- **修复 `updateCandidateCard` falsy 值过滤问题**
+  - 移除 `v !== false` 过滤器
+  - 现在可以设置 `saved: false` 或 `viewed: false` 来清除标签
+  - 防止 UI 状态与持久化状态不同步
+
+#### 代码审查修复（第一轮）
+- **修复 `conversation_id` 双重声明问题**
+  - 移除 `const conversation_id` 的声明（line 132）
+  - 统一使用 `let conversationId`（line 136）
+  - 使用 `getIdentifier()` 函数确保事件发送时使用最新的 conversationId
+  
+- **修复 `startAnalysis()` 数据访问问题**
+  - 从访问 `data.overall` 改为从 DOM 查询 `#analysis-result-container`
+  - 正确解析 `data-analysis` 属性获取分析结果
+  - 添加错误处理避免解析失败
+  
+- **修复 `fetchFullResume()` 结果处理问题**
+  - HTMX 交换后查询 `#resume-textarea-full` 元素
+  - 检查 textarea 的 `.value` 属性而非返回字符串长度
+  - 正确判断简历是否已加载
+
+#### 其他Bug修复
+- 修复 `install_hr.command` 中的过时配置
+  - 更新版本号从 2.2.0 到 2.4.0
+  - 更新 Zilliz 集合名保持为 CN_candidates（与主配置一致）
+  - 更新 Sentry release tag 到 2.4.0
 - 修复候选人详情页中 `generated_message` 为 None 时被识别为有效消息的问题
 - 修复完整简历加载时 DOM 元素查询失败的问题
 - 修复批量分析按钮在切换标签后不显示的问题
@@ -112,6 +149,11 @@
 - 记录所有 UI/UX 改进和 bug 修复
 - 更新数据迁移说明
 - 新增测试文档 (test/README.md)
+- 完全重写脚本文档 (scripts/README.md)
+  - 仅包含当前活跃的脚本
+  - 添加文件大小和详细说明
+  - 记录已移除脚本的原因和替代方案
+  - 添加 v2.4.0 的使用示例
 
 ---
 

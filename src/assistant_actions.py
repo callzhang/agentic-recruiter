@@ -182,7 +182,7 @@ def generate_message(
     """
     
     # conversation_id is now passed directly, no lookup needed
-    assert conversation_id != '', "conversation_id is required"
+    assert conversation_id and conversation_id != 'null', "conversation_id is required"
     logger.debug(f"Generating message for purpose: {purpose}")
     instruction = ACTION_PROMPTS[purpose]
     if purpose in ["ANALYZE_ACTION", "PLAN_PROMPTS"]:

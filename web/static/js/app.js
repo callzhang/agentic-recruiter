@@ -298,11 +298,12 @@ function candidateTabs() {
                     const candidateList = document.getElementById('candidate-list');
                     
                     // Check if response is an error message
-                    if (!response.ok || html.includes('text-red-500') || html.includes('失败')) {
+                    if (!response.ok) {
+                        debugger;
                         // Error: replace list content with error message
                         candidateList.innerHTML = html;
                         this.loading = false;
-                        showToast('加载失败，请重试', 'error');
+                        showToast('获取候选人列表失败，请重试', 'error');
                         return;
                     }
                     
@@ -409,7 +410,7 @@ function candidateTabs() {
                             <p class="text-sm mt-2">${err.message}</p>
                         </div>
                     `;
-                    showToast('加载失败，请重试', 'error');
+                    showToast('加载失败: ' + err.message, 'error');
                 });
         }
     };

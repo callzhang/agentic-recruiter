@@ -98,7 +98,7 @@
             {% endif %}
         </div>
         <div class="flex p-2 gap-2">
-            <button onclick="sendGreetAndMessage()"
+            <button onclick="greetAndSendMessage()"
                     class="px-4 py-1 bg-green-600 text-white text-sm rounded hover:bg-green-800">
                 📤 打招呼+发送消息
             </button>
@@ -129,12 +129,14 @@ async function process_candidate() {
     const formData = new FormData(form);
     const mode = formData.get('mode');
     const chat_id = formData.get('chat_id');
-    const conversation_id = formData.get('conversation_id');
     const candidate_id = formData.get('candidate_id');
     const name = formData.get('name') || '未知候选人';
+    // Use single mutable variable for conversation_id
+    let conversationId = formData.get('conversation_id');
     
-    // Emit identifier for event listeners
-    const identifier = chat_id || conversation_id || candidate_id || 'unknown';
+    // Emit identifier for event listeners (use current conversationId value)
+    const getIdentifier = () => chat_id || conversationId || candidate_id || 'unknown';
+    
     try {
         // Step 1: Ensure resume is loaded
         const online_resume_div = document.getElementById('resume-textarea-online');
@@ -143,10 +145,9 @@ async function process_candidate() {
         }
         
         // Step 2: Initialize chat if no conversation_id
-        let conversation_id = formData.get('conversation_id');
-        if (!conversation_id) {
-            conversation_id = await initializeNewChat();
-            updateCandidateData({'conversation_id': conversation_id});
+        if (!conversationId) {
+            conversationId = await initializeNewChat();
+            updateCandidateData({'conversation_id': conversationId});
             updateCandidateCard({'saved': true});
         }
         
@@ -170,20 +171,26 @@ async function process_candidate() {
             const full_resume_div = document.getElementById('resume-textarea-full');
             if (full_resume_div?.value?.includes('⏳') || full_resume_div?.value?.includes('None')) {
                 if(overall_score >= borderline_threshold){
-                    await fetchFullResume()
-                        .then(result => {
-                            if (result.length > 100) {
+                    if(mode === 'recommend'){
+                        await greetAndSendMessage();
+                    }else{
+                        await fetchFullResume().then(data => {
+                            // Check the swapped textarea content
+                            const full_resume_textarea = document.getElementById('resume-textarea-full');
+                            const resumeText = full_resume_textarea?.value || '';
+                            if (resumeText.length > 100 && !resumeText.includes('⏳')) {
                                 // analyze the full resume
                                 startAnalysis();
                             }
                             else {
-                                showToast(result, 'info');
+                                showToast('暂无完整简历数据', 'info');
                             }
                         })
                         .catch(err => {
                             // Handle error (e.g., recommend mode not supported)
                             console.warn('fetchFullResume failed:', err.message);
                         });
+                    }
                 }else{
                     showToast('匹配度未达标，不分析完整简历', 'info');
                 }
@@ -198,12 +205,12 @@ async function process_candidate() {
             score: overall_score
         });
         
-        // Emit success event
+        // Emit success event (use updated conversationId)
         const event = new CustomEvent('candidate:processing-complete', {
             detail: {
-                identifier: identifier,
+                identifier: getIdentifier(),
                 chat_id: chat_id,
-                conversation_id: conversation_id,
+                conversation_id: conversationId,
                 candidate_id: candidate_id,
                 name: name
             }
@@ -214,12 +221,12 @@ async function process_candidate() {
         
     } catch (error) {
         console.error('Error processing candidate:', error);
-        // Emit error event
+        // Emit error event (use updated conversationId)
         const event = new CustomEvent('candidate:processing-error', {
             detail: {
-                identifier: identifier,
+                identifier: getIdentifier(),
                 chat_id: chat_id,
-                conversation_id: conversation_id,
+                conversation_id: conversationId,
                 candidate_id: candidate_id,
                 name: name,
                 error: error.message || String(error)
@@ -232,10 +239,10 @@ async function process_candidate() {
 
 function fetchOnlineResume() {
     showToast('抓取在线简历...', 'info');
-    form = document.getElementById('candidate-context');
+    const form = document.getElementById('candidate-context');
     const formData = new FormData(form);
     const mode = formData.get('mode');
-    url = mode == 'recommend'?"/candidates/fetch-recommend-resume":"/candidates/fetch-online-resume";
+    const url = mode == 'recommend'?"/candidates/fetch-recommend-resume":"/candidates/fetch-online-resume";
     return htmxAjaxPromise('POST', url, {
         target: '#tab-content-online',
         swap: 'innerHTML',
@@ -245,8 +252,8 @@ function fetchOnlineResume() {
 
 function fetchFullResume() {
     showToast('抓取完整简历...', 'info');
-    form = document.getElementById('candidate-context');
-    formData = new FormData(form);
+    const form = document.getElementById('candidate-context');
+    const formData = new FormData(form);
     formData.delete('resume_text');
     const mode = formData.get('mode');
     if (mode === 'recommend') {
@@ -294,13 +301,13 @@ function generateMessage() {
         swap: 'innerHTML',
         source: '#candidate-context',
         values: {'purpose': 'CHAT_ACTION'}
-    }).then(data => {
-        console.log('Generated message:', data);
-        updateCandidateCard({'generated_message': data});
+    }).then(result => {
+        console.log('Generated message:', result);
+        updateCandidateCard({'generated_message': result});
     });
 }
 
-function sendGreetAndMessage() {
+function greetAndSendMessage() {
     showToast('打招呼+发送消息...', 'info');
     const message_textarea = document.getElementById('message-text');
     const message = message_textarea.value.trim();
@@ -344,9 +351,12 @@ function sendGreetAndMessage() {
             'resume_text': resume_text.includes('⏳') ? '' : resume_text,
             'full_resume': full_resume.includes('⏳') ? '' : full_resume
         }
-    }).then(data => {
-        console.log('Analysis completed:', data);
-        updateCandidateCard({score: data.overall});
+    }).then(result => {
+        console.log('Analysis completed:', result);
+        // Extract analysis from data attribute
+        const analysis_container = document.querySelector('#analysis-content #analysis-result-container');
+        const analysis = analysis_container ? JSON.parse(analysis_container.getAttribute('data-analysis')) : null;
+        updateCandidateCard({score: analysis.overall});
     });
 }
 
@@ -377,9 +387,10 @@ function initializeNewChat() {
 
 
 function updateCandidateCard(updates) {
-    // Remove keys from updates where value is null or undefined (like {k:v for k,v in updates.items() if v} in Python)
+    // Remove keys from updates where value is null or undefined
+    // Keep false values to allow clearing tags/badges
     updates = Object.fromEntries(
-        Object.entries(updates).filter(([_, v]) => v !== null && v !== undefined && v !== false && v !== '')
+        Object.entries(updates).filter(([_, v]) => v !== null && v !== undefined && v !== '')
     );
     // Find the candidate card by chat_id, candidate_id, conversation_id, or name+job
     const candidateCards = document.querySelectorAll('.candidate-card');
@@ -539,7 +550,7 @@ function getThresholdValues() {
         }
         
         // Listen for swap completion
-        const afterSwap = () => {
+        const afterSwap = (evt) => {
             target.removeEventListener('htmx:afterSwap', afterSwap);
             target.removeEventListener('htmx:responseError', onError);
             resolve(target.textContent.trim());

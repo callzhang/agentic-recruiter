@@ -107,7 +107,7 @@ async def list_candidates(
         # Map modes to tab and status filters based on boss_service.py API
         if mode == "greet":
             tab_filter = "新招呼"
-            status_filter = "未读"
+            status_filter = "全部" #"未读"
         elif mode == "chat":
             tab_filter = "沟通中"
             status_filter = "未读"
@@ -167,7 +167,6 @@ async def list_candidates(
         
         if stored_candidate:
             candidate.update(stored_candidate) # last_message will be updated by saved candidate
-            candidate["conversation_id"] = stored_candidate.get("conversation_id")
             candidate["saved"] = True
             # Extract score from analysis if available
             analysis = stored_candidate.get("analysis")
@@ -288,6 +287,7 @@ async def init_chat(
     if mode == "recommend":
         history = []
     else:
+        assert chat_id is not None, "chat_id is required for chat mode"
         page = await boss_service.service._ensure_browser_session()
         history = await chat_actions.get_chat_history_action(page, chat_id)
         
@@ -659,6 +659,7 @@ def _save_candidate_background(background_tasks: BackgroundTasks, **object: dict
     Logs errors but doesn't raise to avoid blocking the response.
     """
     candidate_id = upsert_candidate(**object)
+    logger.debug(f"Background saved candidate: {object}")
     # def _save_task():
     #     try:
     #         upsert_candidate(**object)

@@ -50,25 +50,29 @@ _readable_fields = [f.name for f in get_collection_schema() if f.dtype != DataTy
 # ------------------------------------------------------------------
 
 def _create_client() -> Optional[MilvusClient]:
-    """Create and return a MilvusClient instance."""
-        # Check if token is available (optional attribute)
+    """Create and return a MilvusClient instance, or None if connection fails."""
+    # Check if token is available (optional attribute)
     token = getattr(settings, 'ZILLIZ_TOKEN', None)
     
-    if token:
-        client = MilvusClient(
-            uri=settings.ZILLIZ_ENDPOINT,
-            token=token,
-            secure=settings.ZILLIZ_ENDPOINT.startswith("https://"),
-        )
-    else:
-        client = MilvusClient(
-            uri=settings.ZILLIZ_ENDPOINT,
-            user=settings.ZILLIZ_USER,
-            password=settings.ZILLIZ_PASSWORD,
-            secure=settings.ZILLIZ_ENDPOINT.startswith("https://"),
-        )
-    logger.debug("Connected to Zilliz endpoint %s", settings.ZILLIZ_ENDPOINT)
-    return client
+    try:
+        if token:
+            client = MilvusClient(
+                uri=settings.ZILLIZ_ENDPOINT,
+                token=token,
+                secure=settings.ZILLIZ_ENDPOINT.startswith("https://"),
+            )
+        else:
+            client = MilvusClient(
+                uri=settings.ZILLIZ_ENDPOINT,
+                user=settings.ZILLIZ_USER,
+                password=settings.ZILLIZ_PASSWORD,
+                secure=settings.ZILLIZ_ENDPOINT.startswith("https://"),
+            )
+        logger.debug("Connected to Zilliz endpoint %s", settings.ZILLIZ_ENDPOINT)
+        return client
+    except Exception as exc:
+        logger.error("Failed to create Zilliz client: %s", exc, exc_info=True)
+        return None
 
 # Global client instance
 _client: Optional[MilvusClient] = _create_client()
@@ -239,7 +243,7 @@ def get_candidates(
             limit=query_limit,
         )
         # Remove empty fields
-        return [{k: v for k, v in result.items() if v} for result in results]
+        return [{k: v for k, v in result.items() if v or v == 0} for result in results]
     except Exception as exc:
         logger.exception("Failed to query candidates: %s", exc)
         return []

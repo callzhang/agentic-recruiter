@@ -15,8 +15,8 @@
       - "full_resume": full_resume,
     -->
     <input type="hidden" name="analysis" value="{{ analysis | tojson }}">
-    <input type="hidden" name="resume_text" value="{{ resume_text }}">
-    <input type="hidden" name="full_resume" value="{{ full_resume }}">
+    <!-- <input type="hidden" name="resume_text" value="{{ resume_text }}">
+    <input type="hidden" name="full_resume" value="{{ full_resume }}"> -->
     <!-- Score badge in upper-right corner -->
     {% if candidate.score is defined and candidate.score is not none %}
     <div class="absolute top-0 right-0 bg-gradient-to-r from-blue-500 to-indigo-600 text-white text-xs font-bold px-2 py-1 rounded-bl-lg rounded-tr-lg shadow-md" data-badge="score">
