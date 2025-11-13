@@ -1,45 +1,49 @@
 <!-- Analysis result display -->
 <div class="space-y-4" 
      id="analysis-result-container"
-     data-action-flags='{{ candidate.analysis.action_flags | tojson if candidate.analysis.action_flags else "{}" }}'
-     data-analysis='{{ candidate.analysis | tojson }}'
-     data-mode="{{ candidate.mode }}"
-     data-conversation-id="{{ candidate.conversation_id or '' }}"
-     data-chat-id="{{ candidate.chat_id or '' }}"
-     data-candidate-id="{{ candidate.candidate_id or '' }}"
-     data-index="{{ candidate.index or '' }}"
-     data-name="{{ candidate.name or '' }}"
-     data-job-id="{{ candidate.job_id or job_id or '' }}"
-     data-job-applied="{{ candidate.job_applied or job_applied or '' }}"
-     data-assistant-id="{{ assistant_id }}"
-     data-resume-text="{{ candidate.resume_text or '' | replace('"', '&quot;') }}">
+     data-analysis='{{ analysis | tojson }}'>
+    <!-- Resume Type Badge -->
+    <div class="flex justify-end">
+        <span class="inline-block px-3 py-1 text-xs font-medium rounded-full
+            {% if candidate.resume_type == 'full' %}
+                bg-indigo-100 text-indigo-700
+            {% else %}
+                bg-blue-100 text-blue-700
+            {% endif %}">
+            {% if candidate.resume_type == 'full' %}
+                📄 完整简历
+            {% else %}
+                🌐 在线简历
+            {% endif %}
+        </span>
+    </div>
     <div class="grid grid-cols-4 gap-4">
         <div class="bg-white border rounded-lg p-4 text-center">
-            <div class="text-2xl font-bold text-blue-600">{{ candidate.analysis.skill or 0 }}</div>
+            <div class="text-2xl font-bold text-blue-600">{{ analysis.skill or 0 }}</div>
             <div class="text-sm text-gray-600 mt-1">技能匹配</div>
         </div>
         <div class="bg-white border rounded-lg p-4 text-center">
-            <div class="text-2xl font-bold text-green-600">{{ candidate.analysis.startup_fit or 0 }}</div>
+            <div class="text-2xl font-bold text-green-600">{{ analysis.startup_fit or 0 }}</div>
             <div class="text-sm text-gray-600 mt-1">创业契合</div>
         </div>
         <div class="bg-white border rounded-lg p-4 text-center">
-            <div class="text-2xl font-bold text-yellow-600">{{ candidate.analysis.background or 0 }}</div>
+            <div class="text-2xl font-bold text-yellow-600">{{ analysis.background or 0 }}</div>
             <div class="text-sm text-gray-600 mt-1">基础背景</div>
         </div>
         <div class="bg-white border rounded-lg p-4 text-center">
-            <div class="text-2xl font-bold text-purple-600">{{ candidate.analysis.overall or 0 }}</div>
+            <div class="text-2xl font-bold text-purple-600">{{ analysis.overall or 0 }}</div>
             <div class="text-sm text-gray-600 mt-1">综合评分</div>
         </div>
     </div>
 
     <div class="bg-white border rounded-lg p-4">
         <h4 class="font-bold text-gray-800 mb-2">分析总结</h4>
-        <p class="text-gray-700 whitespace-pre-wrap">{{ candidate.analysis.summary or '暂无总结' }}</p>
+        <p class="text-gray-700 whitespace-pre-wrap">{{ analysis.summary or '暂无总结' }}</p>
     </div>
 
     <div class="bg-white border rounded-lg p-4">
         <h4 class="font-bold text-gray-800 mb-2">后续沟通策略</h4>
-        <p class="text-gray-700 whitespace-pre-wrap">{{ candidate.analysis.followup_tips or '暂无策略' }}</p>
+        <p class="text-gray-700 whitespace-pre-wrap">{{ analysis.followup_tips or '暂无策略' }}</p>
     </div>
     <button onclick="startAnalysis()"
             class="w-full p-2 bg-purple-100 text-purple-700 rounded-lg hover:bg-purple-200">

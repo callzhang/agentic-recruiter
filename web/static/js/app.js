@@ -207,6 +207,11 @@ function candidateTabs() {
                 initialMsg.textContent = '点击下方"查询候选人"按钮加载数据';
                 list.appendChild(initialMsg);
             }
+            // Hide batch analyze button when switching tabs
+            const batchBtn = document.getElementById('batch-analyze-btn');
+            if (batchBtn) {
+                batchBtn.classList.add('hidden');
+            }
             // Update URL
             this.updateURL();
         },
@@ -252,7 +257,10 @@ function candidateTabs() {
             const url = `/candidates/list?${params.toString()}`;
             console.log('Fetching:', url);
             
-            // Remove initial message and empty message if they exist
+            const candidateList = document.getElementById('candidate-list');
+            
+            // Clear all non-candidate content (error messages, initial messages, empty messages)
+            // Keep only candidate cards if we're appending
             const initialMsg = document.getElementById('initial-message');
             if (initialMsg) {
                 initialMsg.remove();
@@ -261,6 +269,27 @@ function candidateTabs() {
             if (emptyMsg) {
                 emptyMsg.remove();
             }
+            
+            // Remove any error messages (divs with text-red-500 or containing error indicators)
+            const errorMessages = candidateList.querySelectorAll('.text-red-500, [class*="error"], [class*="失败"]');
+            errorMessages.forEach(msg => {
+                // Only remove if it's not a candidate card
+                if (!msg.closest('.candidate-card')) {
+                    msg.remove();
+                }
+            });
+            
+            // Also check for error divs that might not have those classes
+            // Look for divs that contain error text but aren't candidate cards
+            candidateList.querySelectorAll('div').forEach(div => {
+                if (!div.closest('.candidate-card') && 
+                    (div.textContent.includes('失败') || 
+                     div.textContent.includes('错误') || 
+                     div.textContent.includes('请求失败') ||
+                     div.classList.contains('text-red-500'))) {
+                    div.remove();
+                }
+            });
             
             // Use a custom handler to detect errors and handle swap accordingly
             fetch(url)
@@ -277,75 +306,98 @@ function candidateTabs() {
                         return;
                     }
                     
-                    // Success: deduplicate and update/append candidate cards
+                    // Success: replace the entire list with new candidate cards
+                    // Clear existing content
+                    candidateList.innerHTML = '';
+                    
                     // Parse the incoming HTML to extract candidate cards
                     const tempDiv = document.createElement('div');
                     tempDiv.innerHTML = html;
                     const newCards = tempDiv.querySelectorAll('.candidate-card');
                     
-                    let updatedCount = 0;
-                    let appendedCount = 0;
+                    console.log(`Parsed ${newCards.length} candidate cards from response`);
                     
-                    newCards.forEach(newCard => {
-                        const candidate_id = newCard.getAttribute('data-candidate-id');
-                        if (!candidate_id) {
-                            // Skip cards without ID
-                            return;
+                    let skippedCount = 0;
+                    
+                    // Convert NodeList to Array and append all cards
+                    const cardsArray = Array.from(newCards);
+                    
+                    cardsArray.forEach(newCard => {
+                        let candidate_id = newCard.getAttribute('data-candidate-id');
+                        
+                        // If no data-candidate-id, try to generate a fallback identifier using name
+                        if (!candidate_id || candidate_id.trim() === '') {
+                            const nameElement = newCard.querySelector('h3');
+                            const name = nameElement ? nameElement.textContent.trim() : '';
+                            
+                            if (name) {
+                                // Use name as temporary identifier for unsaved candidates
+                                candidate_id = `temp_${name}`.replace(/\s+/g, '_');
+                                newCard.setAttribute('data-candidate-id', candidate_id);
+                                console.log(`Generated temporary ID for unsaved candidate: ${candidate_id}`);
+                            } else {
+                                // Still no identifier, skip this card
+                                console.warn('Skipping card without name:', newCard);
+                                skippedCount++;
+                                return;
+                            }
                         }
                         
-                        // Check if candidate already exists
-                        const existingCard = candidateList.querySelector(`[data-candidate-id="${candidate_id}"]`);
-                        
-                        if (existingCard) {
-                            // Update existing card with new content
-                            existingCard.outerHTML = newCard.outerHTML;
-                            updatedCount++;
-                        } else {
-                            // Append new card
-                            candidateList.appendChild(newCard);
-                            appendedCount++;
-                        }
+                        // Clone and append the card
+                        const clonedCard = newCard.cloneNode(true);
+                        candidateList.appendChild(clonedCard);
                     });
+                    
+                    const loadedCount = cardsArray.length - skippedCount;
+                    console.log(`Loaded ${loadedCount} candidate cards (${skippedCount} skipped)`);
                     
                     // Tell HTMX to process the new content
                     htmx.process(candidateList);
                     
                     this.loading = false;
                     
-                    // Count how many candidates are in the list now
-                    const candidateCards = document.querySelectorAll('#candidate-list .candidate-card');
-                    const count = candidateCards.length;
-                    
-                    if (count === 0) {
-                        // Show empty state message
-                        const emptyMsg = document.createElement('div');
-                        emptyMsg.id = 'empty-message';
-                        emptyMsg.className = 'text-center text-gray-500 py-12';
-                        emptyMsg.innerHTML = `
-                            <div class="space-y-2">
-                                <p class="text-lg">😔 未找到符合条件的候选人</p>
-                                <p class="text-sm">请尝试切换标签或岗位</p>
-                            </div>
-                        `;
-                        candidateList.appendChild(emptyMsg);
-                        showToast('未找到候选人', 'warning');
-                    } else {
-                        // Remove empty message if it exists
-                        const emptyMsg = document.getElementById('empty-message');
-                        if (emptyMsg) {
-                            emptyMsg.remove();
+                    // Count how many candidates are in the list now - use a fresh query after all updates
+                    // Use requestAnimationFrame to ensure DOM is updated before counting
+                    const self = this;
+                    requestAnimationFrame(() => {
+                        const candidateCards = candidateList.querySelectorAll('.candidate-card');
+                        const count = candidateCards.length;
+                        console.log(`Final count: ${count} candidate cards in the list`);
+                        
+                        // Show/hide batch analyze button
+                        const batchBtn = document.getElementById('batch-analyze-btn');
+                        if (batchBtn) {
+                            if (count > 0) {
+                                batchBtn.classList.remove('hidden');
+                            } else {
+                                batchBtn.classList.add('hidden');
+                            }
                         }
                         
-                        // Show toast with update/append info
-                        let toastMsg = `加载完成，共 ${count} 个候选人`;
-                        if (updatedCount > 0 || appendedCount > 0) {
-                            const parts = [];
-                            if (updatedCount > 0) parts.push(`更新 ${updatedCount} 个`);
-                            if (appendedCount > 0) parts.push(`新增 ${appendedCount} 个`);
-                            toastMsg += ` (${parts.join(', ')})`;
+                        if (count === 0) {
+                            // Show empty state message
+                            const emptyMsg = document.createElement('div');
+                            emptyMsg.id = 'empty-message';
+                            emptyMsg.className = 'text-center text-gray-500 py-12';
+                            emptyMsg.innerHTML = `
+                                <div class="space-y-2">
+                                    <p class="text-lg">😔 未找到符合条件的候选人</p>
+                                    <p class="text-sm">请尝试切换标签或岗位</p>
+                                </div>
+                            `;
+                            candidateList.appendChild(emptyMsg);
+                            showToast('未找到候选人', 'warning');
+                        } else {
+                            // Remove empty message if it exists
+                            const emptyMsg = document.getElementById('empty-message');
+                            if (emptyMsg) {
+                                emptyMsg.remove();
+                            }
+                            
+                            // Show toast with count
+                            showToast(`加载完成，共 ${count} 个候选人`, 'success');
                         }
-                        showToast(toastMsg, 'success');
-                    }
+                    });
                 })
                 .catch((err) => {
                     console.error('Failed:', err);
@@ -375,39 +427,8 @@ window.updateCandidateURL = function() {
     }
 };
 
-// Toast notification
-function showToast(message, type = 'info') {
-    const toastContainer = document.getElementById('toast-container') || createToastContainer();
-    
-    const toast = document.createElement('div');
-    toast.className = `alert px-6 py-4 rounded-lg shadow-lg mb-2 ${getToastClass(type)}`;
-    toast.textContent = message;
-    
-    toastContainer.appendChild(toast);
-    
-    setTimeout(() => {
-        toast.classList.add('opacity-0', 'transition-opacity');
-        setTimeout(() => toast.remove(), 300);
-    }, 3000);
-}
-
-function createToastContainer() {
-    const container = document.createElement('div');
-    container.id = 'toast-container';
-    container.className = 'fixed top-4 right-4 z-50 flex flex-col';
-    document.body.appendChild(container);
-    return container;
-}
-
-function getToastClass(type) {
-    const classes = {
-        'info': 'bg-blue-500 text-white',
-        'success': 'bg-green-500 text-white',
-        'warning': 'bg-yellow-500 text-white',
-        'error': 'bg-red-500 text-white'
-    };
-    return classes[type] || classes['info'];
-}
+// Toast notification is defined in base.html and exposed as window.showToast
+// No need to redefine it here
 
 // ============================================================================
 // Global HTMX Loading & Error Handling
@@ -529,6 +550,19 @@ window.handleApiResponse = async function handleApiResponse(response) {
     // Other server errors
     const message = errorData.error || errorData.detail || response.statusText;
     throw new Error(`Server error (${response.status}): ${message}`);
+}
+
+// ============================================================================
+// Batch Processing (fallback - will be overridden by candidate_detail.html)
+// ============================================================================
+
+/**
+ * Process all candidate cards sequentially
+ * This is a fallback definition. The actual implementation is in candidate_detail.html
+ * and will override this when that template loads.
+ */
+window.processAllCandidates = async function processAllCandidates() {
+    showToast('请先点击一个候选人卡片以加载处理功能', 'warning');
 }
 
 // ============================================================================

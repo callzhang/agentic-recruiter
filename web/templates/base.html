@@ -6,8 +6,9 @@
     <title>{% block title %}BOSS招聘助手{% endblock %}</title>
     
     <!-- Favicon -->
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
-    <link rel="alternate icon" href="/static/favicon.ico">
+    <link rel="alternate icon" href="/favicon.ico">
     
     <!-- TailwindCSS -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -65,7 +66,7 @@
     <footer class="bg-white border-t mt-12">
         <div class="container mx-auto px-4 py-6">
             <div class="text-center text-gray-600 text-sm">
-                <p>BOSS招聘助手 v2.2.0 | Powered by FastAPI + HTMX + Alpine.js</p>
+                <p>BOSS招聘助手 v2.4.0 | Powered by FastAPI + HTMX + Alpine.js</p>
             </div>
         </div>
     </footer>
@@ -110,7 +111,7 @@
             setTimeout(() => {
                 toast.classList.add('animate-fade-out');
                 setTimeout(() => toast.remove(), 300);
-            }, 3000);
+            }, 8000);
         }
         
         // Expose showToast globally

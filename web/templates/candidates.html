@@ -98,6 +98,15 @@
         <!-- Candidate list (left sidebar) -->
         <div class="lg:col-span-4">
             <div class="bg-white rounded-lg shadow-lg h-[1500px] overflow-y-auto">
+                <!-- Batch analyze button (hidden initially) -->
+                <div class="p-4 pb-0">
+                    <button 
+                        id="batch-analyze-btn"
+                        onclick="processAllCandidates()"
+                        class="hidden w-full px-4 py-2 mb-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition disabled:opacity-50 disabled:cursor-not-allowed">
+                        全部分析
+                    </button>
+                </div>
                 <div id="candidate-list" class="p-4 space-y-2">
                     <!-- Initial message -->
                     <div id="initial-message" class="text-center text-gray-500 py-12">

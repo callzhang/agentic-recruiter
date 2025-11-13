@@ -81,7 +81,7 @@ def init_chat(
     mode: str,
     name: str,
     job_info: Dict[str, Any],
-    resume_text: str,
+    online_resume_text: str,
     chat_history: List[Dict[str, Any]]=[],
     chat_id: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -105,33 +105,46 @@ def init_chat(
     """
     
     # Create OpenAI thread
-    conversation_metadata = {"chat_id": chat_id} if chat_id else {}
+    conversation_metadata = {
+        "chat_id": chat_id,
+        "name": name,
+        "job_applied": job_info["position"],
+        "mode": mode,
+    }
 
     
     # Add job description to thread
     job_info_text = json.dumps(job_info, ensure_ascii=False)
     system_prompt = {
         'type': 'message', 
-        'role': 'system', 
-        'content': f'你好，我是招聘顾问。以下是岗位描述，用于分析候选人的匹配程度:\n{job_info_text}'
+        'role': 'developer', 
+        'content': f'你是招聘顾问。以下是岗位描述，用于分析候选人的匹配程度:\n{job_info_text}'
     }
     
     # Add candidate resume to thread
-    candidate_resume_text = f'请查看我的简历:\n{resume_text[:2000]}'
+    candidate_resume_text = f'请查看我的简历:\n{online_resume_text}'
     candidate_message = {'type': 'message', 'role': 'user', 'content': candidate_resume_text}
-
-    # Create/update Zilliz record
-
-    conversation = _openai_client.conversations.create(metadata=conversation_metadata, items=[system_prompt, candidate_message])
+    full_history = [system_prompt, candidate_message]
+    role_map = {'candidate': 'user', 'recruiter': 'assistant', 'system': 'developer'}
+    for msg in chat_history:
+        role = role_map.get(msg.get('type'), msg.get('type'))
+        full_history.append({'type': 'message', 'role': role, 'content': msg.get('message')})
+    
+    # Create openai conversation
+    conversation = _openai_client.conversations.create(
+        metadata=conversation_metadata, 
+        items=full_history
+    )
 
     # create candidate record
     success = upsert_candidate(
         chat_id=chat_id,
         name=name,
         job_applied=job_info["position"],
-        resume_text=resume_text,
+        resume_text=online_resume_text,
         stage=None,  # Not analyzed yet
         conversation_id=conversation.id,
+        metadata={'history': chat_history},
     )
     if not success:
         raise ValueError("Failed to create candidate record")

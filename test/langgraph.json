@@ -1,8 +1,0 @@
-{
-  "dependencies": ["./"],
-  "graphs": {
-    "manager_agent": "./test_subgraph_runtime.py:graph"
-  },
-  "env": ".env"
-}
-  

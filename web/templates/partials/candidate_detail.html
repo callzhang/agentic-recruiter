@@ -1,6 +1,12 @@
-<!-- Candidate detail view with automatic workflow -->
+<!-- Candidate detail view with automatic workflow 
+    the passed data:
+    - "analysis": data.pop("analysis"),
+    - "generated_message": data.pop("last_message"),
+    - "resume_text": data.pop("resume_text"),
+    - "full_resume": data.pop("full_resume"),
+    - "candidate": data,
+-->
 <div class="space-y-6">
-    
     <!-- Header -->
     <div class="flex justify-between items-start">
         <div>
@@ -26,25 +32,42 @@
         <input type="hidden" name="chat_id" value="{{ candidate.chat_id or '' }}">
         <input type="hidden" name="mode" value="{{ candidate.mode}}">
         <input type="hidden" name="name" value="{{ candidate.name}}">
-        <!-- <input type="hidden" name="assistant_id" value="{{ assistant_id }}"> -->
         <input type="hidden" name="job_id" value="{{ candidate.job_id }}">
         <input type="hidden" name="job_applied" value="{{ candidate.job_applied }}">
         <input type="hidden" name="conversation_id" value="{{ candidate.conversation_id or '' }}">
         <input type="hidden" name="index" value="{{ candidate.index or '' }}">
         <input type="hidden" name="candidate_id" value="{{ candidate.candidate_id or '' }}">
+        <input type="hidden" name="stage" value="{{ candidate.stage or '' }}">
     </form>
     
     <!-- 1. Resume Section -->
     <div id="resume-section" class="bg-white rounded-lg border shadow-sm">
-        <div class="p-2 border-b bg-gray-50">
+        <!-- <div class="p-2 border-b bg-gray-50">
             <h3 class="font-bold text-gray-800">📄 候选人简历</h3>
+        </div> -->
+        <!-- Tab Navigation -->
+        <div class="flex border-b bg-gray-100">
+            <button id="tab-online" onclick="switchResumeTab('online')" 
+                    class="px-4 py-2 font-medium text-sm transition-colors bg-white border-b-2 border-blue-500 text-blue-600">
+                在线简历
+            </button>
+            <button id="tab-full" onclick="switchResumeTab('full')" 
+                    class="px-4 py-2 font-medium text-sm transition-colors text-gray-600 hover:text-gray-800">
+                完整简历
+            </button>
         </div>
-        <div id="resume-content" class="p-2" hx-on::after-swap="saveCandidateToCloud();"> 
-            {% if candidate.resume_text or candidate.full_resume %}
-            <textarea readonly class="w-full h-64 p-2 bg-gray-50 border rounded-lg font-mono text-sm">{{ candidate.full_resume or candidate.resume_text }}</textarea>
-            {% else %}
-            <div class="text-center py-8 text-gray-500">⏳ 正在加载简历...</div>
-            {% endif %}
+        <!-- Tab Content -->
+        <div id="resume-content" class="p-2"> 
+            <div id="tab-content-online" class="tab-content" hx-on::after-swap="switchResumeTab('online');">
+                <textarea id="resume-textarea-online" readonly class="w-full h-64 p-2 bg-gray-50 border rounded-lg font-mono text-sm">
+                    {% if resume_text %} {{ resume_text }} {% else %} ⏳ 正在加载在线简历... {% endif %}
+                </textarea>
+            </div>
+            <div id="tab-content-full" class="tab-content hidden" hx-on::after-swap="switchResumeTab('full');">
+                <textarea id="resume-textarea-full" readonly class="w-full h-64 p-2 bg-gray-50 border rounded-lg font-mono text-sm">
+                    {% if full_resume %} {{ full_resume }} {% else %} ⏳ 正在加载完整简历... {% endif %}
+                </textarea>
+            </div>
         </div>
     </div>
 
@@ -53,9 +76,8 @@
         <div class="p-2 border-b bg-gray-50">
             <h3 class="font-bold text-gray-800">📊 AI 分析结果</h3>
         </div>
-        <div id="analysis-content" class="p-2"
-             hx-on::after-swap="saveCandidateToCloud(); ">
-            {% if candidate.analysis %}
+        <div id="analysis-content" class="p-2">
+            {% if analysis %}
                 {% include 'partials/analysis_result.html' %}
             {% else %}
             <div class="text-center py-8 text-gray-500">⏳ 等待简历加载完成后自动分析...</div>
@@ -68,48 +90,31 @@
         <div class="p-4 border-b bg-gray-50">
             <h3 class="font-bold text-gray-800">✨ 自动生成消息</h3>
         </div>
-        <div id="message-content" class="p-2" hx-on::after-swap="saveCandidateToCloud();">
-            {% if candidate.last_message %}
-            <textarea id="message-text" name="message" class="w-full h-32 p-2 border rounded-lg">{{ candidate.last_message }}</textarea>
+        <div id="message-content" class="p-2">
+            {% if generated_message not in ['', 'None', 'null', None] %}
+            <textarea id="message-text" name="generated_message" class="w-full h-32 p-2 border rounded-lg">{{ generated_message }}</textarea>
             {% else %}
             <div class="text-center py-8 text-gray-500">⏳分析完成后，如果匹配度达标，将自动生成...</div>
             {% endif %}
         </div>
         <div class="flex p-2 gap-2">
             <button onclick="sendGreetAndMessage()"
-                    class="px-4 py-1 bg-green-400 text-white text-sm rounded hover:bg-green-700">
+                    class="px-4 py-1 bg-green-600 text-white text-sm rounded hover:bg-green-800">
                 📤 打招呼+发送消息
             </button>
             <button hx-post="/candidates/pass"
                     hx-include="#candidate-context"
                     hx-target="body"
                     hx-swap="none"
-                    class="px-4 py-1 bg-gray-400 text-white text-sm rounded hover:bg-gray-700">
+                    class="px-4 py-1 bg-gray-600 text-white text-sm rounded hover:bg-gray-800">
                 ❌ PASS
             </button>
             <button onclick="generateMessage()"
-                    class="px-3 py-1 bg-indigo-400 text-white text-sm rounded hover:bg-indigo-700">
+                    class="px-3 py-1 bg-indigo-600 text-white text-sm rounded hover:bg-indigo-800">
                 🔄 重新生成消息
             </button>
         </div>
     </div>
-
-
-    <!-- Manual Actions (always available)
-    <div class="bg-gray-50 rounded-lg p-4 space-y-2">
-        <h3 class="font-bold text-gray-800 mb-2">🔧 手动操作</h3>
-        <div class="flex flex-wrap gap-2">
-            <button onclick="fetchResume()"
-                    class="px-3 py-1 bg-yellow-400 text-white text-sm rounded hover:bg-yellow-700">
-                🔄 重新获取简历
-            </button>
-            <button onclick="startAnalysis()"
-                    class="px-3 py-1 bg-purple-400 text-white text-sm rounded hover:bg-purple-700">
-                🔄 重新分析
-            </button>
-            
-        </div>
-    </div> -->
 
 </div>
 
@@ -123,79 +128,175 @@ async function process_candidate() {
     const form = document.getElementById('candidate-context');
     const formData = new FormData(form);
     const mode = formData.get('mode');
+    const chat_id = formData.get('chat_id');
+    const conversation_id = formData.get('conversation_id');
+    const candidate_id = formData.get('candidate_id');
+    const name = formData.get('name') || '未知候选人';
     
-    // Step 1: Ensure resume is loaded
-    const resume_div = document.getElementById('resume-content');
-    if (resume_div && resume_div.textContent.includes('⏳')) {
-        await fetchResume().then(() => {
-            const candidate_id = formData.get('candidate_id');
-            if (!candidate_id) {
-                // candidate_id = await getCandidateIdByResumeText();
-                // updateCandidateData({'candidate_id': candidate_id});
-                showToast('TODO: Candidate ID not found, will be fetched later', 'warning');
+    // Emit identifier for event listeners
+    const identifier = chat_id || conversation_id || candidate_id || 'unknown';
+    try {
+        // Step 1: Ensure resume is loaded
+        const online_resume_div = document.getElementById('resume-textarea-online');
+        if (!online_resume_div?.value || online_resume_div?.value.includes('⏳')) {
+            await fetchOnlineResume();
+        }
+        
+        // Step 2: Initialize chat if no conversation_id
+        let conversation_id = formData.get('conversation_id');
+        if (!conversation_id) {
+            conversation_id = await initializeNewChat();
+            updateCandidateData({'conversation_id': conversation_id});
+            updateCandidateCard({'saved': true});
+        }
+        
+        // Step 3: Start analysis if pending
+        const analysisDiv = document.getElementById('analysis-content');
+        if (analysisDiv.textContent.includes('⏳')) {
+            await startAnalysis();
+        }
+        
+        // Step 4: Check threshold and generate message if needed
+        const analysis_container = document.querySelector('#analysis-content #analysis-result-container');
+        const analysis = analysis_container ? JSON.parse(analysis_container.getAttribute('data-analysis')) : null;
+        const overall_score = analysis?.overall || 0;
+        const { chat_threshold, borderline_threshold } = getThresholdValues();
+        if (overall_score >= chat_threshold) {
+            const messageDiv = document.getElementById('message-content');
+            if (messageDiv?.textContent?.includes('⏳')) {
+                await generateMessage();
             }
-        }).then(() => {
-            //TODO: fetch full resume
+            // analyze the full resume if it is available
+            const full_resume_div = document.getElementById('resume-textarea-full');
+            if (full_resume_div?.value?.includes('⏳') || full_resume_div?.value?.includes('None')) {
+                if(overall_score >= borderline_threshold){
+                    await fetchFullResume()
+                        .then(result => {
+                            if (result.length > 100) {
+                                // analyze the full resume
+                                startAnalysis();
+                            }
+                            else {
+                                showToast(result, 'info');
+                            }
+                        })
+                        .catch(err => {
+                            // Handle error (e.g., recommend mode not supported)
+                            console.warn('fetchFullResume failed:', err.message);
+                        });
+                }else{
+                    showToast('匹配度未达标，不分析完整简历', 'info');
+                }
+            }
+        }else{
+            showToast('匹配度未达标，不生成消息', 'info');
+        }
+
+        // Step 5: update candidate card
+        updateCandidateCard({
+            viewed: true,
+            score: overall_score
         });
-    }
-    
-    // Step 2: Initialize chat if no conversation_id
-    let conversation_id = formData.get('conversation_id');
-    if (!conversation_id) {
-        conversation_id = await initializeNewChat();
-        updateCandidateData({'conversation_id': conversation_id});
-    }
-    
-    // Step 3: Start analysis if pending
-    const analysisDiv = document.getElementById('analysis-content');
-    if (analysisDiv.textContent.includes('⏳') && !resume_div.textContent.includes('⏳')) {
-        await startAnalysis();
-    }
-    
-    // Step 4: Check threshold and generate message if needed
-    const analysis_container = document.querySelector('#analysis-content #analysis-result-container');
-    const analysis = analysis_container ? JSON.parse(analysis_container.getAttribute('data-analysis')) : null;
-    const overall_score = analysis?.overall || 0;
-    const { chat_threshold, borderline_threshold } = getThresholdValues();
-    
-    if (overall_score >= chat_threshold) {
-        const messageDiv = document.getElementById('message-content');
-        if (messageDiv && messageDiv.textContent.includes('⏳')) {
-            await generateMessage();
-        }
-        if (overall_score >= borderline_threshold) {
-            requestFullResume();
-        }
+        
+        // Emit success event
+        const event = new CustomEvent('candidate:processing-complete', {
+            detail: {
+                identifier: identifier,
+                chat_id: chat_id,
+                conversation_id: conversation_id,
+                candidate_id: candidate_id,
+                name: name
+            }
+        });
+        setTimeout(() => {
+            document.dispatchEvent(event);
+        }, 1000);
+        
+    } catch (error) {
+        console.error('Error processing candidate:', error);
+        // Emit error event
+        const event = new CustomEvent('candidate:processing-error', {
+            detail: {
+                identifier: identifier,
+                chat_id: chat_id,
+                conversation_id: conversation_id,
+                candidate_id: candidate_id,
+                name: name,
+                error: error.message || String(error)
+            }
+        });
+        document.dispatchEvent(event);
+        throw error;
     }
 }
 
-function fetchResume() {
+function fetchOnlineResume() {
     showToast('抓取在线简历...', 'info');
     form = document.getElementById('candidate-context');
     const formData = new FormData(form);
     const mode = formData.get('mode');
-    return htmxAjaxPromise('POST', mode == 'recommend'?"/candidates/fetch-recommend-resume":"/candidates/fetch-online-resume", {
-        target: '#resume-content',
+    url = mode == 'recommend'?"/candidates/fetch-recommend-resume":"/candidates/fetch-online-resume";
+    return htmxAjaxPromise('POST', url, {
+        target: '#tab-content-online',
         swap: 'innerHTML',
         source: '#candidate-context'
     });
 }
 
+function fetchFullResume() {
+    showToast('抓取完整简历...', 'info');
+    form = document.getElementById('candidate-context');
+    formData = new FormData(form);
+    formData.delete('resume_text');
+    const mode = formData.get('mode');
+    if (mode === 'recommend') {
+        const errorMsg = '完整简历不支持推荐模式';
+        showToast(errorMsg, 'warning');
+        return Promise.reject(new Error(errorMsg));
+    }
+
+    return htmxAjaxPromise('POST', '/candidates/fetch-full-resume', {
+        target: '#tab-content-full',
+        swap: 'innerHTML',
+        source: '#candidate-context'
+    });
+}
+
+function switchResumeTab(tab) {
+    // Hide all tab contents
+    document.getElementById('tab-content-online').classList.add('hidden');
+    document.getElementById('tab-content-full').classList.add('hidden');
+    
+    // Remove active styles from all tabs
+    document.getElementById('tab-online').classList.remove('bg-white', 'border-b-2', 'border-blue-500', 'text-blue-600');
+    document.getElementById('tab-online').classList.add('text-gray-600');
+    document.getElementById('tab-full').classList.remove('bg-white', 'border-b-2', 'border-blue-500', 'text-blue-600');
+    document.getElementById('tab-full').classList.add('text-gray-600');
+    
+    // Show selected tab content and activate tab button
+    if (tab === 'online') {
+        document.getElementById('tab-content-online').classList.remove('hidden');
+        document.getElementById('tab-online').classList.remove('text-gray-600');
+        document.getElementById('tab-online').classList.add('bg-white', 'border-b-2', 'border-blue-500', 'text-blue-600');
+    } else if (tab === 'full') {
+        document.getElementById('tab-content-full').classList.remove('hidden');
+        document.getElementById('tab-full').classList.remove('text-gray-600');
+        document.getElementById('tab-full').classList.add('bg-white', 'border-b-2', 'border-blue-500', 'text-blue-600');
+    }
+}
+
 function generateMessage() {
     showToast('生成消息...', 'info');
     const chat_id = getCandidateData('chat_id');
-    fetch(`/chat/${chat_id}/messages`, {
-        method: 'GET',
-        headers: {'Content-Type': 'application/json'}
-    }).then(window.handleApiResponse)
-    .then(data => {
-        showToast(data ? '✅ 已获得对话记录' : '请求失败', data ? 'success' : 'error');
-        return htmxAjaxPromise('POST', '/candidates/generate-message', {
-            target: '#message-content',
-            swap: 'innerHTML',
-            source: '#candidate-context',
-            values: {'purpose': 'CHAT_ACTION'}
-        });
+
+    return htmxAjaxPromise('POST', '/candidates/generate-message', {
+        target: '#message-content',
+        swap: 'innerHTML',
+        source: '#candidate-context',
+        values: {'purpose': 'CHAT_ACTION'}
+    }).then(data => {
+        console.log('Generated message:', data);
+        updateCandidateCard({'generated_message': data});
     });
 }
 
@@ -218,38 +319,34 @@ function sendGreetAndMessage() {
     });
 }
 
-function requestFullResume() {
-    debugger;
-    const chat_id = getCandidateData('chat_id');
-    const mode = getCandidateData('mode');
-    
-    if (!chat_id || !['chat', 'greet', 'followup'].includes(mode)) {
-        console.log('Skip requestFullResume: not a chat mode or no chat_id');
-        return;
-    }
-    showToast('请求完整简历...', 'info');
-    fetch('/chat/resume/request_full', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({chat_id: chat_id})
-    })
-    .then(window.handleApiResponse)
-    .then(data => showToast(data ? '✅ 已请求完整简历' : '请求失败', data ? 'success' : 'error'));
-}
-
-
 
 /**
  * Start analysis (current flow)
  */
  function startAnalysis() {
     showToast('开始分析...', 'info');
-    // const resumeTextarea = document.querySelector('#resume-content textarea');
+    const resume_text = document.getElementById('resume-textarea-online')?.value?.trim() || '';
+    const full_resume = document.getElementById('resume-textarea-full')?.value?.trim() || '';
+    has_full_resume = full_resume.includes('⏳') ? false : true;
+    has_online_resume = resume_text.includes('⏳') ? false : true;
+    if (has_full_resume) {
+        showToast('正在分析完整简历...', 'info');
+    }else if(has_online_resume) {
+        showToast('正在分析在线简历...', 'info');
+    }else{
+        showToast('没有可分析的简历,请先请求简历', 'error');
+    }
     return htmxAjaxPromise('POST', '/candidates/analyze', {
         source: '#candidate-context',
         target: '#analysis-content',
         swap: 'innerHTML',
-        // values: {'resume_text': resumeTextarea.value }
+        values: {
+            'resume_text': resume_text.includes('⏳') ? '' : resume_text,
+            'full_resume': full_resume.includes('⏳') ? '' : full_resume
+        }
+    }).then(data => {
+        console.log('Analysis completed:', data);
+        updateCandidateCard({score: data.overall});
     });
 }
 
@@ -260,8 +357,9 @@ function initializeNewChat() {
     showToast('初始化对话线程...', 'info');
     const form = document.getElementById('candidate-context');
     const formData = new FormData(form);
-    const resumeTextarea = document.querySelector('#resume-content textarea');
-    formData.append('resume_text', resumeTextarea.value);
+    //always use online resume at first time (full resume is not available at first time)
+    resume_text = document.getElementById('resume-textarea-online').value
+    formData.append('resume_text', resume_text);
 
     return fetch('/candidates/init-chat', {
         method: 'POST',
@@ -275,53 +373,6 @@ function initializeNewChat() {
         }
         return data.conversation_id;
     });
-}
-
-function saveCandidateToCloud() {
-    const form = document.getElementById('candidate-context');
-    const formData = new FormData(form);
-    
-    // Add resume_text from #resume-content
-    const resume_textarea = document.querySelector('#resume-section textarea');
-    if (resume_textarea?.value) {
-        formData.set('resume_text', resume_textarea.value);
-    }
-    
-    // Add analysis from #analysis-content
-    const analysis_container = document.querySelector('#analysis-content #analysis-result-container');
-    const analysis = analysis_container ? analysis_container.getAttribute('data-analysis') : null;
-    if (analysis) {
-        formData.set('analysis', analysis);
-    }
-    
-    // Add last_message from #message-content
-    const message_textarea = document.getElementById('message-text');
-    const message = message_textarea?.value.trim();
-    if (message) {
-        formData.set('last_message', message);
-    }
-    
-    const chat_id = formData.get('chat_id');
-    const conversation_id = formData.get('conversation_id');
-    const candidate_id = formData.get('candidate_id');
-    
-    fetch('/candidates/save-to-cloud', {method: 'POST', body: formData})
-        .then(window.handleApiResponse)
-        .then(data => {
-            showToast('✅ 已保存', 'success');
-            if (data.candidate_id && data.candidate_id !== candidate_id) {
-                console.log('Candidate saved to cloud:', data.candidate_id);
-                updateCandidateData({'candidate_id': data.candidate_id});
-            }
-            // Update card in list
-            const score = analysis_container ? JSON.parse(analysis_container.getAttribute('data-analysis')).overall : null;
-            updateCandidateCard({
-                saved: true, 
-                score: score, 
-                viewed: true,
-                last_message: message_textarea?.value.trim()
-            });
-        });
 }
 
 
@@ -491,7 +542,7 @@ function getThresholdValues() {
         const afterSwap = () => {
             target.removeEventListener('htmx:afterSwap', afterSwap);
             target.removeEventListener('htmx:responseError', onError);
-            resolve();
+            resolve(target.textContent.trim());
         };
         
         const onError = (evt) => {
@@ -508,13 +559,193 @@ function getThresholdValues() {
     });
 }
 
+// ============================================================================
+// Batch Processing Function
+// ============================================================================
+
+/**
+ * Process all candidate cards sequentially
+ */
+// Global flag for batch processing control
+window.batchProcessingActive = false;
+window.stopBatchProcessing = false;
+
+async function processAllCandidates() {
+    const cards = document.querySelectorAll('.candidate-card');
+    if (cards.length === 0) {
+        showToast('没有找到候选人', 'warning');
+        return;
+    }
+    
+    const total = cards.length;
+    let processed = 0;
+    let failed = 0;
+    
+    // Set batch processing flag
+    window.batchProcessingActive = true;
+    window.stopBatchProcessing = false;
+    
+    // Disable all candidate cards
+    cards.forEach(card => {
+        card.style.pointerEvents = 'none';
+        card.style.opacity = '0.6';
+    });
+    
+    // Update button to stop button
+    const batchBtn = document.getElementById('batch-analyze-btn');
+    if (batchBtn) {
+        batchBtn.disabled = false;
+        batchBtn.textContent = '⏸ 停止处理';
+        batchBtn.onclick = stopBatchProcessingHandler;
+        batchBtn.classList.remove('bg-purple-600', 'hover:bg-purple-700');
+        batchBtn.classList.add('bg-red-600', 'hover:bg-red-700');
+    }
+    
+    showToast(`开始批量处理 ${total} 个候选人`, 'info');
+    
+    for (let i = 0; i < cards.length; i++) {
+        // Check if user requested stop
+        if (window.stopBatchProcessing) {
+            showToast(`批量处理已停止 (${processed}/${total} 完成)`, 'warning');
+            break;
+        }
+        
+        const card = cards[i];
+        const cardData = JSON.parse(card.getAttribute('hx-vals'));
+        const name = cardData.name || `候选人 ${i + 1}`;
+        
+        showToast(`正在处理候选人 ${i + 1}/${total}: ${name}`, 'info');
+        
+        try {
+            // Wait for HTMX swap to complete
+            await new Promise((resolve, reject) => {
+                const detailPane = document.getElementById('detail-pane');
+                if (!detailPane) {
+                    reject(new Error('Detail pane not found'));
+                    return;
+                }
+                
+                const timeout = setTimeout(() => {
+                    detailPane.removeEventListener('htmx:afterSwap', onSwap);
+                    detailPane.removeEventListener('htmx:responseError', onError);
+                    reject(new Error('HTMX swap timeout'));
+                }, 10000); // 10 second timeout for swap
+                
+                const onSwap = () => {
+                    clearTimeout(timeout);
+                    detailPane.removeEventListener('htmx:afterSwap', onSwap);
+                    detailPane.removeEventListener('htmx:responseError', onError);
+                    // Wait a bit for DOM to be ready
+                    setTimeout(resolve, 200);
+                };
+                
+                const onError = (evt) => {
+                    clearTimeout(timeout);
+                    detailPane.removeEventListener('htmx:afterSwap', onSwap);
+                    detailPane.removeEventListener('htmx:responseError', onError);
+                    reject(new Error(evt.detail.error || 'HTMX request failed'));
+                };
+                
+                detailPane.addEventListener('htmx:afterSwap', onSwap, { once: true });
+                detailPane.addEventListener('htmx:responseError', onError, { once: true });
+                
+                // Trigger HTMX click
+                htmx.trigger(card, 'click');
+            });
+            
+            // Wait for process_candidate() to complete
+            await new Promise((resolve, reject) => {
+                const timeout = setTimeout(() => {
+                    document.removeEventListener('candidate:processing-complete', onComplete);
+                    document.removeEventListener('candidate:processing-error', onError);
+                    reject(new Error('Processing timeout (60s)'));
+                }, 60000); // 60 second timeout
+                
+                const onComplete = (event) => {
+                    clearTimeout(timeout);
+                    document.removeEventListener('candidate:processing-complete', onComplete);
+                    document.removeEventListener('candidate:processing-error', onError);
+                    resolve(event.detail);
+                };
+                
+                const onError = (event) => {
+                    clearTimeout(timeout);
+                    document.removeEventListener('candidate:processing-complete', onComplete);
+                    document.removeEventListener('candidate:processing-error', onError);
+                    reject(new Error(event.detail.error || 'Processing failed'));
+                };
+                
+                document.addEventListener('candidate:processing-complete', onComplete, { once: true });
+                document.addEventListener('candidate:processing-error', onError, { once: true });
+            });
+            
+            processed++;
+            showToast(`✅ ${name} 处理完成 (${processed}/${total})`, 'success');
+        } catch (error) {
+            failed++;
+            console.error(`Failed to process candidate ${i + 1}:`, error);
+            showToast(`❌ ${name} 处理失败: ${error.message}`, 'error');
+            // Continue to next candidate
+        }
+    }
+    
+    // Re-enable candidate cards
+    cards.forEach(card => {
+        card.style.pointerEvents = '';
+        card.style.opacity = '';
+    });
+    
+    // Reset batch processing flag
+    window.batchProcessingActive = false;
+    window.stopBatchProcessing = false;
+    
+    // Reset button
+    if (batchBtn) {
+        batchBtn.disabled = false;
+        batchBtn.textContent = '全部分析';
+        batchBtn.onclick = processAllCandidates;
+        batchBtn.classList.remove('bg-red-600', 'hover:bg-red-700');
+        batchBtn.classList.add('bg-purple-600', 'hover:bg-purple-700');
+    }
+    
+    // Final summary
+    const summary = `批量处理完成: 成功 ${processed}/${total}, 失败 ${failed}`;
+    showToast(summary, processed === total ? 'success' : 'warning');
+}
+
+function stopBatchProcessingHandler() {
+    window.stopBatchProcessing = true;
+    const batchBtn = document.getElementById('batch-analyze-btn');
+    if (batchBtn) {
+        batchBtn.disabled = true;
+        batchBtn.textContent = '正在停止...';
+    }
+    showToast('正在停止批量处理...', 'info');
+}
+
+// Make function globally available
+window.processAllCandidates = processAllCandidates;
+
 // Trigger workflow when this partial is loaded via HTMX
 // Since this script runs when HTMX swaps content, we can call it directly
 // Use requestAnimationFrame to ensure DOM is ready
 requestAnimationFrame(() => {
-    setTimeout(() => {
-        process_candidate();
-    }, 100);
+    // Set initial tab state - show online tab if resume_text exists, otherwise show full tab
+    const onlineTextarea = document.getElementById('resume-textarea-online');
+    const fullTextarea = document.getElementById('resume-textarea-full');
+    const hasOnline = onlineTextarea?.value?.trim();
+    const hasFull = fullTextarea?.value?.trim();
+    
+    if (hasOnline) {
+        switchResumeTab('online');
+    } else if (hasFull) {
+        switchResumeTab('full');
+    } else {
+        // Default to online tab
+        switchResumeTab('online');
+    }
+    
+    process_candidate();
 });
 
 </script>

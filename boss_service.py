@@ -42,17 +42,20 @@ class BossServiceAsync:
         # Initialize Sentry for error tracking (Sentry 2.x auto-detects FastAPI)
         sentry_config = settings.get_sentry_config()
         if sentry_config["dsn"]:
+            # Disable auto-integration detection to avoid timeout during package scanning
+            # Manually enable only FastAPI integration to avoid scanning all packages
+            from sentry_sdk.integrations.fastapi import FastApiIntegration
             sentry_sdk.init(
                 dsn=sentry_config["dsn"],
                 enable_tracing=True,
-                traces_sample_rate=0.1,
-                profiles_sample_rate=0.1,
-                send_default_pii=True,
+                send_default_pii=sentry_config["send_default_pii"],
                 environment=sentry_config["environment"] or "development",
                 release=sentry_config["release"] or "unknown",
+                default_integrations=False,  # Disable auto-detection to prevent timeout
+                integrations=[FastApiIntegration()],  # Manually enable FastAPI integration only
             )
             logger.info("Sentry initialized: environment=%s, release=%s", 
-                       sentry_config["environment"], sentry_config["release"])
+                        sentry_config["environment"], sentry_config["release"])
         else:
             logger.info("Sentry DSN not configured in secrets.yaml, error tracking disabled")
         
@@ -106,18 +109,43 @@ class BossServiceAsync:
 
     async def _shutdown_async(self) -> None:
         logger.info("正在关闭 Playwright...")
+        # Add timeouts to prevent hanging during reload
         try:
             if self.context:
-                await self.context.storage_state(path=settings.STORAGE_STATE)
+                await asyncio.wait_for(
+                    self.context.storage_state(path=settings.STORAGE_STATE),
+                    timeout=2.0
+                )
+        except asyncio.TimeoutError:
+            logger.warning("保存 storage_state 超时，跳过")
         except Exception as exc:  # noqa: BLE001
             logger.warning("保存 storage_state 失败: %s", exc)
+        
+        # For CDP connections, we just disconnect, don't close the external browser
         try:
             if self.browser:
-                await self.browser.close()
+                await asyncio.wait_for(
+                    self.browser.close(),
+                    timeout=2.0
+                )
+        except asyncio.TimeoutError:
+            logger.warning("关闭浏览器连接超时，强制断开")
+            # Force cleanup on timeout
+            self.browser = None
         except Exception as exc:  # noqa: BLE001
             logger.error("关闭浏览器失败（忽略）: %s", exc)
+        
         if self.playwright:
-            await self.playwright.stop()
+            try:
+                await asyncio.wait_for(
+                    self.playwright.stop(),
+                    timeout=2.0
+                )
+            except asyncio.TimeoutError:
+                logger.warning("停止 Playwright 超时，强制清理")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("停止 Playwright 失败: %s", exc)
+        
         self.browser = None
         self.context = None
         self.page = None
@@ -994,6 +1022,19 @@ async def chrome_devtools_config():
     """
     return {}
 
+# Favicon endpoints (browsers check these paths automatically)
+@app.get("/favicon.ico", tags=["web"])
+@app.get("/favicon.svg", tags=["web"])
+async def favicon():
+    """Serve favicon directly."""
+    from fastapi.responses import FileResponse
+    import os
+    favicon_path = os.path.join("web", "static", "favicon.svg")
+    if os.path.exists(favicon_path):
+        return FileResponse(favicon_path, media_type="image/svg+xml")
+    from fastapi import HTTPException
+    raise HTTPException(status_code=404, detail="Favicon not found")
+
 # Web UI root endpoint
 @app.get("/", response_class=HTMLResponse, tags=["web"])
 async def web_index(request: Request):
@@ -1029,10 +1070,10 @@ async def web_stats():
         logger.warning(f"Failed to get chat stats: {e}")
     
     # Try to get total candidates from store
-    total_candidates = 0
     try:
         total_candidates = get_candidate_count()
     except Exception as e:
+        total_candidates = 0
         logger.warning(f"Failed to get candidate count: {e}")
     
     # Count running workflows (placeholder - would need actual tracking)
@@ -1040,7 +1081,7 @@ async def web_stats():
     
     html = f'''
     <div class="bg-white rounded-lg shadow p-6">
-        <h3 class="text-sm text-gray-600 mb-2">候选人总数</h3>
+        <h3 class="text-sm text-gray-600 mb-2">已筛选候选人总数</h3>
         <p class="text-3xl font-bold text-blue-600">{total_candidates}</p>
     </div>
     <div class="bg-white rounded-lg shadow p-6">

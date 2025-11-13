@@ -15,6 +15,8 @@ from .config import settings
 # Schema Definition
 # ------------------------------------------------------------------
 
+_max_length = 65535
+
 def get_collection_schema() -> list[FieldSchema]:
     """Get the collection schema definition.
     
@@ -28,16 +30,15 @@ def get_collection_schema() -> list[FieldSchema]:
         FieldSchema(name="name", dtype=DataType.VARCHAR, max_length=200, nullable=True),
         FieldSchema(name="job_applied", dtype=DataType.VARCHAR, max_length=128, nullable=True),
         FieldSchema(name="last_message", dtype=DataType.VARCHAR, max_length=2048, nullable=True),
-        FieldSchema(name="resume_text", dtype=DataType.VARCHAR, max_length=25000, nullable=True),
+        FieldSchema(name="resume_text", dtype=DataType.VARCHAR, max_length=_max_length, nullable=True),
         FieldSchema(name="metadata", dtype=DataType.JSON, nullable=True),
         FieldSchema(name="updated_at", dtype=DataType.VARCHAR, max_length=64, nullable=True),
         FieldSchema(name="analysis", dtype=DataType.JSON, nullable=True),
         FieldSchema(name="stage", dtype=DataType.VARCHAR, max_length=20, nullable=True),
-        FieldSchema(name="full_resume", dtype=DataType.VARCHAR, max_length=25000, nullable=True),
+        FieldSchema(name="full_resume", dtype=DataType.VARCHAR, max_length=_max_length, nullable=True),
         FieldSchema(name="conversation_id", dtype=DataType.VARCHAR, max_length=100, nullable=True),
     ]
     return fields
-
 # Define field names for the collection
 _all_fields = [f.name for f in get_collection_schema()]
 
@@ -265,9 +266,9 @@ def upsert_candidate(**kwargs) -> Optional[str]:
     
     # Truncate long fields
     if kwargs.get("resume_text"):
-        kwargs['resume_text'] = kwargs['resume_text'][:25000]
+        kwargs['resume_text'] = kwargs['resume_text'].encode('utf-8')[:_max_length].decode('utf-8', errors='ignore')
     if kwargs.get("full_resume"):
-        kwargs['full_resume'] = kwargs['full_resume'][:25000]
+        kwargs['full_resume'] = kwargs['full_resume'].encode('utf-8')[:_max_length].decode('utf-8', errors='ignore')
     
     # Parse JSON fields if strings
     analysis = kwargs.get("analysis")
@@ -325,7 +326,7 @@ def upsert_candidate(**kwargs) -> Optional[str]:
             job_applied = kwargs.get("job_applied")
             
             if search_identifiers or name:
-                existing = get_candidates(identifiers=search_identifiers, names=[name], job_applied=job_applied, limit=1, fields=_all_fields)
+                existing = get_candidates(identifiers=search_identifiers, names=[name], job_applied=job_applied, limit=1, fields=['candidate_id'])
                 
                 if existing:
                     existing_record = existing[0]
@@ -398,7 +399,7 @@ def search_candidates_by_resume(
 
 def get_candidate_count() -> int:
     """Get the number of candidates in the collection."""
-    return _client.count(collection_name=_collection_name)
+    return _client.get_collection_stats(collection_name=_collection_name)['row_count']
 
 __all__ = [
     "get_collection_schema",

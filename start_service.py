@@ -292,11 +292,21 @@ def start_service(*, scheduler_options: Optional[Dict[str, Any]] | None = None):
                     applescript = f'''
                     tell application "Google Chrome"
                         repeat with w in windows
+                            set tabIndex to 0
                             repeat with t in tabs of w
-                                if URL of t starts with "{url}" then
-                                    set active tab of w to t
-                                    return true
-                                end if
+                                set tabIndex to tabIndex + 1
+                                try
+                                    if URL of t starts with "{url}" then
+                                        set active tab index of w to tabIndex
+                                        set index of w to 1
+                                        tell application "System Events"
+                                            tell process "Google Chrome" to set frontmost to true
+                                        end tell
+                                        return true
+                                    end if
+                                on error
+                                    -- skip tabs that fail URL retrieval
+                                end try
                             end repeat
                         end repeat
                         return false
@@ -370,7 +380,7 @@ def start_service(*, scheduler_options: Optional[Dict[str, Any]] | None = None):
                 "*.md",
                 "__pycache__/**"
             ],
-            reload_delay=5.0  # Increased from 3.0 to reduce rapid reload cycles
+            reload_delay=1.0  # Increased from 3.0 to reduce rapid reload cycles
         )
         
         # Cleanup after uvicorn stops gracefully (e.g., Ctrl+C)

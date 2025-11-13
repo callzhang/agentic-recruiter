@@ -3,8 +3,9 @@
     
 This script:
 1. Removes thread_id field and replaces it with conversation_id
-2. Deduplicates records by name (case-insensitive)
-3. For duplicates, keeps the record with:
+2. Updates resume_text and full_resume max_length to 65535 (improved from 25000/30000)
+3. Deduplicates records by name (case-insensitive)
+4. For duplicates, keeps the record with:
    - Most recent updated_at timestamp, or
    - Most complete data (most non-null fields), or
    - First encountered if equal
@@ -21,6 +22,9 @@ if str(ROOT) not in sys.path:
 from pymilvus import MilvusClient, Collection, CollectionSchema, FieldSchema, DataType, connections
 from src.config import settings
 from src.global_logger import logger
+
+# Use the same max_length as candidate_store.py
+MAX_LENGTH = 65535
 
 
 def migrate_candidates_data():
@@ -59,7 +63,9 @@ def migrate_candidates_data():
         )
         
         # Create new collection schema WITHOUT thread_id, WITH conversation_id
+        # Also improves max_length for resume_text and full_resume to 65535
         logger.info(f"Creating new collection: {new_collection}")
+        logger.info(f"Improving max_length for resume_text and full_resume to {MAX_LENGTH} (from 25000/30000)")
         
         # Define new schema
         new_fields = [
@@ -69,12 +75,12 @@ def migrate_candidates_data():
             FieldSchema(name="name", dtype=DataType.VARCHAR, max_length=200, nullable=True),
             FieldSchema(name="job_applied", dtype=DataType.VARCHAR, max_length=128, nullable=True),
             FieldSchema(name="last_message", dtype=DataType.VARCHAR, max_length=2048, nullable=True),
-            FieldSchema(name="resume_text", dtype=DataType.VARCHAR, max_length=25000, nullable=True),
+            FieldSchema(name="resume_text", dtype=DataType.VARCHAR, max_length=MAX_LENGTH, nullable=True),
             FieldSchema(name="metadata", dtype=DataType.JSON, nullable=True),
             FieldSchema(name="updated_at", dtype=DataType.VARCHAR, max_length=64, nullable=True),
             FieldSchema(name="analysis", dtype=DataType.JSON, nullable=True),
             FieldSchema(name="stage", dtype=DataType.VARCHAR, max_length=20, nullable=True),
-            FieldSchema(name="full_resume", dtype=DataType.VARCHAR, max_length=30000, nullable=True),
+            FieldSchema(name="full_resume", dtype=DataType.VARCHAR, max_length=MAX_LENGTH, nullable=True),
             # NEW: conversation_id instead of thread_id
             FieldSchema(name="conversation_id", dtype=DataType.VARCHAR, max_length=100, nullable=True),
         ]

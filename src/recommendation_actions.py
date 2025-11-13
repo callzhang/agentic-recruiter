@@ -149,7 +149,7 @@ async def list_recommended_candidates_action(page: Page, *, limit: int = 999, jo
         if not new_only or not viewed:
             candidates.append({
                 "index": index,  # Position in the current list
-                "chat_id": None,  # Recommend candidates don't have a chat_id yet
+                # "chat_id": None,  # Recommend candidates don't have a chat_id yet
                 "name": name,
                 "job_applied": job_title,  # Standardized field name
                 "last_message": text,

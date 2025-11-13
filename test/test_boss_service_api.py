@@ -369,7 +369,7 @@ def test_thread_init_chat_endpoint(client: TestClient, monkeypatch: pytest.Monke
     monkeypatch.setattr(
         assistant_actions,
         "init_chat",
-        lambda **_: {"thread_id": "thread-1", "success": True},
+        lambda **_: {"conversation_id": "conv-1", "success": True},
     )
 
     payload = {
@@ -381,7 +381,7 @@ def test_thread_init_chat_endpoint(client: TestClient, monkeypatch: pytest.Monke
     response = client.post("/thread/init-chat", json=payload)
 
     assert response.status_code == 200
-    assert response.json() == {"thread_id": "thread-1", "success": True}
+    assert response.json() == {"conversation_id": "conv-1", "success": True}
 
 
 def test_thread_messages_endpoint(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:

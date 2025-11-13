@@ -1,14 +1,22 @@
 <!-- Candidate card for list view -->
 <div
   class="candidate-card p-4 border rounded-lg cursor-pointer bg-white hover:bg-blue-50 transition"
-  data-candidate-id="{% if candidate.chat_id %}{{ candidate.chat_id }}{% else %}recommend_{{ candidate.candidate_id }}{% endif %}"
+  data-candidate-id="{% if candidate.chat_id %}{{ candidate.chat_id }}{% else %}recommend_{{ candidate.index }}{% endif %}"
   hx-get="/candidates/detail"
   hx-vals='{{ candidate | tojson }}'
   hx-target="#detail-pane"
-  hx-include="#job-selector,#assistant-selector,#threshold-chat,#threshold-borderline,#threshold-seek"
+  hx-include="#job-selector,#threshold-chat,#threshold-borderline,#threshold-seek,#analysis,#resume_text,#full_resume,#message-content"
   hx-on::click="console.log('Candidate clicked:', JSON.parse(this.dataset.candidate));"
 >
   <div class="flex items-start space-x-3 relative">
+    <!-- hidden data:
+      - "analysis": analysis,
+      - "resume_text": resume_text,
+      - "full_resume": full_resume,
+    -->
+    <input type="hidden" name="analysis" value="{{ analysis | tojson }}">
+    <input type="hidden" name="resume_text" value="{{ resume_text }}">
+    <input type="hidden" name="full_resume" value="{{ full_resume }}">
     <!-- Score badge in upper-right corner -->
     {% if candidate.score is defined and candidate.score is not none %}
     <div class="absolute top-0 right-0 bg-gradient-to-r from-blue-500 to-indigo-600 text-white text-xs font-bold px-2 py-1 rounded-bl-lg rounded-tr-lg shadow-md" data-badge="score">
@@ -31,8 +39,9 @@
       <p class="text-sm text-gray-600 truncate">
         {{ candidate.job_applied or '未指定岗位' }}
       </p>
+      <!-- last message -->
       <p class="text-xs text-gray-500 mt-1 line-clamp-2">
-        {{ candidate.description or candidate.last_message or candidate.text or '暂无消息' }}
+        {{ candidate.last_message or '暂无消息' }}
       </p>
       <!-- tags: viewed, greeted, saved -->
       <div class="mt-2 flex flex-wrap gap-1">

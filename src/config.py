@@ -48,7 +48,7 @@ class Settings(BaseModel):
     SENTRY_DSN: str = ""
     SENTRY_ENVIRONMENT: str = ""
     SENTRY_RELEASE: str = ""
-    
+    SENTRY_SEND_DEFAULT_PII: bool = False
     # Store original YAML data for nested access
     SECRETS: Dict[str, Any] = {}
     CONFIG: Dict[str, Any] = {}
@@ -168,6 +168,7 @@ class Settings(BaseModel):
             "dsn": self.SENTRY_DSN,
             "environment": self.SENTRY_ENVIRONMENT,
             "release": self.SENTRY_RELEASE,
+            "send_default_pii": self.SENTRY_SEND_DEFAULT_PII,
         }
 
 # Load settings from config.yaml and secrets.yaml
