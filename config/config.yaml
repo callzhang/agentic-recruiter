@@ -30,6 +30,7 @@ zilliz:
   similarity_top_k: 5
   enable_cache: false
   max_length: 65535
+  send_default_pii: true
 
 # OpenAI配置（非敏感部分）
 openai:

@@ -27,20 +27,8 @@
         </div>
     </div>
 
-    <!-- Hidden context for HTMX requests -->
-    <form id="candidate-context" class="hidden">
-        <input type="hidden" name="chat_id" value="{{ candidate.chat_id }}">
-        <input type="hidden" name="mode" value="{{ candidate.mode}}">
-        <input type="hidden" name="name" value="{{ candidate.name}}">
-        <input type="hidden" name="job_id" value="{{ candidate.job_id }}">
-        <input type="hidden" name="job_applied" value="{{ candidate.job_applied }}">
-        <input type="hidden" name="conversation_id" value="{{ candidate.conversation_id }}">
-        <input type="hidden" name="index" value="{{ candidate.index }}">
-        <input type="hidden" name="candidate_id" value="{{ candidate.candidate_id }}">
-        <input type="hidden" name="stage" value="{{ candidate.stage }}">
-        <input type="hidden" name="greeted" value="{{ candidate.greeted }}">
-        <input type="hidden" name="last_message" value="{{ candidate.last_message }}">
-    </form>
+    <!-- Hidden context for HTMX requests - using JSON to preserve types -->
+    <div id="candidate-context" class="hidden" hx-vals='{{ candidate | tojson }}'></div>
     
     <!-- 1. Resume Section -->
     <div id="resume-section" class="bg-white rounded-lg border shadow-sm">
@@ -149,14 +137,12 @@
 // ============================================================================
 
 async function process_candidate() {
-    const form = document.getElementById('candidate-context');
-    const formData = new FormData(form);
-    const mode = formData.get('mode');
-    const chat_id = formData.get('chat_id');
-    const candidate_id = formData.get('candidate_id');
-    const name = formData.get('name') || '未知候选人';
+    const mode = getCandidateData('mode');
+    const chat_id = getCandidateData('chat_id');
+    const candidate_id = getCandidateData('candidate_id');
+    const name = getCandidateData('name') || '未知候选人';
     // Use single mutable variable for conversation_id
-    let conversationId = formData.get('conversation_id');
+    let conversationId = getCandidateData('conversation_id');
     
     // Emit identifier for event listeners (use current conversationId value)
     const getIdentifier = () => chat_id || conversationId || candidate_id || 'unknown';
@@ -188,7 +174,6 @@ async function process_candidate() {
         let newStage = 'PASS'; // Default to PASS
         // Step 4a: Check chat_threshold - generate message if above
         if (current_score >= chat_threshold) {
-            debugger;
             newStage = 'CHAT';
             const messageDiv = document.getElementById('message-content');
             if (messageDiv?.textContent?.includes('⏳')) {
@@ -270,12 +255,11 @@ async function process_candidate() {
 
 async function fetchOnlineResume() {
     showToast('抓取在线简历...', 'info');
-    const form = document.getElementById('candidate-context');
-    const formData = new FormData(form);
+    const values = getCandidateData();
     await htmxAjaxPromise('POST', '/candidates/fetch-online-resume', {
         target: '#resume-online-container',
         swap: 'innerHTML',
-        source: '#candidate-context'
+        values: values
     });
     // Switch to online tab after fetch
     switchResumeTab('online');
@@ -283,10 +267,8 @@ async function fetchOnlineResume() {
 
 async function fetchFullResume() {
     showToast('抓取完整简历...', 'info');
-    const form = document.getElementById('candidate-context');
-    const formData = new FormData(form);
-    formData.delete('resume_text');
-    const mode = formData.get('mode');
+    const values = getCandidateData();
+    const mode = values.mode;
     if (mode === 'recommend') {
         const errorMsg = '完整简历不支持推荐模式';
         showToast(errorMsg, 'warning');
@@ -296,7 +278,7 @@ async function fetchFullResume() {
     await htmxAjaxPromise('POST', '/candidates/fetch-full-resume', {
         target: '#resume-full-container',
         swap: 'innerHTML',
-        source: '#candidate-context'
+        values: values
     });
     // Switch to full tab after fetch
     switchResumeTab('full');
@@ -327,13 +309,13 @@ function switchResumeTab(tab) {
 
 async function generateMessage() {
     showToast('生成消息...', 'info');
-    const chat_id = getCandidateData('chat_id');
+    const values = getCandidateData();
+    values.purpose = 'CHAT_ACTION';
 
     const result = await htmxAjaxPromise('POST', '/candidates/generate-message', {
         target: '#message-content',
         swap: 'innerHTML',
-        source: '#candidate-context',
-        values: {'purpose': 'CHAT_ACTION'}
+        values: values
     });
     console.log('Generated message:', result);
     updateCandidateData({generated_message: result});
@@ -347,18 +329,19 @@ async function greetAndSendMessage() {
     const greeted = getCandidateData('greeted');
     
     // Check if already greeted (stage is CHAT, SEEK, or CONTACT, or greeted flag is true)
-    if (['CHAT', 'SEEK', 'CONTACT'].includes(stage) || greeted) {
+    if (greeted) {
         showToast('已经打招呼过了，不能重复打招呼', 'info');
         return '已经打招呼过了';
     }
     
-    debugger;
     try {
+        const values = getCandidateData();
+        values.message = message;
+        
         await htmxAjaxPromise('POST', '/candidates/send', {
             target: '#message-content',
             swap: 'none',
-            source: '#candidate-context',
-            values: {'message': message}
+            values: values
         });
         showToast('消息发送成功！', 'success');
         // Update to CHAT stage (not GREET, as GREET is not in STAGES)
@@ -392,14 +375,14 @@ async function startAnalysis() {
         throw new Error('没有可分析的简历,请先请求简历');
     }
     
+    const values = getCandidateData();
+    values.resume_text = resume_text.includes('⏳') ? '' : resume_text;
+    values.full_resume = full_resume.includes('⏳') ? '' : full_resume;
+    
     const result = await htmxAjaxPromise('POST', '/candidates/analyze', {
-        source: '#candidate-context',
         target: '#analysis-content',
         swap: 'innerHTML',
-        values: {
-            'resume_text': resume_text.includes('⏳') ? '' : resume_text,
-            'full_resume': full_resume.includes('⏳') ? '' : full_resume
-        }
+        values: values
     });
     console.log('Analysis completed:', result);
     // Extract analysis from data attribute
@@ -409,10 +392,9 @@ async function startAnalysis() {
 }
 
 async function requestContact() {
-    const form = document.getElementById('candidate-context');
-    const formData = new FormData(form);
-    const chat_id = formData.get('chat_id');
-    const mode = formData.get('mode');
+    const values = getCandidateData();
+    const chat_id = values.chat_id;
+    const mode = values.mode;
     
     // Skip contact request for recommend mode (no chat_id available)
     if (mode === 'recommend' || !chat_id) {
@@ -444,11 +426,17 @@ async function requestContact() {
  */
 async function initializeNewChat() {
     showToast('初始化对话线程...', 'info');
-    const form = document.getElementById('candidate-context');
-    const formData = new FormData(form);
+    const values = getCandidateData();
     //always use online resume at first time (full resume is not available at first time)
     const resume_text = document.getElementById('resume-textarea-online').value;
-    formData.append('resume_text', resume_text);
+    values.resume_text = resume_text;
+
+    const formData = new FormData();
+    for (const [key, value] of Object.entries(values)) {
+        if (value !== null && value !== undefined) {
+            formData.append(key, value);
+        }
+    }
 
     const response = await fetch('/candidates/init-chat', {
         method: 'POST',
@@ -475,22 +463,16 @@ async function initializeNewChat() {
  * This function combines both updateCandidateData and updateCandidateCard
  */
 function updateCandidateData(record) {
-    const dataElement = document.getElementById('candidate-context');
-
-    // Update form inputs
-    for (const [key, value] of Object.entries(record)) {
-        let input = dataElement.querySelector(`input[name="${key}"]`);
-        if (input) {
-            input.value = value;
-        } else {
-            // create a input element
-            input = document.createElement('input');
-            input.type = 'hidden';
-            input.name = key;
-            input.value = value;
-            dataElement.appendChild(input);
-        }
-    }
+    const container = document.getElementById('candidate-context');
+    
+    // Get current data from hx-vals
+    const currentData = getCandidateData();
+    
+    // Merge updates
+    const updatedData = { ...currentData, ...record };
+    
+    // Update hx-vals attribute with merged data
+    container.setAttribute('hx-vals', JSON.stringify(updatedData));
     
     // Broadcast update to card (filter out null/undefined, keep false values)
     const updates = Object.fromEntries(
@@ -498,12 +480,12 @@ function updateCandidateData(record) {
     );
     
     if (Object.keys(updates).length > 0) {
-        // Get identifiers from the form for matching
-        const chat_id = getCandidateData('chat_id');
-        const conversation_id = getCandidateData('conversation_id');
-        const candidate_id = getCandidateData('candidate_id');
-        const name = getCandidateData('name');
-        const job_applied = getCandidateData('job_applied');
+        // Get identifiers from the updated data for matching
+        const chat_id = updatedData.chat_id;
+        const conversation_id = updatedData.conversation_id;
+        const candidate_id = updatedData.candidate_id;
+        const name = updatedData.name;
+        const job_applied = updatedData.job_applied;
         
         // Broadcast the update event
         const event = new CustomEvent('candidate:update', {
@@ -521,17 +503,22 @@ function updateCandidateData(record) {
         document.dispatchEvent(event);
     }
 
-    // update to cloud
+    // update to cloud - use values from hx-vals
     htmx.ajax('POST', '/candidates/save', {
-        source: '#candidate-context',
+        values: updatedData,
         swap: 'none',
     });
 }
 
 function getCandidateData(key) {
-    const form = document.getElementById('candidate-context');
-    const formData = new FormData(form);
-    return formData.get(key);
+    const container = document.getElementById('candidate-context');
+    const hxVals = container.getAttribute('hx-vals');
+    if (hxVals) {
+        const data = JSON.parse(hxVals);
+        // If key is provided, return that property; otherwise return the whole object
+        return key !== undefined ? data[key] : data;
+    }
+    return key !== undefined ? null : {};
 }
 
 
@@ -649,8 +636,8 @@ async function processAllCandidates() {
                 const timeout = setTimeout(() => {
                     document.removeEventListener('candidate:processing-complete', onComplete);
                     document.removeEventListener('candidate:processing-error', onError);
-                    reject(new Error('Processing timeout (60s)'));
-                }, 60000); // 60 second timeout
+                    reject(new Error('Processing timeout (180s)'));
+                }, 180000); // 180 second timeout
                 
                 const onComplete = (event) => {
                     clearTimeout(timeout);

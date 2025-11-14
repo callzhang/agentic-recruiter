@@ -1,5 +1,5 @@
 <!-- Candidate card for list view -->
-<div class="candidate-card p-4 border rounded-lg cursor-pointer bg-white hover:bg-blue-50 transition"
+<div class="candidate-card p-4 border rounded-lg cursor-pointer bg-white hover:bg-blue-50 transition {% if candidate.viewed %}opacity-60{% endif %}"
     data-candidate-id="{% if candidate.chat_id %}{{ candidate.chat_id }}{% else %}recommend_{{ candidate.index }}{% endif %}"
     hx-get="/candidates/detail" hx-vals='{{ candidate | tojson }}' hx-target="#detail-pane"
     hx-include="#job-selector,#threshold-chat,#threshold-borderline,#threshold-seek,#analysis,#resume_text,#full_resume,#message-content"
@@ -19,9 +19,30 @@
         </div>
         <!-- name and job applied -->
         <div class="flex-1 min-w-0">
-            <h3 class="font-bold text-gray-900 truncate">
-                {{ candidate.name or '未知' }}
-            </h3>
+            <div class="flex items-center gap-2">
+                <h3 class="font-bold text-gray-900 truncate">
+                    {{ candidate.name or '未知' }}
+                </h3>
+                <!-- stage badge -->
+                {% if candidate.stage %}
+                <span class="inline-flex items-center px-2 py-0.5 text-xs font-medium rounded-full shrink-0
+                    {% if candidate.stage == 'CHAT' %}bg-blue-100 text-blue-700
+                    {% elif candidate.stage == 'SEEK' %}bg-yellow-100 text-yellow-700
+                    {% elif candidate.stage == 'CONTACT' %}bg-emerald-100 text-emerald-700
+                    {% elif candidate.stage == 'GREET' %}bg-green-100 text-green-700
+                    {% elif candidate.stage == 'PASS' %}bg-red-100 text-red-700
+                    {% else %}bg-gray-100 text-gray-700
+                    {% endif %}"
+                    data-badge="stage">
+                    {% if candidate.stage == 'CHAT' %}💬沟通中
+                    {% elif candidate.stage == 'SEEK' %}⭐潜力
+                    {% elif candidate.stage == 'CONTACT' %}📞联系
+                    {% elif candidate.stage == 'GREET' %}👋打招呼
+                    {% elif candidate.stage == 'PASS' %}❌不匹配
+                    {% endif %}
+                </span>
+                {% endif %}
+            </div>
             <p class="text-sm text-gray-600 truncate">
                 {{ candidate.job_applied or '未指定岗位' }}
             </p>
@@ -31,13 +52,8 @@
     <p class="text-xs text-gray-500 mt-1 line-clamp-2">
         {{ candidate.last_message or '暂无消息' }}
     </p>
-    <!-- tags: viewed, greeted, saved, passed, seek, contact - full width -->
+    <!-- tags: greeted, saved - full width (viewed is now handled by card opacity) -->
     <div class="mt-2 flex flex-wrap gap-1" id="candidate-tags">
-        <span
-            class="inline-block px-2 py-1 text-xs rounded-full bg-purple-100 text-purple-700 {% if candidate.viewed is not defined or not candidate.viewed %}hidden{% endif %}"
-            data-tag="viewed">
-            👁️ 已查看
-        </span>
         <span
             class="inline-block px-2 py-1 text-xs rounded-full bg-green-100 text-green-700 {% if candidate.greeted is not defined or not candidate.greeted %}hidden{% endif %}"
             data-tag="greeted">
@@ -47,21 +63,6 @@
             class="inline-block px-2 py-1 text-xs rounded-full bg-blue-100 text-blue-700 {% if not candidate.saved %}hidden{% endif %}"
             data-tag="saved">
             💾 已保存
-        </span>
-        <span
-            class="inline-block px-2 py-1 text-xs rounded-full bg-red-100 text-red-700 {% if candidate.stage != 'PASS' %}hidden{% endif %}"
-            data-tag="passed">
-            ❌ 不匹配
-        </span>
-        <span
-            class="inline-block px-2 py-1 text-xs rounded-full bg-yellow-100 text-yellow-700 {% if candidate.stage != 'SEEK' %}hidden{% endif %}"
-            data-tag="seek">
-            ⭐ 高潜
-        </span>
-        <span
-            class="inline-block px-2 py-1 text-xs rounded-full bg-emerald-100 text-emerald-700 {% if candidate.stage != 'CONTACT' %}hidden{% endif %}"
-            data-tag="contact">
-            📞 可联系
         </span>
     </div>
 </div>

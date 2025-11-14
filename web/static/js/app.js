@@ -709,60 +709,102 @@ function applyCardUpdate(card, updates, identifiers) {
     // Apply updates to candidateData
     card.setAttribute('hx-vals', JSON.stringify(cardData));
     
-    // Update tags by toggling visibility
-    const tagsContainer = card.querySelector('#candidate-tags');
-    
-    // Update stage-based tags
-    if (updates.stage !== undefined) {
-        const stage = updates.stage || cardData.stage;
-        const passedTag = tagsContainer?.querySelector('[data-tag="passed"]');
-        const seekTag = tagsContainer?.querySelector('[data-tag="seek"]');
-        const contactTag = tagsContainer?.querySelector('[data-tag="contact"]');
-        const greetedTag = tagsContainer?.querySelector('[data-tag="greeted"]');
-        const savedTag = tagsContainer?.querySelector('[data-tag="saved"]');
-        
-        // Hide all stage tags first
-        if (passedTag) passedTag.classList.add('hidden');
-        if (seekTag) seekTag.classList.add('hidden');
-        if (contactTag) contactTag.classList.add('hidden');
-        if (greetedTag) greetedTag.classList.add('hidden');
-        
-        // Show appropriate tag based on stage
-        switch (stage) {
-            case 'PASS':
-                if (passedTag) passedTag.classList.remove('hidden');
-                if (savedTag) savedTag.classList.remove('hidden');
-                break;
-            case 'CHAT':
-                if (greetedTag) greetedTag.classList.remove('hidden');
-                if (savedTag) savedTag.classList.remove('hidden');
-                break;
-            case 'SEEK':
-                if (seekTag) seekTag.classList.remove('hidden');
-                if (savedTag) savedTag.classList.remove('hidden');
-                break;
-            case 'CONTACT':
-                if (contactTag) contactTag.classList.remove('hidden');
-                if (savedTag) savedTag.classList.remove('hidden');
-                break;
+    // Update viewed state (opacity of entire card)
+    if ('viewed' in updates) {
+        if (updates.viewed) {
+            card.classList.add('opacity-60');
+        } else {
+            card.classList.remove('opacity-60');
         }
     }
     
-    // Update individual tag flags
-    if (updates.viewed) {
-        const viewedTag = tagsContainer?.querySelector('[data-tag="viewed"]');
-        if (viewedTag) {
-            viewedTag.classList.toggle('hidden', !updates.viewed);
+    // Update stage badge
+    if ('stage' in updates) {
+        const stageBadge = card.querySelector('[data-badge="stage"]');
+        if (stageBadge) {
+            // Remove all stage classes
+            stageBadge.className = 'inline-flex items-center px-2 py-0.5 text-xs font-medium rounded-full shrink-0';
+            
+            // Add appropriate classes and emoji based on stage
+            let stageEmoji = '';
+            let stageClasses = '';
+            
+            switch (updates.stage) {
+                case 'CHAT':
+                    stageEmoji = '💬';
+                    stageClasses = 'bg-blue-100 text-blue-700';
+                    break;
+                case 'SEEK':
+                    stageEmoji = '⭐';
+                    stageClasses = 'bg-yellow-100 text-yellow-700';
+                    break;
+                case 'CONTACT':
+                    stageEmoji = '📞';
+                    stageClasses = 'bg-emerald-100 text-emerald-700';
+                    break;
+                case 'GREET':
+                    stageEmoji = '👋';
+                    stageClasses = 'bg-green-100 text-green-700';
+                    break;
+                case 'PASS':
+                    stageEmoji = '❌';
+                    stageClasses = 'bg-red-100 text-red-700';
+                    break;
+                default:
+                    stageEmoji = '';
+                    stageClasses = 'bg-gray-100 text-gray-700';
+            }
+            
+            stageBadge.className += ' ' + stageClasses;
+            stageBadge.textContent = stageEmoji;
+            
+            if (updates.stage) {
+                stageBadge.classList.remove('hidden');
+            } else {
+                stageBadge.classList.add('hidden');
+            }
+        }
+    }
+    
+    // Update tags (greeted and saved only - viewed is handled by card opacity)
+    const tagsContainer = card.querySelector('#candidate-tags');
+    if (tagsContainer) {
+        // Update greeted tag
+        if ('greeted' in updates) {
+            const greetedTag = tagsContainer.querySelector('[data-tag="greeted"]');
+            if (greetedTag) {
+                if (updates.greeted) {
+                    greetedTag.classList.remove('hidden');
+                } else {
+                    greetedTag.classList.add('hidden');
+                }
+            }
+        }
+        
+        // Update saved tag
+        if ('saved' in updates) {
+            const savedTag = tagsContainer.querySelector('[data-tag="saved"]');
+            if (savedTag) {
+                if (updates.saved) {
+                    savedTag.classList.remove('hidden');
+                } else {
+                    savedTag.classList.add('hidden');
+                }
+            }
         }
     }
     
     // Update score badge
-    if (updates.score) {
+    if ('score' in updates) {
         const cardContainer = card.querySelector('.flex.items-start.space-x-3');
         const scoreBadge = cardContainer?.querySelector('[data-badge="score"]');
         if (scoreBadge) {
-            scoreBadge.textContent = updates.score.toString();
-            scoreBadge.classList.remove('hidden');
+            if (updates.score !== null && updates.score !== undefined) {
+                scoreBadge.textContent = updates.score.toString();
+                scoreBadge.classList.remove('hidden');
+            } else {
+                scoreBadge.classList.add('hidden');
+            }
         }
     }
 }

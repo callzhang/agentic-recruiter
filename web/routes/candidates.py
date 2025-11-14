@@ -196,16 +196,14 @@ async def list_candidates(
 async def get_candidate_detail(request: Request):
     """Get candidate detail view."""
     # Parse index if provided
-    data = dict(request.query_params)
-    if not data:
-        form_data = await request.form()
-        data = dict(form_data)
-    data = {k:v for k, v in data.items() if v}
+    candidate = dict(request.query_params)
+    str2bool = lambda v: {'true': True, 'false': False}.get(v, v)
+    candidate = {k:str2bool(v) for k, v in candidate.items() if v}
     # Try to find existing candidate
     results = get_candidates(
-        identifiers=[data.get('candidate_id'), data.get('chat_id'), data.get('conversation_id')], 
-        names=[data.get('name')], 
-        job_applied=data.get('job_applied'), 
+        identifiers=[candidate.get('candidate_id'), candidate.get('chat_id'), candidate.get('conversation_id')], 
+        names=[candidate.get('name')], 
+        job_applied=candidate.get('job_applied'), 
         limit=1
     )
     candidate_data = results[0] if results else {}
@@ -213,19 +211,19 @@ async def get_candidate_detail(request: Request):
     history = candidate_data.get('metadata', {}).get('history', []) or []
     # generated message is the last assistant message from the history
     stored_last_message = candidate_data.get('last_message')
-    web_last_message = data.get('last_message')
+    web_last_message = candidate.get('last_message')
     last_assistant_message = next((msg.get('content') for msg in history[::-1] if msg.get('role') == 'assistant'), '')
     generated_message = stored_last_message if stored_last_message != web_last_message else last_assistant_message
-    data.update(candidate_data)
-    data['score'] = candidate_data.get("analysis", {}).get("overall")
+    candidate.update(candidate_data)
+    candidate['score'] = candidate_data.get("analysis", {}).get("overall")
 
     return templates.TemplateResponse("partials/candidate_detail.html", {
         "request": request,
-        "analysis": data.pop("analysis", None),
+        "analysis": candidate.pop("analysis", None),
         "generated_message": generated_message,
-        "resume_text": data.pop("resume_text", None),
-        "full_resume": data.pop("full_resume", None),
-        "candidate": data,
+        "resume_text": candidate.pop("resume_text", None),
+        "full_resume": candidate.pop("full_resume", None),
+        "candidate": candidate,
     })
 
 

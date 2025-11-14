@@ -175,9 +175,9 @@ async def view_recommend_candidate_resume_action(page: Page, index: int) -> Dict
         raise ValueError(f"候选人索引 {index} 超出范围")
 
     card = cards.nth(index)
-    await card.hover(timeout=3000)
+    await card.hover(timeout=5000)
     await card.click(timeout=800)
-
+    await asyncio.sleep(3000)
     await _setup_wasm_route(page.context)
     await _install_parent_message_listener(page, logger)
 
