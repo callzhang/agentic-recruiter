@@ -1,290 +1,303 @@
 """Zilliz/Milvus-backed job profile store integration."""
 from __future__ import annotations
 
-import json
 from datetime import datetime
 from typing import Any, Dict, List, Optional
-
-from pymilvus import (
-    Collection,
-    CollectionSchema,
-    DataType,
-    FieldSchema,
-    connections,
-    utility,
-)
-
+from pymilvus import DataType, FieldSchema
+# Use the same client instance as candidate_store
+from src.candidate_store import _client
 from .global_logger import logger
-from .config import settings
+from .config import get_zilliz_config
+_job_store_config = get_zilliz_config()
+# ------------------------------------------------------------------
+# Schema Definition
+# ------------------------------------------------------------------
 
-# Job schema fields
-fields = [
-    # Primary key
-    FieldSchema(name="job_id", dtype=DataType.VARCHAR, max_length=64, is_primary=True),
+def get_job_collection_schema() -> list[FieldSchema]:
+    """Get the job collection schema definition.
     
-    # Job content fields
-    FieldSchema(name="position", dtype=DataType.VARCHAR, max_length=200),
-    FieldSchema(name="background", dtype=DataType.VARCHAR, max_length=5000, nullable=True),
-    FieldSchema(name="description", dtype=DataType.VARCHAR, max_length=5000, nullable=True),
-    FieldSchema(name="responsibilities", dtype=DataType.VARCHAR, max_length=5000, nullable=True),
-    FieldSchema(name="requirements", dtype=DataType.VARCHAR, max_length=5000, nullable=True),
-    FieldSchema(name="target_profile", dtype=DataType.VARCHAR, max_length=5000, nullable=True),
-    FieldSchema(name="keywords", dtype=DataType.JSON, nullable=True),
-    FieldSchema(name="drill_down_questions", dtype=DataType.VARCHAR, max_length=65000, nullable=True),
+    Returns the schema as a list of FieldSchema objects.
+    """
+    fields: list[FieldSchema] = [
+        # Primary key
+        FieldSchema(name="job_id", dtype=DataType.VARCHAR, max_length=64, is_primary=True),
+        
+        # Job content fields
+        FieldSchema(name="position", dtype=DataType.VARCHAR, max_length=200),
+        FieldSchema(name="background", dtype=DataType.VARCHAR, max_length=5000, nullable=True),
+        FieldSchema(name="description", dtype=DataType.VARCHAR, max_length=5000, nullable=True),
+        FieldSchema(name="responsibilities", dtype=DataType.VARCHAR, max_length=5000, nullable=True),
+        FieldSchema(name="requirements", dtype=DataType.VARCHAR, max_length=5000, nullable=True),
+        FieldSchema(name="target_profile", dtype=DataType.VARCHAR, max_length=5000, nullable=True),
+        FieldSchema(name="keywords", dtype=DataType.JSON, nullable=True),
+        FieldSchema(name="drill_down_questions", dtype=DataType.VARCHAR, max_length=65000, nullable=True),
+        
+        # Candidate search filters (stored as JSON)
+        FieldSchema(name="candidate_filters", dtype=DataType.JSON, nullable=True),
+        
+        # Vector field for future semantic search
+        FieldSchema(name="job_embedding", dtype=DataType.FLOAT_VECTOR, dim=_job_store_config["embedding_dim"]),
+        
+        # Timestamps
+        FieldSchema(name="created_at", dtype=DataType.VARCHAR, max_length=64),
+        FieldSchema(name="updated_at", dtype=DataType.VARCHAR, max_length=64),
+    ]
+    return fields
+
+# Define field names for the collection
+_all_fields = [f.name for f in get_job_collection_schema()]
+_readable_fields = [f.name for f in get_job_collection_schema() if f.dtype != DataType.FLOAT_VECTOR]
+_collection_name = _job_store_config["job_collection_name"]
+
+
+# ------------------------------------------------------------------
+# Collection Management
+# ------------------------------------------------------------------
+
+def create_job_collection(collection_name: Optional[str] = None) -> bool:
+    """Create the jobs collection with the defined schema.
     
-    # Candidate search filters (stored as JSON)
-    FieldSchema(name="candidate_filters", dtype=DataType.JSON, nullable=True),
+    Args:
+        collection_name: Name of collection to create (defaults to "CN_jobs")
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    collection_name = collection_name or _collection_name
     
-    # Vector field for future semantic search
-    FieldSchema(name="job_embedding", dtype=DataType.FLOAT_VECTOR, dim=settings.ZILLIZ_EMBEDDING_DIM),
+    if not _client:
+        logger.error("Zilliz client not available")
+        return False
     
-    # Timestamps
-    FieldSchema(name="created_at", dtype=DataType.VARCHAR, max_length=64),
-    FieldSchema(name="updated_at", dtype=DataType.VARCHAR, max_length=64),
+    try:
+        # Check if collection already exists
+        if _client.has_collection(collection_name=collection_name):
+            logger.warning(f"Collection {collection_name} already exists")
+            return False
+        
+        logger.info(f"Creating collection {collection_name}...")
+        
+        # Create collection with schema
+        _client.create_collection(
+            collection_name=collection_name,
+            dimension=_job_store_config["embedding_dim"],
+            primary_field_name="job_id",
+            vector_field_name="job_embedding",
+            id_type="string",
+            auto_id=False,  # job_id is provided, not auto-generated
+            max_length=64,
+            metric_type="IP",
+            schema=get_job_collection_schema(),
+        )
+        
+        # Create scalar field indexes for faster queries
+        logger.info("Creating scalar indexes...")
+        _client.create_index(collection_name=collection_name, field_name="job_id", index_type="INVERTED")
+        _client.create_index(collection_name=collection_name, field_name="position", index_type="INVERTED")
+        
+        logger.info(f"✅ Collection {collection_name} created successfully")
+        return True
+        
+    except Exception as exc:
+        logger.exception(f"Failed to create collection {collection_name}: %s", exc)
+        return False
+
+# ------------------------------------------------------------------
+# Job Operations
+# ------------------------------------------------------------------
+
+def get_all_jobs() -> List[Dict[str, Any]]:
+    """Get all jobs from the collection."""
+    if not _client:
+        logger.warning("Zilliz client not available")
+        return []
+    
+    try:
+        # Query all records (empty filter means get all)
+        results = _client.query(
+            collection_name=_collection_name,
+            filter="",
+            output_fields=_readable_fields,
+            limit=1000  # Reasonable limit
+        )
+        
+        # Remove empty fields
+        jobs = [{k: v for k, v in job.items() if v or v == 0} for job in results]
+        
+        logger.debug("Retrieved %d jobs from collection", len(jobs))
+        return jobs
+        
+    except Exception as exc:
+        logger.exception("Failed to get all jobs: %s", exc)
+        return []
+
+
+def get_job_by_id(job_id: str) -> Optional[Dict[str, Any]]:
+    """Get a specific job by ID."""
+    if not _client:
+        logger.warning("Zilliz client not available")
+        return None
+    
+    try:
+        results = _client.query(
+            collection_name=_collection_name,
+            filter=f'job_id == "{job_id}"',
+            output_fields=_readable_fields,
+            limit=1
+        )
+        
+        if results:
+            # Remove empty fields
+            job = {k: v for k, v in results[0].items() if v or v == 0}
+            return job
+        
+        return None
+        
+    except Exception as exc:
+        logger.exception("Failed to get job by ID %s: %s", job_id, exc)
+        return None
+
+
+def insert_job(**job_data) -> bool:
+    """Insert a new job.
+    
+    Args:
+        **job_data: Job data including id, position, background, etc.
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    if not _client:
+        logger.warning("Zilliz client not available")
+        return False
+    
+    try:
+        # Prepare data for insertion
+        now = datetime.now().isoformat()
+        drill_down = str(job_data.get("drill_down_questions", ""))[:30000]
+        
+        insert_data = {
+            "job_id": job_data["id"],
+            "position": job_data["position"],
+            "background": job_data.get("background", ""),
+            "description": job_data.get("description", ""),
+            "responsibilities": job_data.get("responsibilities", ""),
+            "requirements": job_data.get("requirements", ""),
+            "target_profile": job_data.get("target_profile", ""),
+            "keywords": job_data.get("keywords", {"positive": [], "negative": []}),
+            "drill_down_questions": drill_down,
+            "candidate_filters": job_data.get("candidate_filters"),
+            "job_embedding": [0.0] * _job_store_config["embedding_dim"],  # Empty embedding for now
+            "created_at": now,
+            "updated_at": now,
+        }
+        
+        # Filter to only valid fields
+        insert_data = {k: v for k, v in insert_data.items() if k in _all_fields and (v or v == 0)}
+        
+        # Insert data
+        _client.insert(collection_name=_collection_name, data=[insert_data])
+        
+        logger.debug("Successfully inserted job: %s", job_data["id"])
+        return True
+        
+    except Exception as exc:
+        logger.exception("Failed to insert job %s: %s", job_data.get("id"), exc)
+        return False
+
+
+def update_job(job_id: str, **job_data) -> bool:
+    """Update an existing job.
+    
+    Args:
+        job_id: Job ID to update
+        **job_data: Job data to update
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    if not _client:
+        logger.warning("Zilliz client not available")
+        return False
+    
+    try:
+        # Check if job exists
+        existing = get_job_by_id(job_id)
+        if not existing:
+            logger.warning("Job %s not found for update", job_id)
+            return False
+        
+        # Prepare update data
+        now = datetime.now().isoformat()
+        
+        update_data = {
+            "job_id": job_id,
+            "position": job_data.get("position", existing.get("position", "")),
+            "background": job_data.get("background", existing.get("background", "")),
+            "description": job_data.get("description", existing.get("description", "")),
+            "responsibilities": job_data.get("responsibilities", existing.get("responsibilities", "")),
+            "requirements": job_data.get("requirements", existing.get("requirements", "")),
+            "target_profile": job_data.get("target_profile", existing.get("target_profile", "")),
+            "keywords": job_data.get("keywords", existing.get("keywords", {"positive": [], "negative": []})),
+            "drill_down_questions": str(job_data.get("drill_down_questions", existing.get("drill_down_questions", "")))[:30000],
+            "candidate_filters": job_data.get("candidate_filters", existing.get("candidate_filters")),
+            "job_embedding": [0.0] * _job_store_config["embedding_dim"],  # Keep empty for now
+            "created_at": existing.get("created_at", now),  # Keep original creation time
+            "updated_at": now,
+        }
+        
+        # Filter to only valid fields
+        update_data = {k: v for k, v in update_data.items() if k in _all_fields and (v or v == 0)}
+        
+        # Use upsert to update
+        _client.upsert(
+            collection_name=_collection_name,
+            data=[update_data],
+            partial_update=bool(job_id),  # Partial update if job_id exists
+        )
+        
+        logger.debug("Successfully updated job: %s", job_id)
+        return True
+        
+    except Exception as exc:
+        logger.exception("Failed to update job %s: %s", job_id, exc)
+        return False
+
+
+def delete_job(job_id: str) -> bool:
+    """Delete a job by ID.
+    
+    Args:
+        job_id: Job ID to delete
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    if not _client:
+        logger.warning("Zilliz client not available")
+        return False
+    
+    try:
+        # Delete by primary key
+        _client.delete(
+            collection_name=_collection_name,
+            filter=f'job_id == "{job_id}"'
+        )
+        
+        logger.debug("Successfully deleted job: %s", job_id)
+        return True
+        
+    except Exception as exc:
+        logger.exception("Failed to delete job %s: %s", job_id, exc)
+        return False
+
+
+__all__ = [
+    "get_job_collection_schema",
+    "create_job_collection",
+    "get_all_jobs",
+    "get_job_by_id",
+    "insert_job",
+    "update_job",
+    "delete_job",
 ]
-
-# List of all field names except "job_embedding"
-_all_fields = [f.name for f in fields if f.name != "job_embedding"]
-
-
-class JobsStore:
-    """Zilliz/Milvus-backed job profile store."""
-    
-    def __init__(self, endpoint: str, user: str, password: str, collection_name: str = "CN_jobs"):
-        self.endpoint = endpoint
-        self.user = user
-        self.password = password
-        self.collection_name = collection_name
-        self.collection: Optional[Collection] = None
-        self.enabled = bool(endpoint and user and password)
-        
-        if self.enabled:
-            try:
-                self._connect()
-                self._ensure_collection()
-                logger.info("Jobs store initialized successfully")
-            except Exception as exc:
-                logger.exception("Failed to initialize jobs store: %s", exc)
-                self.enabled = False
-        else:
-            logger.warning("No Zilliz endpoint configured, jobs store will be disabled")
-    
-    def _connect(self):
-        """Connect to Zilliz Cloud."""
-        try:
-            logger.debug("Connecting to Zilliz endpoint %s", self.endpoint)
-            connect_args = {
-                "alias": "default",
-                "uri": self.endpoint,
-                "user": self.user,
-                "password": self.password,
-                "secure": True,
-            }
-            connections.connect(**connect_args)
-            logger.debug("Connected to Zilliz successfully")
-        except Exception as exc:
-            logger.exception("Failed to connect to Zilliz: %s", exc)
-            raise
-    
-    def _ensure_collection(self):
-        """Create collection if it doesn't exist."""
-        try:
-            if utility.has_collection(self.collection_name):
-                logger.debug("Collection %s already exists, loading it", self.collection_name)
-                self.collection = Collection(self.collection_name)
-            else:
-                logger.debug("Creating collection %s", self.collection_name)
-                schema = CollectionSchema(fields, description="Job profiles for Boss直聘 automation")
-                self.collection = Collection(self.collection_name, schema)
-                logger.debug("Collection %s created successfully", self.collection_name)
-                
-                # Create indexes
-                index_params = {
-                    "index_type": "AUTOINDEX",
-                    "metric_type": "IP",
-                    "params": {},
-                }
-                self.collection.create_index(field_name="job_embedding", index_params=index_params)
-                self.collection.create_index(field_name="job_id")
-                self.collection.create_index(field_name="position")
-                logger.debug("Indexes created successfully")
-            
-            # Load collection into memory
-            self.collection.load()
-            logger.debug("Collection %s loaded into memory", self.collection_name)
-            
-        except Exception as exc:
-            logger.exception("Failed to ensure collection: %s", exc)
-            raise
-    
-    def get_all_jobs(self) -> List[Dict[str, Any]]:
-        """Get all jobs from the collection."""
-        if not self.enabled or not self.collection:
-            logger.warning("Jobs store not enabled or collection not available")
-            return []
-        
-        try:
-            # Query all records
-            results = self.collection.query(
-                expr="",  # Empty expression means get all
-                output_fields=_all_fields,
-                limit=1000  # Reasonable limit
-            )
-            
-            # Convert to list of dicts
-            jobs = []
-            for result in results:
-                job = dict(result)
-                # Keywords are already JSON objects from Zilliz
-                jobs.append(job)
-            
-            logger.debug("Retrieved %d jobs from collection", len(jobs))
-            return jobs
-            
-        except Exception as exc:
-            logger.exception("Failed to get all jobs: %s", exc)
-            return []
-    
-    def get_job_by_id(self, job_id: str) -> Optional[Dict[str, Any]]:
-        """Get a specific job by ID."""
-        if not self.enabled or not self.collection:
-            logger.warning("Jobs store not enabled or collection not available")
-            return None
-        
-        try:
-            results = self.collection.query(
-                expr=f'job_id == "{job_id}"',
-                output_fields=_all_fields,
-                limit=1
-            )
-            
-            if results:
-                job = dict(results[0])
-                # Keywords are already JSON objects from Zilliz
-                return job
-            
-            return None
-            
-        except Exception as exc:
-            logger.exception("Failed to get job by ID %s: %s", job_id, exc)
-            return None
-    
-    def insert_job(self, **job_data) -> bool:
-        """Insert a new job."""
-        if not self.enabled or not self.collection:
-            logger.warning("Jobs store not enabled or collection not available")
-            return False
-        
-        try:
-            # Prepare data for insertion
-            now = datetime.now().isoformat()
-            drill_down = str(job_data.get("drill_down_questions", ""))[:30000]
-            
-            insert_data = {
-                "job_id": job_data["id"],
-                "position": job_data["position"],
-                "background": job_data.get("background", ""),
-                "description": job_data.get("description", ""),
-                "responsibilities": job_data.get("responsibilities", ""),
-                "requirements": job_data.get("requirements", ""),
-                "target_profile": job_data.get("target_profile", ""),
-                "keywords": job_data.get("keywords", {"positive": [], "negative": []}),
-                "drill_down_questions": drill_down,
-                "candidate_filters": job_data.get("candidate_filters"),  # Store candidate search filters
-                "job_embedding": [0.0] * settings.ZILLIZ_EMBEDDING_DIM,  # Empty embedding for now
-                "created_at": now,
-                "updated_at": now,
-            }
-            
-            # Insert data
-            self.collection.insert([insert_data])
-            self.collection.flush()
-            
-            logger.debug("Successfully inserted job: %s", job_data["id"])
-            return True
-            
-        except Exception as exc:
-            logger.exception("Failed to insert job %s: %s", job_data.get("id"), exc)
-            return False
-    
-    def update_job(self, job_id: str, **job_data) -> bool:
-        """Update an existing job."""
-        if not self.enabled or not self.collection:
-            logger.warning("Jobs store not enabled or collection not available")
-            return False
-        
-        try:
-            # Check if job exists
-            existing = self.get_job_by_id(job_id)
-            if not existing:
-                logger.warning("Job %s not found for update", job_id)
-                return False
-            
-            # Prepare update data
-            now = datetime.now().isoformat()
-            
-            update_data = {
-                "job_id": job_id,
-                "position": job_data.get("position", existing["position"]),
-                "background": job_data.get("background", existing["background"]),
-                "description": job_data.get("description", existing["description"]),
-                "responsibilities": job_data.get("responsibilities", existing["responsibilities"]),
-                "requirements": job_data.get("requirements", existing["requirements"]),
-                "target_profile": job_data.get("target_profile", existing["target_profile"]),
-                "keywords": job_data.get("keywords", existing["keywords"]),
-                "drill_down_questions": str(job_data.get("drill_down_questions", existing["drill_down_questions"]))[:30000],
-                "candidate_filters": job_data.get("candidate_filters", existing.get("candidate_filters")),  # Update candidate filters
-                "job_embedding": [0.0] * settings.ZILLIZ_EMBEDDING_DIM,  # Keep empty for now
-                "created_at": existing["created_at"],  # Keep original creation time
-                "updated_at": now,
-            }
-            
-            # Use upsert to update
-            self.collection.upsert([update_data])
-            self.collection.flush()
-            
-            logger.debug("Successfully updated job: %s", job_id)
-            return True
-            
-        except Exception as exc:
-            logger.exception("Failed to update job %s: %s", job_id, exc)
-            return False
-    
-    def delete_job(self, job_id: str) -> bool:
-        """Delete a job by ID."""
-        if not self.enabled or not self.collection:
-            logger.warning("Jobs store not enabled or collection not available")
-            return False
-        
-        try:
-            # Delete by primary key
-            self.collection.delete(f'job_id == "{job_id}"')
-            self.collection.flush()
-            
-            logger.debug("Successfully deleted job: %s", job_id)
-            return True
-            
-        except Exception as exc:
-            logger.exception("Failed to delete job %s: %s", job_id, exc)
-            return False
-
-
-def _create_jobs_store() -> JobsStore:
-    """Create jobs store instance using configuration."""
-    if not settings.ZILLIZ_ENDPOINT:
-        logger.warning("No Zilliz endpoint configured, jobs store will be disabled")
-        return JobsStore("", "", "")
-    
-    return JobsStore(
-        endpoint=settings.ZILLIZ_ENDPOINT,
-        user=settings.ZILLIZ_USER,
-        password=settings.ZILLIZ_PASSWORD,
-        collection_name="CN_jobs"
-    )
-
-
-# Global instance
-default_store = _create_jobs_store()
-jobs_store = default_store
-
-__all__ = ["jobs_store", "JobsStore"]

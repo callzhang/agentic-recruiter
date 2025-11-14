@@ -19,7 +19,7 @@ from playwright.async_api import Browser, BrowserContext, Page, Playwright, Time
 
 from src import assistant_actions
 from src.candidate_store import get_candidates, get_candidate_count, search_candidates_by_resume, upsert_candidate
-from src.config import settings
+from src.config import get_boss_zhipin_config, get_browser_config, get_service_config, get_sentry_config
 from src.global_logger import logger
 import src.chat_actions as chat_actions
 import src.recommendation_actions as recommendation_actions
@@ -40,7 +40,7 @@ class BossServiceAsync:
 
     def __init__(self) -> None:
         # Initialize Sentry for error tracking (Sentry 2.x auto-detects FastAPI)
-        sentry_config = settings.get_sentry_config()
+        sentry_config = get_sentry_config()
         if sentry_config["dsn"]:
             # Disable auto-integration detection to avoid timeout during package scanning
             # Manually enable only FastAPI integration to avoid scanning all packages
@@ -85,11 +85,11 @@ class BossServiceAsync:
     async def _startup_async(self) -> None:
         if self.playwright:
             return
-        logger.info("正在初始化 Playwright (async)...")
+        logger.debug("正在初始化 Playwright (async)...")
         self.playwright = await async_playwright().start()
         await self.start_browser()
         self.startup_complete.set()
-        logger.info("Playwright 初始化完成。")
+        logger.debug("Playwright 初始化完成。")
 
     async def start_browser(self) -> None:
         if not self.playwright:
@@ -98,22 +98,24 @@ class BossServiceAsync:
         os.makedirs(user_data_dir, exist_ok=True)
         
 
+        browser_config = get_browser_config()
         self.browser = await self.playwright.chromium.connect_over_cdp(
-            settings.CDP_URL,
+            browser_config["cdp_url"],
             timeout=15000
         )
         self.context = self.browser.contexts[0] if self.browser.contexts else await self.browser.new_context()
         self.page = await self._ensure_page()
-        logger.info("持久化浏览器会话已建立。")
+        logger.debug("持久化浏览器会话已建立。")
         return True
 
     async def _shutdown_async(self) -> None:
-        logger.info("正在关闭 Playwright...")
+        logger.debug("正在关闭 Playwright...")
         # Add timeouts to prevent hanging during reload
         try:
             if self.context:
+                browser_config = get_browser_config()
                 await asyncio.wait_for(
-                    self.context.storage_state(path=settings.STORAGE_STATE),
+                    self.context.storage_state(path=browser_config["storage_state"]),
                     timeout=2.0
                 )
         except asyncio.TimeoutError:
@@ -151,7 +153,7 @@ class BossServiceAsync:
         self.page = None
         self.playwright = None
         self.is_logged_in = False
-        logger.info("Playwright 已停止。")
+        logger.debug("Playwright 已停止。")
 
     # ------------------------------------------------------------------
     # Browser/session helpers
@@ -168,14 +170,15 @@ class BossServiceAsync:
         if not self.context:
             raise RuntimeError("浏览器上下文不存在")
         
-        target_pages = {settings.CHAT_URL, settings.RECOMMEND_URL}
+        boss_zhipin_config = get_boss_zhipin_config()
+        target_pages = {boss_zhipin_config["chat_url"], boss_zhipin_config["recommend_url"]}
         candidate: Optional[Page] = None
         
         try:
             for existing in self.context.pages:
                 if existing.is_closed():
                     continue
-                if existing.url in target_pages or existing.url.startswith(settings.BASE_URL):
+                if existing.url in target_pages or existing.url.startswith(boss_zhipin_config["base_url"]):
                     candidate = existing
                     break
             if not candidate:
@@ -193,8 +196,8 @@ class BossServiceAsync:
                 candidate = await self.context.new_page()
         
         # Only navigate if we're not already on a target page
-        if candidate.url not in target_pages and not candidate.url.startswith(settings.BASE_URL):
-            await candidate.goto(settings.CHAT_URL, wait_until="domcontentloaded", timeout=20000)
+        if candidate.url not in target_pages and not candidate.url.startswith(boss_zhipin_config["base_url"]):
+            await candidate.goto(boss_zhipin_config["chat_url"], wait_until="domcontentloaded", timeout=20000)
         return candidate
 
     async def _inject_navigation_guard(self, page: Page) -> None:
@@ -206,7 +209,8 @@ class BossServiceAsync:
         method after page loads if you want to completely block manual navigation.
         The --app mode in start_service.py already provides good isolation.
         """
-        allowed_origin = settings.BASE_URL
+        boss_zhipin_config = get_boss_zhipin_config()
+        allowed_origin = boss_zhipin_config["base_url"]
         navigation_guard_script = f"""
         (function() {{
             const allowedOrigin = '{allowed_origin}';
@@ -241,9 +245,10 @@ class BossServiceAsync:
     async def save_login_state(self) -> None:
         if not self.context:
             return
-        os.makedirs(os.path.dirname(settings.STORAGE_STATE), exist_ok=True)
-        await self.context.storage_state(path=settings.STORAGE_STATE)
-        logger.info("登录状态已保存: %s", settings.STORAGE_STATE)
+        browser_config = get_browser_config()
+        os.makedirs(os.path.dirname(browser_config["storage_state"]), exist_ok=True)
+        await self.context.storage_state(path=browser_config["storage_state"])
+        logger.info("登录状态已保存: %s", browser_config["storage_state"])
         self.is_logged_in = True
 
     async def _save_login_state_with_lock(self) -> None:
@@ -307,7 +312,8 @@ class BossServiceAsync:
         while asyncio.get_event_loop().time() - start < max_wait_time:
             current_url = page.url
             logger.debug(f'等待登录: {current_url}')
-            if settings.BASE_URL in current_url and await _page_contains_keywords():
+            boss_zhipin_config = get_boss_zhipin_config()
+            if boss_zhipin_config["base_url"] in current_url and await _page_contains_keywords():
                 await self._save_login_state_with_lock()
                 logger.info("检测到登录成功。")
                 return
@@ -451,7 +457,8 @@ class BossServiceAsync:
             """
             import os
             tunnel_url = os.environ.get('BOSS_TUNNEL_URL')
-            local_url = f"http://{settings.BOSS_SERVICE_HOST}:{settings.BOSS_SERVICE_PORT}"
+            service_config = get_service_config()
+            local_url = f"http://{service_config['host']}:{service_config['port']}"
             
             return {
                 "tunnel_url": tunnel_url,

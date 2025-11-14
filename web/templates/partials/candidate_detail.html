@@ -29,15 +29,17 @@
 
     <!-- Hidden context for HTMX requests -->
     <form id="candidate-context" class="hidden">
-        <input type="hidden" name="chat_id" value="{{ candidate.chat_id or '' }}">
+        <input type="hidden" name="chat_id" value="{{ candidate.chat_id }}">
         <input type="hidden" name="mode" value="{{ candidate.mode}}">
         <input type="hidden" name="name" value="{{ candidate.name}}">
         <input type="hidden" name="job_id" value="{{ candidate.job_id }}">
         <input type="hidden" name="job_applied" value="{{ candidate.job_applied }}">
-        <input type="hidden" name="conversation_id" value="{{ candidate.conversation_id or '' }}">
-        <input type="hidden" name="index" value="{{ candidate.index or '' }}">
-        <input type="hidden" name="candidate_id" value="{{ candidate.candidate_id or '' }}">
-        <input type="hidden" name="stage" value="{{ candidate.stage or '' }}">
+        <input type="hidden" name="conversation_id" value="{{ candidate.conversation_id }}">
+        <input type="hidden" name="index" value="{{ candidate.index }}">
+        <input type="hidden" name="candidate_id" value="{{ candidate.candidate_id }}">
+        <input type="hidden" name="stage" value="{{ candidate.stage }}">
+        <input type="hidden" name="greeted" value="{{ candidate.greeted }}">
+        <input type="hidden" name="last_message" value="{{ candidate.last_message }}">
     </form>
     
     <!-- 1. Resume Section -->
@@ -58,15 +60,37 @@
         </div>
         <!-- Tab Content -->
         <div id="resume-content" class="p-2"> 
-            <div id="tab-content-online" class="tab-content" hx-on::after-swap="switchResumeTab('online');">
-                <textarea id="resume-textarea-online" readonly class="w-full h-64 p-2 bg-gray-50 border rounded-lg font-mono text-sm">
-                    {% if resume_text %} {{ resume_text }} {% else %} ⏳ 正在加载在线简历... {% endif %}
-                </textarea>
+            <!-- Online Resume Tab -->
+            <div id="tab-content-online" class="tab-content">
+                <div class="mb-2 flex justify-end">
+                    <button 
+                        onclick="fetchOnlineResume()"
+                        class="px-3 py-1 text-xs bg-blue-100 text-blue-700 rounded hover:bg-blue-200 transition flex items-center gap-1">
+                        <span>🔄</span>
+                        <span>重新获取在线简历</span>
+                    </button>
+                </div>
+                <div id="resume-online-container">
+                    <textarea id="resume-textarea-online" readonly class="w-full h-64 p-2 bg-gray-50 border rounded-lg font-mono text-sm">
+                        {% if resume_text %} {{ resume_text }} {% else %} ⏳ 正在加载在线简历... {% endif %}
+                    </textarea>
+                </div>
             </div>
-            <div id="tab-content-full" class="tab-content hidden" hx-on::after-swap="switchResumeTab('full');">
-                <textarea id="resume-textarea-full" readonly class="w-full h-64 p-2 bg-gray-50 border rounded-lg font-mono text-sm">
-                    {% if full_resume %} {{ full_resume }} {% else %} ⏳ 正在加载完整简历... {% endif %}
-                </textarea>
+            <!-- Full Resume Tab -->
+            <div id="tab-content-full" class="tab-content hidden">
+                <div class="mb-2 flex justify-end">
+                    <button 
+                        onclick="fetchFullResume().catch(err => console.warn('Re-fetch failed:', err))"
+                        class="px-3 py-1 text-xs bg-blue-100 text-blue-700 rounded hover:bg-blue-200 transition flex items-center gap-1">
+                        <span>🔄</span>
+                        <span>重新获取完整简历</span>
+                    </button>
+                </div>
+                <div id="resume-full-container">
+                    <textarea id="resume-textarea-full" readonly class="w-full h-64 p-2 bg-gray-50 border rounded-lg font-mono text-sm">
+                        {% if full_resume %} {{ full_resume }} {% else %} ⏳ 正在加载完整简历... {% endif %}
+                    </textarea>
+                </div>
             </div>
         </div>
     </div>
@@ -140,15 +164,13 @@ async function process_candidate() {
     try {
         // Step 1: Ensure resume is loaded
         const online_resume_div = document.getElementById('resume-textarea-online');
-        if (!online_resume_div?.value || online_resume_div?.value.includes('⏳')) {
+        if (!online_resume_div?.value || online_resume_div?.value.includes('⏳') || online_resume_div?.value.length < 100) {
             await fetchOnlineResume();
         }
         
         // Step 2: Initialize chat if no conversation_id
         if (!conversationId) {
             conversationId = await initializeNewChat();
-            updateCandidateData({'conversation_id': conversationId});
-            updateCandidateCard({'saved': true});
         }
         
         // Step 3: Start analysis if pending
@@ -157,52 +179,61 @@ async function process_candidate() {
             await startAnalysis();
         }
         
-        // Step 4: Check threshold and generate message if needed
+        // Step 4: Check threshold and determine stage (sequential: chat → borderline → seek)
         const analysis_container = document.querySelector('#analysis-content #analysis-result-container');
-        const analysis = analysis_container ? JSON.parse(analysis_container.getAttribute('data-analysis')) : null;
-        const overall_score = analysis?.overall || 0;
-        const { chat_threshold, borderline_threshold } = getThresholdValues();
-        if (overall_score >= chat_threshold) {
+        let analysis = analysis_container ? JSON.parse(analysis_container.getAttribute('data-analysis')) : null;
+        let current_score = analysis?.overall || 0;
+        const { chat_threshold, borderline_threshold, seek_threshold } = getThresholdValues();
+        
+        let newStage = 'PASS'; // Default to PASS
+        // Step 4a: Check chat_threshold - generate message if above
+        if (current_score >= chat_threshold) {
+            debugger;
+            newStage = 'CHAT';
             const messageDiv = document.getElementById('message-content');
             if (messageDiv?.textContent?.includes('⏳')) {
                 await generateMessage();
             }
-            // analyze the full resume if it is available
-            const full_resume_div = document.getElementById('resume-textarea-full');
-            if (full_resume_div?.value?.includes('⏳') || full_resume_div?.value?.includes('None')) {
-                if(overall_score >= borderline_threshold){
-                    if(mode === 'recommend'){
-                        await greetAndSendMessage();
-                    }else{
-                        await fetchFullResume().then(data => {
-                            // Check the swapped textarea content
-                            const full_resume_textarea = document.getElementById('resume-textarea-full');
-                            const resumeText = full_resume_textarea?.value || '';
-                            if (resumeText.length > 100 && !resumeText.includes('⏳')) {
-                                // analyze the full resume
-                                startAnalysis();
-                            }
-                            else {
-                                showToast('暂无完整简历数据', 'info');
-                            }
-                        })
-                        .catch(err => {
-                            // Handle error (e.g., recommend mode not supported)
-                            console.warn('fetchFullResume failed:', err.message);
-                        });
+            
+            // Step 4b: Check borderline_threshold - try to get full resume and re-analyze
+            if (current_score >= borderline_threshold) {
+                newStage = 'SEEK';
+                // For chat mode, try to get full resume and re-analyze
+                if (mode !== 'recommend') {
+                    const full_resume_div = document.getElementById('resume-textarea-full');
+                    if (full_resume_div?.value?.includes('⏳') || !full_resume_div?.value || full_resume_div?.value.includes('None')) {
+                        await fetchFullResume();
+                        const full_resume_textarea = document.getElementById('resume-textarea-full');
+                        const resumeText = full_resume_textarea?.value || '';
+                        if (resumeText.length > 100 && !resumeText.includes('⏳')) {
+                            await startAnalysis();
+                            // Re-read analysis after full resume analysis
+                            const updated_analysis_container = document.querySelector('#analysis-content #analysis-result-container');
+                            analysis = updated_analysis_container ? JSON.parse(updated_analysis_container.getAttribute('data-analysis')) : analysis;
+                            current_score = analysis?.overall || current_score;
+                        }
                     }
                 }else{
-                    showToast('匹配度未达标，不分析完整简历', 'info');
+                    // For recommend mode, greet and send message
+                    await greetAndSendMessage();
+                }
+                
+                // Step 4c: Check seek_threshold - request contact if above
+                if (current_score >= seek_threshold) {
+                    newStage = 'CONTACT';
+                    await requestContact();
                 }
             }
-        }else{
-            showToast('匹配度未达标，不生成消息', 'info');
+        } else {
+            showToast(`匹配度: ${current_score}, 未达最低值: ${chat_threshold}`, 'info');
+            newStage = 'PASS';
         }
-
-        // Step 5: update candidate card
-        updateCandidateCard({
+        
+        // Update stage and card
+        updateCandidateData({
+            stage: newStage,
             viewed: true,
-            score: overall_score
+            score: current_score
         });
         
         // Emit success event (use updated conversationId)
@@ -217,7 +248,7 @@ async function process_candidate() {
         });
         setTimeout(() => {
             document.dispatchEvent(event);
-        }, 1000);
+        }, 100);
         
     } catch (error) {
         console.error('Error processing candidate:', error);
@@ -237,20 +268,20 @@ async function process_candidate() {
     }
 }
 
-function fetchOnlineResume() {
+async function fetchOnlineResume() {
     showToast('抓取在线简历...', 'info');
     const form = document.getElementById('candidate-context');
     const formData = new FormData(form);
-    const mode = formData.get('mode');
-    const url = mode == 'recommend'?"/candidates/fetch-recommend-resume":"/candidates/fetch-online-resume";
-    return htmxAjaxPromise('POST', url, {
-        target: '#tab-content-online',
+    await htmxAjaxPromise('POST', '/candidates/fetch-online-resume', {
+        target: '#resume-online-container',
         swap: 'innerHTML',
         source: '#candidate-context'
     });
+    // Switch to online tab after fetch
+    switchResumeTab('online');
 }
 
-function fetchFullResume() {
+async function fetchFullResume() {
     showToast('抓取完整简历...', 'info');
     const form = document.getElementById('candidate-context');
     const formData = new FormData(form);
@@ -259,14 +290,16 @@ function fetchFullResume() {
     if (mode === 'recommend') {
         const errorMsg = '完整简历不支持推荐模式';
         showToast(errorMsg, 'warning');
-        return Promise.reject(new Error(errorMsg));
+        throw new Error(errorMsg);
     }
 
-    return htmxAjaxPromise('POST', '/candidates/fetch-full-resume', {
-        target: '#tab-content-full',
+    await htmxAjaxPromise('POST', '/candidates/fetch-full-resume', {
+        target: '#resume-full-container',
         swap: 'innerHTML',
         source: '#candidate-context'
     });
+    // Switch to full tab after fetch
+    switchResumeTab('full');
 }
 
 function switchResumeTab(tab) {
@@ -292,58 +325,74 @@ function switchResumeTab(tab) {
     }
 }
 
-function generateMessage() {
+async function generateMessage() {
     showToast('生成消息...', 'info');
     const chat_id = getCandidateData('chat_id');
 
-    return htmxAjaxPromise('POST', '/candidates/generate-message', {
+    const result = await htmxAjaxPromise('POST', '/candidates/generate-message', {
         target: '#message-content',
         swap: 'innerHTML',
         source: '#candidate-context',
         values: {'purpose': 'CHAT_ACTION'}
-    }).then(result => {
-        console.log('Generated message:', result);
-        updateCandidateCard({'generated_message': result});
     });
+    console.log('Generated message:', result);
+    updateCandidateData({generated_message: result});
 }
 
-function greetAndSendMessage() {
+async function greetAndSendMessage() {
     showToast('打招呼+发送消息...', 'info');
     const message_textarea = document.getElementById('message-text');
     const message = message_textarea.value.trim();
-    const chat_id = getCandidateData('chat_id');
-    return htmxAjaxPromise('POST', '/candidates/send', {
+    const stage = getCandidateData('stage');
+    const greeted = getCandidateData('greeted');
+    
+    // Check if already greeted (stage is CHAT, SEEK, or CONTACT, or greeted flag is true)
+    if (['CHAT', 'SEEK', 'CONTACT'].includes(stage) || greeted) {
+        showToast('已经打招呼过了，不能重复打招呼', 'info');
+        return '已经打招呼过了';
+    }
+    
+    debugger;
+    try {
+        await htmxAjaxPromise('POST', '/candidates/send', {
             target: '#message-content',
             swap: 'none',
             source: '#candidate-context',
             values: {'message': message}
-    }).then(() => {
+        });
         showToast('消息发送成功！', 'success');
-        updateCandidateData({'stage': 'GREET', 'greeted': true});
-        updateCandidateCard({stage: 'GREET', greeted: true});
-    }).catch(err => {
+        // Update to CHAT stage (not GREET, as GREET is not in STAGES)
+        const currentStage = getCandidateData('stage');
+        updateCandidateData({
+            stage: currentStage || 'CHAT',
+            greeted: true
+        });
+    } catch (err) {
         showToast('消息发送失败！', 'error');
-    });
+        throw err;
+    }
 }
 
 
 /**
  * Start analysis (current flow)
  */
- function startAnalysis() {
-    showToast('开始分析...', 'info');
+async function startAnalysis() {
     const resume_text = document.getElementById('resume-textarea-online')?.value?.trim() || '';
     const full_resume = document.getElementById('resume-textarea-full')?.value?.trim() || '';
-    has_full_resume = full_resume.includes('⏳') ? false : true;
-    has_online_resume = resume_text.includes('⏳') ? false : true;
+    const has_full_resume = !full_resume.includes('⏳') && full_resume.length > 0;
+    const has_online_resume = !resume_text.includes('⏳') && resume_text.length > 0;
+    
     if (has_full_resume) {
         showToast('正在分析完整简历...', 'info');
-    }else if(has_online_resume) {
+    } else if(has_online_resume) {
         showToast('正在分析在线简历...', 'info');
-    }else{
+    } else {
         showToast('没有可分析的简历,请先请求简历', 'error');
+        throw new Error('没有可分析的简历,请先请求简历');
     }
-    return htmxAjaxPromise('POST', '/candidates/analyze', {
+    
+    const result = await htmxAjaxPromise('POST', '/candidates/analyze', {
         source: '#candidate-context',
         target: '#analysis-content',
         swap: 'innerHTML',
@@ -351,172 +400,132 @@ function greetAndSendMessage() {
             'resume_text': resume_text.includes('⏳') ? '' : resume_text,
             'full_resume': full_resume.includes('⏳') ? '' : full_resume
         }
-    }).then(result => {
-        console.log('Analysis completed:', result);
-        // Extract analysis from data attribute
-        const analysis_container = document.querySelector('#analysis-content #analysis-result-container');
-        const analysis = analysis_container ? JSON.parse(analysis_container.getAttribute('data-analysis')) : null;
-        updateCandidateCard({score: analysis.overall});
     });
+    console.log('Analysis completed:', result);
+    // Extract analysis from data attribute
+    const analysis_container = document.querySelector('#analysis-content #analysis-result-container');
+    const analysis = analysis_container ? JSON.parse(analysis_container.getAttribute('data-analysis')) : null;
+    updateCandidateData({score: analysis?.overall});
+}
+
+async function requestContact() {
+    const form = document.getElementById('candidate-context');
+    const formData = new FormData(form);
+    const chat_id = formData.get('chat_id');
+    const mode = formData.get('mode');
+    
+    // Skip contact request for recommend mode (no chat_id available)
+    if (mode === 'recommend' || !chat_id) {
+        showToast('推荐模式不支持请求联系方式', 'info');
+        return;
+    }
+    
+    showToast('请求联系方式...', 'info');
+    
+    // Endpoint expects JSON body with embed=True format
+    const response = await fetch('/chat/contact/request', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ chat_id: chat_id })
+    });
+    const data = await window.handleApiResponse(response);
+    console.log('Contact requested:', data);
+    
+    // Update to CONTACT stage if contact was successfully obtained
+    if (data && data.success !== false) {
+        updateCandidateData({stage: 'CONTACT'});
+    }
 }
 
 /**
  * Initialize new chat - reads all data from DOM
  */
-function initializeNewChat() {
+async function initializeNewChat() {
     showToast('初始化对话线程...', 'info');
     const form = document.getElementById('candidate-context');
     const formData = new FormData(form);
     //always use online resume at first time (full resume is not available at first time)
-    resume_text = document.getElementById('resume-textarea-online').value
+    const resume_text = document.getElementById('resume-textarea-online').value;
     formData.append('resume_text', resume_text);
 
-    return fetch('/candidates/init-chat', {
+    const response = await fetch('/candidates/init-chat', {
         method: 'POST',
         body: formData
-    })
-    .then(window.handleApiResponse)
-    .then(data => {
-        console.log('Chat initialized:', data);
-        if (data.conversation_id) {
-            updateCandidateData({'conversation_id': data.conversation_id});
-        }
-        return data.conversation_id;
     });
-}
-
-
-function updateCandidateCard(updates) {
-    // Remove keys from updates where value is null or undefined
-    // Keep false values to allow clearing tags/badges
-    updates = Object.fromEntries(
-        Object.entries(updates).filter(([_, v]) => v !== null && v !== undefined && v !== '')
-    );
-    // Find the candidate card by chat_id, candidate_id, conversation_id, or name+job
-    const candidateCards = document.querySelectorAll('.candidate-card');
-    let found = false;
-    
-    // Get name and job_applied from the form for fallback matching
-    const chat_id = getCandidateData('chat_id');
-    const conversation_id = getCandidateData('conversation_id');
-    const candidate_id = getCandidateData('candidate_id');
-    const name = getCandidateData('name');
-    const job_applied = getCandidateData('job_applied');
-    
-    candidateCards.forEach(card => {
-        const cardData = JSON.parse(card.getAttribute('hx-vals'));
-        
-        // Match by multiple identifiers:
-        // 1. chat_id match (in data or cardId)
-        // 2. conversation_id match (direct or in cardId)
-        // 3. Fallback: name + job_applied match (for cases where conversation_id isn't in card yet)
-        const matches = (chat_id && cardData.chat_id === chat_id) ||
-                       (conversation_id && cardData.conversation_id === conversation_id) ||
-                       (candidate_id && cardData.candidate_id === candidate_id) ||
-                       // Fallback: match by name and job_applied if we have them
-                       (name && job_applied &&  cardData.name === name && cardData.job_applied === job_applied);
-        
-        if (matches) {
-            console.log('Found matching candidate card:', { chat_id, conversation_id, cardData, candidate_id });
-            // Update the card's data attributes
-            Object.assign(cardData, updates);
-            // Store conversation_id in card data for future lookups
-            if (conversation_id && !cardData.conversation_id) {
-                cardData.conversation_id = conversation_id;
-            }
-            // apply updates to candidateData
-            card.setAttribute('hx-vals', JSON.stringify(cardData));
-            
-            // Update saved tag
-            const tagsContainer = card.querySelector('.flex.flex-wrap.gap-1');
-            if (updates.saved !== undefined) {
-                let savedTag = tagsContainer.querySelector('[data-tag="saved"]');
-                if (updates.saved && !savedTag) {
-                    savedTag = document.createElement('span');
-                    savedTag.className = 'inline-block px-2 py-1 text-xs rounded-full bg-blue-100 text-blue-700';
-                    savedTag.setAttribute('data-tag', 'saved');
-                    savedTag.textContent = '💾 已保存';
-                    tagsContainer.appendChild(savedTag);
-                } else if (!updates.saved && savedTag) {
-                    savedTag.remove();
-                }
-            }
-            // Update viewed tag
-            if (updates.viewed !== undefined) {
-                let viewedTag = tagsContainer.querySelector('[data-tag="viewed"]');
-                if (updates.viewed && !viewedTag) {
-                    viewedTag = document.createElement('span');
-                    viewedTag.className = 'inline-block px-2 py-1 text-xs rounded-full bg-purple-100 text-purple-700';
-                    viewedTag.setAttribute('data-tag', 'viewed');
-                    viewedTag.textContent = '👁️ 已查看';
-                    tagsContainer.appendChild(viewedTag);
-                } else if (!updates.viewed && viewedTag) {
-                    viewedTag.remove();
-                }
-            }
-            // Update greeted tag
-            if (updates.greeted !== undefined) {
-                let greetedTag = tagsContainer.querySelector('[data-tag="greeted"]');
-                if (updates.greeted && !greetedTag) {
-                    greetedTag = document.createElement('span');
-                    greetedTag.className = 'inline-block px-2 py-1 text-xs rounded-full bg-green-100 text-green-700';
-                    greetedTag.setAttribute('data-tag', 'greeted');
-                    greetedTag.textContent = '👋 已打招呼';
-                    tagsContainer.appendChild(greetedTag);
-                } else if (!updates.greeted && greetedTag) {
-                    greetedTag.remove();
-                }
-            }
-            // Update score badge
-            if (updates.score !== undefined) {
-                const cardContainer = card.querySelector('.flex.items-start.space-x-3');
-                if (cardContainer) {
-                    let scoreBadge = cardContainer.querySelector('[data-badge="score"]');
-                    if (updates.score !== null && updates.score !== undefined && !scoreBadge) {
-                        scoreBadge = document.createElement('div');
-                        scoreBadge.className = 'absolute top-0 right-0 bg-gradient-to-r from-blue-500 to-indigo-600 text-white text-xs font-bold px-2 py-1 rounded-bl-lg rounded-tr-lg shadow-md';
-                        scoreBadge.setAttribute('data-badge', 'score');
-                        scoreBadge.textContent = updates.score.toString();
-                        cardContainer.appendChild(scoreBadge);
-                    } else if (scoreBadge) {
-                        if (updates.score !== null && updates.score !== undefined) {
-                            scoreBadge.textContent = updates.score.toString();
-                        } else {
-                            scoreBadge.remove();
-                        }
-                    }
-                }
-            }
-            found = true;
-            console.log('Updated candidate card:', cardData);
-        }
-    });
-    if (!found) {
-        const identifier = chat_id || conversation_id || candidate_id;
-        console.warn('updateCandidateCard: could not find card with identifier', identifier, 'total cards:', candidateCards.length);
+    const data = await window.handleApiResponse(response);
+    console.log('Chat initialized:', data);
+    if (data.conversation_id) {
+        updateCandidateData({
+            conversation_id: data.conversation_id,
+            saved: true
+        });
     }
+    return data.conversation_id;
 }
+
 
 // ============================================================================
 // Candidate Detail Helper Functions
 // ============================================================================
 
+/**
+ * Update candidate data in the form and broadcast update to card
+ * This function combines both updateCandidateData and updateCandidateCard
+ */
 function updateCandidateData(record) {
-    dataElement = document.getElementById('candidate-context');
-    const formData = new FormData(dataElement);
+    const dataElement = document.getElementById('candidate-context');
+
+    // Update form inputs
     for (const [key, value] of Object.entries(record)) {
         let input = dataElement.querySelector(`input[name="${key}"]`);
         if (input) {
             input.value = value;
-        }else{
+        } else {
             // create a input element
-            let input = document.createElement('input');
+            input = document.createElement('input');
             input.type = 'hidden';
             input.name = key;
             input.value = value;
             dataElement.appendChild(input);
         }
     }
+    
+    // Broadcast update to card (filter out null/undefined, keep false values)
+    const updates = Object.fromEntries(
+        Object.entries(record).filter(([_, v]) => v !== null && v !== undefined && v !== '')
+    );
+    
+    if (Object.keys(updates).length > 0) {
+        // Get identifiers from the form for matching
+        const chat_id = getCandidateData('chat_id');
+        const conversation_id = getCandidateData('conversation_id');
+        const candidate_id = getCandidateData('candidate_id');
+        const name = getCandidateData('name');
+        const job_applied = getCandidateData('job_applied');
+        
+        // Broadcast the update event
+        const event = new CustomEvent('candidate:update', {
+            detail: {
+                identifiers: {
+                    chat_id,
+                    conversation_id,
+                    candidate_id,
+                    name,
+                    job_applied
+                },
+                updates
+            }
+        });
+        document.dispatchEvent(event);
+    }
+
+    // update to cloud
+    htmx.ajax('POST', '/candidates/save', {
+        source: '#candidate-context',
+        swap: 'none',
+    });
 }
 
 function getCandidateData(key) {
@@ -559,7 +568,8 @@ function getThresholdValues() {
         const onError = (evt) => {
             target.removeEventListener('htmx:afterSwap', afterSwap);
             target.removeEventListener('htmx:responseError', onError);
-            reject(new Error(evt.detail.error || 'HTMX request failed'));
+            const errorMsg = evt.detail?.error || evt.detail?.message || 'HTMX request failed';
+            reject(new Error(errorMsg));
         };
         
         target.addEventListener('htmx:afterSwap', afterSwap, { once: true });
@@ -628,14 +638,40 @@ async function processAllCandidates() {
         showToast(`正在处理候选人 ${i + 1}/${total}: ${name}`, 'info');
         
         try {
+            const detailPane = document.getElementById('detail-pane');
+            if (!detailPane) {
+                throw new Error('Detail pane not found');
+            }
+            
+            // Set up event listeners BEFORE triggering HTMX click
+            // This ensures we catch the event even if process_candidate() completes quickly
+            const processingPromise = new Promise((resolve, reject) => {
+                const timeout = setTimeout(() => {
+                    document.removeEventListener('candidate:processing-complete', onComplete);
+                    document.removeEventListener('candidate:processing-error', onError);
+                    reject(new Error('Processing timeout (60s)'));
+                }, 60000); // 60 second timeout
+                
+                const onComplete = (event) => {
+                    clearTimeout(timeout);
+                    document.removeEventListener('candidate:processing-complete', onComplete);
+                    document.removeEventListener('candidate:processing-error', onError);
+                    resolve(event.detail);
+                };
+                
+                const onError = (event) => {
+                    clearTimeout(timeout);
+                    document.removeEventListener('candidate:processing-complete', onComplete);
+                    document.removeEventListener('candidate:processing-error', onError);
+                    reject(new Error(event.detail.error || 'Processing failed'));
+                };
+                
+                document.addEventListener('candidate:processing-complete', onComplete, { once: true });
+                document.addEventListener('candidate:processing-error', onError, { once: true });
+            });
+            
             // Wait for HTMX swap to complete
             await new Promise((resolve, reject) => {
-                const detailPane = document.getElementById('detail-pane');
-                if (!detailPane) {
-                    reject(new Error('Detail pane not found'));
-                    return;
-                }
-                
                 const timeout = setTimeout(() => {
                     detailPane.removeEventListener('htmx:afterSwap', onSwap);
                     detailPane.removeEventListener('htmx:responseError', onError);
@@ -665,30 +701,7 @@ async function processAllCandidates() {
             });
             
             // Wait for process_candidate() to complete
-            await new Promise((resolve, reject) => {
-                const timeout = setTimeout(() => {
-                    document.removeEventListener('candidate:processing-complete', onComplete);
-                    document.removeEventListener('candidate:processing-error', onError);
-                    reject(new Error('Processing timeout (60s)'));
-                }, 60000); // 60 second timeout
-                
-                const onComplete = (event) => {
-                    clearTimeout(timeout);
-                    document.removeEventListener('candidate:processing-complete', onComplete);
-                    document.removeEventListener('candidate:processing-error', onError);
-                    resolve(event.detail);
-                };
-                
-                const onError = (event) => {
-                    clearTimeout(timeout);
-                    document.removeEventListener('candidate:processing-complete', onComplete);
-                    document.removeEventListener('candidate:processing-error', onError);
-                    reject(new Error(event.detail.error || 'Processing failed'));
-                };
-                
-                document.addEventListener('candidate:processing-complete', onComplete, { once: true });
-                document.addEventListener('candidate:processing-error', onError, { once: true });
-            });
+            await processingPromise;
             
             processed++;
             showToast(`✅ ${name} 处理完成 (${processed}/${total})`, 'success');
@@ -758,5 +771,7 @@ requestAnimationFrame(() => {
     
     process_candidate();
 });
+
+</script>
 
 </script>

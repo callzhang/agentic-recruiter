@@ -14,10 +14,12 @@ RESUME_OVERLAY_SELECTOR = "div.boss-popup__wrapper"
 CLOSE_BTN = "div.boss-popup__close"
 
 
-async def ensure_on_chat_page(page: Page, settings, logger=logger, timeout_ms: int = 15000) -> bool:
+async def ensure_on_chat_page(page: Page, logger=logger, timeout_ms: int = 15000) -> bool:
     """Navigate to the chat page when current URL is off target."""
-    if settings.CHAT_URL not in getattr(page, "url", ""):
-        await page.goto(settings.CHAT_URL, wait_until="domcontentloaded", timeout=timeout_ms)
+    from .config import get_boss_zhipin_config
+    boss_config = get_boss_zhipin_config()
+    if boss_config["chat_url"] not in getattr(page, "url", ""):
+        await page.goto(boss_config["chat_url"], wait_until="domcontentloaded", timeout=timeout_ms)
         await page.wait_for_load_state("networkidle", timeout=timeout_ms)
         await page.wait_for_selector('div.chat-user', timeout=timeout_ms)
     return True
@@ -91,10 +93,11 @@ async def close_overlay_dialogs(page: Page, timeout_ms: int = 1000) -> bool:
 async def safe_evaluate_in_fresh_context(selector: str) -> str:
     """Safely evaluate a selector by creating a fresh page context in the current event loop."""
     from playwright.async_api import async_playwright
-    from src.config import settings
+    from src.config import get_browser_config
     
+    browser_config = get_browser_config()
     playwright = await async_playwright().start()
-    browser = await playwright.chromium.connect_over_cdp(settings.CDP_URL)
+    browser = await playwright.chromium.connect_over_cdp(browser_config["cdp_url"])
     
     try:
         # Get the first available page or create a new one

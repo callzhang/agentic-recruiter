@@ -15,7 +15,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
 from src import assistant_actions
-from src.config import settings
+from src.config import get_service_config
 from src.global_logger import get_logger
 from src.scheduler import BRDWorkScheduler
 
@@ -58,7 +58,8 @@ async def start_tunnel(request: Request) -> JSONResponse:
     if not _is_executable_available("cloudflared"):
         return JSONResponse(status_code=400, content={"success": False, "error": "cloudflared not installed"})
     # Determine port from service base URL
-    base_url = settings.BOSS_SERVICE_BASE_URL or "http://127.0.0.1:5001"
+    service_config = get_service_config()
+    base_url = service_config.get("base_url") or "http://127.0.0.1:5001"
     try:
         port = int(base_url.rsplit(":", 1)[-1])
     except Exception:
@@ -208,7 +209,8 @@ async def automation_page(request: Request):
     # Get tunnel URL from environment
     import os
     tunnel_url = os.environ.get('BOSS_TUNNEL_URL')
-    local_url = settings.BOSS_SERVICE_BASE_URL or f"http://127.0.0.1:5001"
+    service_config = get_service_config()
+    local_url = service_config.get("base_url") or f"http://127.0.0.1:5001"
     
     return templates.TemplateResponse("automation.html", {
         "request": request,
@@ -358,7 +360,7 @@ async def start_automation(
             overall_threshold=threshold_seek,
             threshold_greet=threshold_borderline,
             threshold_borderline=threshold_borderline,
-            base_url=settings.BOSS_SERVICE_BASE_URL,
+            base_url=get_service_config().get("base_url"),
         )
         
         # Inject event emitter into scheduler
@@ -469,7 +471,8 @@ async def get_status():
 
 def load_jobs() -> list[dict[str, Any]]:
     """Load job configurations from YAML."""
-    path = Path(settings.BOSS_CRITERIA_PATH)
+    service_config = get_service_config()
+    path = Path(service_config["criteria_path"])
     if not path.exists():
         return []
     try:

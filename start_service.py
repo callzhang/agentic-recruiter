@@ -238,8 +238,9 @@ def start_service(*, scheduler_options: Optional[Dict[str, Any]] | None = None):
                 chrome_path = "google-chrome"  # Linux
             
             # Get BASE_URL from config for app mode
-            from src.config import settings
-            chat_url = settings.CHAT_URL or "about:blank"
+            from src.config import get_boss_zhipin_config
+            boss_zhipin_config = get_boss_zhipin_config()
+            chat_url = boss_zhipin_config.get("chat_url") or "about:blank"
             
             chrome_cmd = [
                 chrome_path,
@@ -327,7 +328,7 @@ def start_service(*, scheduler_options: Optional[Dict[str, Any]] | None = None):
         
         def open_browser_after_ready():
             """Open browser after service is ready."""
-            if _wait_for_service_ready(service_url, timeout=15):
+            if _wait_for_service_ready(service_url, timeout=60):
                 # Check if tab already exists
                 if _check_existing_tab(service_url):
                     logger.info(f"[*] 浏览器中已有该页面，跳过自动打开: {service_url}")

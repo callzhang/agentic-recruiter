@@ -80,43 +80,11 @@
             <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
             <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
         </svg>
-        <span class="font-medium">加载中...</span>
+        <!-- <span class="font-medium">.</span> -->
     </div>
     
     <!-- Alpine.js global store -->
     <script src="/static/js/app.js"></script>
-    
-    <!-- HTMX event handlers -->
-    <script>
-        // Handle custom HX-Trigger events for toast notifications
-        document.body.addEventListener('showToast', function(evt) {
-            if (evt.detail && evt.detail.message) {
-                showToast(evt.detail.message, evt.detail.type || 'info');
-            }
-        });
-        
-        // Toast notification helper
-        function showToast(message, type = 'info') {
-            const toast = document.createElement('div');
-            const colors = {
-                info: 'bg-blue-600',
-                success: 'bg-green-600',
-                error: 'bg-red-600',
-                warning: 'bg-yellow-600'
-            };
-            toast.className = `${colors[type] || colors.info} text-white px-6 py-3 rounded-lg shadow-lg mb-2 animate-fade-in`;
-            toast.textContent = message;
-            document.getElementById('toast-container').appendChild(toast);
-            
-            setTimeout(() => {
-                toast.classList.add('animate-fade-out');
-                setTimeout(() => toast.remove(), 300);
-            }, 8000);
-        }
-        
-        // Expose showToast globally
-        window.showToast = showToast;
-    </script>
     
     {% block scripts %}{% endblock %}
 </body>

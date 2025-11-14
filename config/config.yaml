@@ -23,11 +23,13 @@ browser:
 
 # Zilliz配置（非敏感部分）
 zilliz:
-  collection_name: CN_candidates
+  candidate_collection_name: CN_candidates
+  job_collection_name: CN_jobs
   embedding_model: text-embedding-3-small
   embedding_dim: 1536
   similarity_top_k: 5
   enable_cache: false
+  max_length: 65535
 
 # OpenAI配置（非敏感部分）
 openai:

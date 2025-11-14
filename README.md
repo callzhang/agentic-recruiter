@@ -7,7 +7,6 @@
 ### 1. 安装依赖
 ```bash
 pip install -r requirements.txt
-playwright install chromium
 ```
 
 ### 2. 配置文件
@@ -41,9 +40,9 @@ python start_service.py
 
 1. HR 双击 `install_hr.command`（或在终端执行 `./install_hr.command`），脚本会自动克隆/更新仓库到 `~/bosszhipin_bot`（或自定义目录）。
 2. 根据提示录入 OpenAI/Zilliz 等敏感配置，脚本会生成 `.env` 和 `config/secrets.yaml`。
-3. 脚本会创建虚拟环境、安装 `requirements.txt` 依赖、安装 Playwright Chromium，并在完成后自动执行 `start_service.py`。
+3. 脚本会创建虚拟环境、安装 `requirements.txt` 依赖，并在完成后自动执行 `start_service.py`。
 
-脚本仅需本机已安装 Git 与 Python 3.11+；其余依赖将由脚本自动配置。
+脚本仅需本机已安装 Git 与 Python 3.11+（推荐 Python 3.13）；其余依赖将由脚本自动配置。
 
 ## 核心功能
 

@@ -1,74 +1,67 @@
 <!-- Candidate card for list view -->
-<div
-  class="candidate-card p-4 border rounded-lg cursor-pointer bg-white hover:bg-blue-50 transition"
-  data-candidate-id="{% if candidate.chat_id %}{{ candidate.chat_id }}{% else %}recommend_{{ candidate.index }}{% endif %}"
-  hx-get="/candidates/detail"
-  hx-vals='{{ candidate | tojson }}'
-  hx-target="#detail-pane"
-  hx-include="#job-selector,#threshold-chat,#threshold-borderline,#threshold-seek,#analysis,#resume_text,#full_resume,#message-content"
-  hx-on::click="console.log('Candidate clicked:', JSON.parse(this.dataset.candidate));"
->
-  <div class="flex items-start space-x-3 relative">
-    <!-- hidden data:
-      - "analysis": analysis,
-      - "resume_text": resume_text,
-      - "full_resume": full_resume,
-    -->
-    <input type="hidden" name="analysis" value="{{ analysis | tojson }}">
-    <!-- <input type="hidden" name="resume_text" value="{{ resume_text }}">
-    <input type="hidden" name="full_resume" value="{{ full_resume }}"> -->
-    <!-- Score badge in upper-right corner -->
-    {% if candidate.score is defined and candidate.score is not none %}
-    <div class="absolute top-0 right-0 bg-gradient-to-r from-blue-500 to-indigo-600 text-white text-xs font-bold px-2 py-1 rounded-bl-lg rounded-tr-lg shadow-md" data-badge="score">
-      {{ candidate.score }}
+<div class="candidate-card p-4 border rounded-lg cursor-pointer bg-white hover:bg-blue-50 transition"
+    data-candidate-id="{% if candidate.chat_id %}{{ candidate.chat_id }}{% else %}recommend_{{ candidate.index }}{% endif %}"
+    hx-get="/candidates/detail" hx-vals='{{ candidate | tojson }}' hx-target="#detail-pane"
+    hx-include="#job-selector,#threshold-chat,#threshold-borderline,#threshold-seek,#analysis,#resume_text,#full_resume,#message-content"
+    hx-on::click="console.log('Candidate clicked:', JSON.parse(this.dataset.candidate));">
+    <div class="flex items-start space-x-3 relative">
+        <input type="hidden" name="analysis" value="{{ analysis | tojson }}">
+        <!-- score badge in upper-right corner -->
+        <div class="absolute top-0 right-0 bg-gradient-to-r from-blue-500 to-indigo-600 text-white text-xs font-bold px-2 py-1 rounded-bl-lg rounded-tr-lg shadow-md {% if candidate.score is not defined or candidate.score is none %}hidden{% endif %}"
+            data-badge="score">
+            {% if candidate.score is defined and candidate.score is not none %}{{ candidate.score }}{% endif %}
+        </div>
+        <!-- avatar -->
+        <div class="flex-shrink-0">
+            <div class="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center">
+                <span class="text-lg">👤</span>
+            </div>
+        </div>
+        <!-- name and job applied -->
+        <div class="flex-1 min-w-0">
+            <h3 class="font-bold text-gray-900 truncate">
+                {{ candidate.name or '未知' }}
+            </h3>
+            <p class="text-sm text-gray-600 truncate">
+                {{ candidate.job_applied or '未指定岗位' }}
+            </p>
+        </div>
     </div>
-    {% endif %}
-    <!-- avatar -->
-    <div class="flex-shrink-0">
-      <div
-        class="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center"
-      >
-        <span class="text-lg">👤</span>
-      </div>
-    </div>
-    <!-- name and job applied -->
-    <div class="flex-1 min-w-0">
-      <h3 class="font-bold text-gray-900 truncate">
-        {{ candidate.name or '未知' }}
-      </h3>
-      <p class="text-sm text-gray-600 truncate">
-        {{ candidate.job_applied or '未指定岗位' }}
-      </p>
-      <!-- last message -->
-      <p class="text-xs text-gray-500 mt-1 line-clamp-2">
+    <!-- last message - full width -->
+    <p class="text-xs text-gray-500 mt-1 line-clamp-2">
         {{ candidate.last_message or '暂无消息' }}
-      </p>
-      <!-- tags: viewed, greeted, saved -->
-      <div class="mt-2 flex flex-wrap gap-1">
-        {% if candidate.viewed is defined and candidate.viewed %}
+    </p>
+    <!-- tags: viewed, greeted, saved, passed, seek, contact - full width -->
+    <div class="mt-2 flex flex-wrap gap-1" id="candidate-tags">
         <span
-          class="inline-block px-2 py-1 text-xs rounded-full bg-purple-100 text-purple-700"
-          data-tag="viewed"
-        >
-          👁️ 已查看
+            class="inline-block px-2 py-1 text-xs rounded-full bg-purple-100 text-purple-700 {% if candidate.viewed is not defined or not candidate.viewed %}hidden{% endif %}"
+            data-tag="viewed">
+            👁️ 已查看
         </span>
-        {% endif %}
-        {% if candidate.greeted is defined and candidate.greeted %}
         <span
-          class="inline-block px-2 py-1 text-xs rounded-full bg-green-100 text-green-700"
-        >
-          👋 已打招呼
+            class="inline-block px-2 py-1 text-xs rounded-full bg-green-100 text-green-700 {% if candidate.greeted is not defined or not candidate.greeted %}hidden{% endif %}"
+            data-tag="greeted">
+            👋 已打招呼
         </span>
-        {% endif %}
-        {% if candidate.saved %}
         <span
-          class="inline-block px-2 py-1 text-xs rounded-full bg-blue-100 text-blue-700"
-          data-tag="saved"
-        >
-          💾 已保存
+            class="inline-block px-2 py-1 text-xs rounded-full bg-blue-100 text-blue-700 {% if not candidate.saved %}hidden{% endif %}"
+            data-tag="saved">
+            💾 已保存
         </span>
-        {% endif %}
-      </div>
+        <span
+            class="inline-block px-2 py-1 text-xs rounded-full bg-red-100 text-red-700 {% if candidate.stage != 'PASS' %}hidden{% endif %}"
+            data-tag="passed">
+            ❌ 不匹配
+        </span>
+        <span
+            class="inline-block px-2 py-1 text-xs rounded-full bg-yellow-100 text-yellow-700 {% if candidate.stage != 'SEEK' %}hidden{% endif %}"
+            data-tag="seek">
+            ⭐ 高潜
+        </span>
+        <span
+            class="inline-block px-2 py-1 text-xs rounded-full bg-emerald-100 text-emerald-700 {% if candidate.stage != 'CONTACT' %}hidden{% endif %}"
+            data-tag="contact">
+            📞 可联系
+        </span>
     </div>
-  </div>
 </div>

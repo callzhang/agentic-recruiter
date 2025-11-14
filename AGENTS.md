@@ -7,10 +7,9 @@
 - Configuration lives in `config/`, runtime artifacts in `data/`, documentation in `docs/`, and supportive tooling in `scripts/`, `examples/`, and `web/`. Tests belong in `test/`.
 
 ## Build, Test, and Development Commands
-- Prepare a Python 3.11+ virtual environment, then install dependencies and browser drivers:
+- Prepare a Python 3.11+ virtual environment (Python 3.13 recommended), then install dependencies:
 ```bash
 pip install -r requirements.txt
-playwright install chromium
 ```
 - Start services locally for manual verification:
 ```bash

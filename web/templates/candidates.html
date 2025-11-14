@@ -100,12 +100,22 @@
             <div class="bg-white rounded-lg shadow-lg h-[1500px] overflow-y-auto">
                 <!-- Batch analyze button (hidden initially) -->
                 <div class="p-4 pb-0">
-                    <button 
-                        id="batch-analyze-btn"
-                        onclick="if (typeof processAllCandidates === 'function') { processAllCandidates(); } else { showToast('请先选择一个候选人以加载批处理功能', 'warning'); }"
-                        class="hidden w-full px-4 py-2 mb-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition disabled:opacity-50 disabled:cursor-not-allowed">
-                        全部分析
-                    </button>
+                    <div class="relative">
+                        <button 
+                            id="batch-analyze-btn"
+                            onclick="if (typeof processAllCandidates === 'function') { processAllCandidates(); } else { showToast('请先选择一个候选人以加载批处理功能', 'warning'); }"
+                            class="hidden w-full px-4 py-2 mb-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2">
+                            <span>全部分析</span>
+                            <span 
+                                class="info-icon cursor-help text-white/80 hover:text-white"
+                                title="批处理流程说明"
+                                data-tooltip="批处理将按以下步骤自动处理每个候选人：\n1. 加载在线简历（如未加载）\n2. 初始化对话（如未初始化）\n3. 进行AI分析（如未分析）\n4. 根据匹配度阈值：\n   - 达到沟通阈值：生成消息\n   - 达到及格线：获取完整简历并重新分析（沟通中模式）或发送招呼（推荐模式）\n5. 更新候选人卡片状态"
+                                onmouseenter="showBatchInfoTooltip(event)"
+                                onmouseleave="hideBatchInfoTooltip()">
+                                ℹ️
+                            </span>
+                        </button>
+                    </div>
                 </div>
                 <div id="candidate-list" class="p-4 space-y-2">
                     <!-- Initial message -->
@@ -148,6 +158,53 @@
 
 <script>
 // Candidate list page logic is now centralized in candidate_detail.html
+
+// Tooltip for batch analyze button
+let batchTooltip = null;
+
+function showBatchInfoTooltip(event) {
+    const target = event.currentTarget;
+    const tooltipText = target.getAttribute('data-tooltip');
+    
+    // Remove existing tooltip if any
+    if (batchTooltip) {
+        batchTooltip.remove();
+    }
+    
+    // Create tooltip element
+    batchTooltip = document.createElement('div');
+    batchTooltip.className = 'fixed z-50 bg-gray-900 text-white text-sm rounded-lg shadow-lg p-3 max-w-sm pointer-events-none';
+    batchTooltip.style.whiteSpace = 'pre-line';
+    batchTooltip.style.lineHeight = '1.6';
+    // Replace \n with actual newlines
+    batchTooltip.textContent = tooltipText.replace(/\\n/g, '\n');
+    document.body.appendChild(batchTooltip);
+    
+    // Position tooltip
+    const rect = target.getBoundingClientRect();
+    batchTooltip.style.left = `${rect.right + 10}px`;
+    batchTooltip.style.top = `${rect.top}px`;
+    
+    // Adjust if tooltip goes off screen
+    setTimeout(() => {
+        if (batchTooltip) {
+            const tooltipRect = batchTooltip.getBoundingClientRect();
+            if (tooltipRect.right > window.innerWidth) {
+                batchTooltip.style.left = `${rect.left - tooltipRect.width - 10}px`;
+            }
+            if (tooltipRect.bottom > window.innerHeight) {
+                batchTooltip.style.top = `${window.innerHeight - tooltipRect.height - 10}px`;
+            }
+        }
+    }, 0);
+}
+
+function hideBatchInfoTooltip() {
+    if (batchTooltip) {
+        batchTooltip.remove();
+        batchTooltip = null;
+    }
+}
 </script>
 {% endblock %}
 

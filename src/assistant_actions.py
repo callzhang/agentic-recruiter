@@ -5,20 +5,18 @@ import logging
 import json
 from functools import lru_cache
 from typing import Any, Dict, List, Optional
-from openai import OpenAI
 from .candidate_store import upsert_candidate
-from .config import settings
+from .config import get_openai_config, get_sentry_config
 from .global_logger import logger
 from .assistant_utils import _openai_client
 from pydantic import BaseModel, Field
 
 # Constants
 STAGES = [
-    "GREET", # 打招呼
-    "PASS", # < borderline,不匹配，已拒绝
-    "CHAT", # >= borderline,沟通中
-    "SEEK", # >= threshold_seek,寻求联系方式
-    "CONTACT", # 已获得联系方式
+    "PASS", # < chat_threshold,不匹配，已拒绝
+    "CHAT", # >= chat_threshold,沟通中
+    "SEEK", # >= borderline_threshold,寻求联系方式
+    "CONTACT", # >= seek_threshold,已获得联系方式
 ]
 ACTIONS = {
     # generate message actions
@@ -58,6 +56,7 @@ ACTION_PROMPTS = {
         每个action的说明：{json.dumps(ACTIONS, ensure_ascii=False)}"""
 }
 
+
 class AnalysisSchema(BaseModel):
     """Analysis schema for the candidate."""
     skill: int = Field(description="技能、经验匹配度，满分10分")
@@ -81,7 +80,7 @@ def init_chat(
     mode: str,
     name: str,
     job_info: Dict[str, Any],
-    online_resume_text: str,
+    # online_resume_text: str,
     chat_history: List[Dict[str, Any]]=[],
     chat_id: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -115,20 +114,14 @@ def init_chat(
     
     # Add job description to thread
     job_info_text = json.dumps(job_info, ensure_ascii=False)
-    system_prompt = {
+    job_prompt = {
         'type': 'message', 
         'role': 'developer', 
         'content': f'你是招聘顾问。以下是岗位描述，用于分析候选人的匹配程度:\n{job_info_text}'
     }
     
     # Add candidate resume to thread
-    candidate_resume_text = f'请查看我的简历:\n{online_resume_text}'
-    candidate_message = {'type': 'message', 'role': 'user', 'content': candidate_resume_text}
-    full_history = [system_prompt, candidate_message]
-    role_map = {'candidate': 'user', 'recruiter': 'assistant', 'system': 'developer'}
-    for msg in chat_history:
-        role = role_map.get(msg.get('type'), msg.get('type'))
-        full_history.append({'type': 'message', 'role': role, 'content': msg.get('message')})
+    full_history = [job_prompt] + chat_history
     
     # Create openai conversation
     conversation = _openai_client.conversations.create(
@@ -141,7 +134,7 @@ def init_chat(
         chat_id=chat_id,
         name=name,
         job_applied=job_info["position"],
-        resume_text=online_resume_text,
+        # resume_text=online_resume_text,
         stage=None,  # Not analyzed yet
         conversation_id=conversation.id,
         metadata={'history': chat_history},

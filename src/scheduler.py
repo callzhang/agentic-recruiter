@@ -11,7 +11,7 @@ from uuid import NAMESPACE_URL, uuid5
 
 import requests
 
-from src.config import settings
+from src.config import get_dingtalk_config, get_service_config
 from .global_logger import logger
 from .candidate_store import upsert_candidate
 if TYPE_CHECKING:  # pragma: no cover - import guard
@@ -36,8 +36,10 @@ class BRDWorkScheduler:
     ) -> None:
         self.recommend_limit = recommend_limit
         self.assistant = assistant
-        self.dingtalk_webhook = settings.DINGTALK_URL
-        self.base_url = base_url or settings.BOSS_SERVICE_BASE_URL
+        dingtalk_config = get_dingtalk_config()
+        service_config = get_service_config()
+        self.dingtalk_webhook = dingtalk_config["url"]
+        self.base_url = base_url or service_config["base_url"]
 
         self.enable_chat_processing = bool(enable_chat_processing)
         self.enable_recommend = bool(enable_recommend)

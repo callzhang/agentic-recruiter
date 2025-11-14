@@ -9,7 +9,6 @@ from typing import Any, Dict, List, Optional
 import time
 from playwright.async_api import Locator, Page
 
-from src.config import settings
 from .global_logger import logger
 from .resume_capture_async import (
     _create_error_result,
@@ -57,7 +56,7 @@ async def _prepare_chat_page(page: Page, tab = None, status = None, job_title = 
         ValueError: If filters result in no candidates being displayed.
     """
     await close_overlay_dialogs(page)
-    await ensure_on_chat_page(page, settings, logger)
+    await ensure_on_chat_page(page, logger)
 
     if tab:
         tab_selector = f"div.chat-label-item[title*='{tab}']"
@@ -260,6 +259,7 @@ async def list_conversations_action(page: Page, limit: int = 999, tab: str = 'æ–
                     "job_applied": job_title,
                     "last_message": text,
                     "timestamp": timestamp,
+                    "viewed": not unread,
                 }
             )
         if len(messages) >= limit:
@@ -308,31 +308,31 @@ async def get_chat_history_action(page: Page, chat_id: str) -> List[Dict[str, An
         system_entry = message.locator("div.item-system[source='chat']")
         if await system_entry.count() > 0:
             message_str = await system_entry.inner_text(timeout=200)
-            msg_type = "system"
+            msg_type = "developer"
             
         resume_entry = message.locator("div.item-resume")
         if await resume_entry.count() > 0:
             message_str = await resume_entry.inner_text(timeout=200)
-            msg_type = "system"
+            msg_type = "developer"
 
         my_entry = message.locator("div.item-myself >> span")
         if await my_entry.count() > 0:
             message_str = await my_entry.inner_text(timeout=200)
             status_loc = message.locator("i.status")
             status = await status_loc.inner_text(timeout=200) if await status_loc.count() > 0 else None
-            msg_type = "recruiter"
+            msg_type = "assistant"
 
         friend_entry = message.locator("div.item-friend")
         if await friend_entry.count() > 0:
             message_str = await friend_entry.inner_text(timeout=200)
-            msg_type = "candidate"
+            msg_type = "user"
 
         if msg_type and message_str:
             history.append(
                 {
-                    "type": msg_type,
+                    "role": msg_type,
                     "timestamp": timestamp,
-                    "message": message_str,
+                    "content": message_str,
                     "status": status,
                 }
             )

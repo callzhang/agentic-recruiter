@@ -3,15 +3,23 @@ import typing_extensions
 import json
 try: import regex as re
 except: import re
-from numba import njit
+try:
+    from numba import njit
+    _NUMBA_AVAILABLE = True
+except ImportError:
+    # Fallback decorator if numba is not available (e.g., Python 3.14+)
+    def njit(func):
+        return func
+    _NUMBA_AVAILABLE = False
 import time
 import logging
 from functools import lru_cache
 from typing import Any, Dict, List, Optional
-from .config import settings
+from .config import get_openai_config
 from .global_logger import logger
 from openai import OpenAI
-_openai_client = OpenAI(api_key=settings.OPENAI_API_KEY, base_url=settings.OPENAI_BASE_URL)
+_openai_config = get_openai_config()
+_openai_client = OpenAI(api_key=_openai_config["api_key"], base_url=_openai_config["base_url"])
 
 #------------------------Thread management (deprecated)---------------------------------
 @typing_extensions.deprecated("The Assistants API is deprecated in favor of the Responses API")

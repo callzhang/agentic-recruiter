@@ -71,6 +71,16 @@
   - 防止批量处理时并发请求相互干扰
   - 确保每个候选人的上下文隔离
   
+- **修复推荐候选人初始化问题**
+  - `/candidates/init-chat` 现在正确处理 `chat_id=None` 的情况
+  - 仅在 `chat_id` 存在时获取聊天历史
+  - 推荐候选人可以正常初始化对话线程
+  
+- **修复 `chat_history` 未定义问题**
+  - 在 `/candidates/generate-message` 中初始化 `chat_history: list = []`
+  - 推荐模式候选人现在可以正常生成 LLM 消息
+  - 修复 `UnboundLocalError` 错误
+  
 - **修复批量处理按钮问题**
   - 添加函数存在性检查: `typeof processAllCandidates === 'function'`
   - 点击时显示友好提示而非抛出 "not defined" 错误

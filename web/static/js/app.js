@@ -1,5 +1,38 @@
 // Alpine.js global store and components for BOSS招聘助手
 
+// ============================================================================
+// Toast Notification System (must be defined early)
+// ============================================================================
+
+/**
+ * Toast notification helper
+ * Displays temporary notification messages in the top-right corner
+ */
+function showToast(message, type = 'info') {
+    const toast = document.createElement('div');
+    const colors = {
+        info: 'bg-blue-600',
+        success: 'bg-green-600',
+        error: 'bg-red-600',
+        warning: 'bg-yellow-600'
+    };
+    toast.className = `${colors[type] || colors.info} text-white px-6 py-3 rounded-lg shadow-lg mb-2 animate-fade-in`;
+    toast.textContent = message;
+    
+    const container = document.getElementById('toast-container');
+    if (container) {
+        container.appendChild(toast);
+        
+        setTimeout(() => {
+            toast.classList.add('animate-fade-out');
+            setTimeout(() => toast.remove(), 300);
+        }, 8000);
+    }
+}
+
+// Expose showToast globally
+window.showToast = showToast;
+
 document.addEventListener('alpine:init', () => {
     // Global application state
     Alpine.store('app', {
@@ -370,6 +403,7 @@ function candidateTabs() {
                         if (batchBtn) {
                             if (count > 0) {
                                 batchBtn.classList.remove('hidden');
+                                batchBtn.disabled = false;
                             } else {
                                 batchBtn.classList.add('hidden');
                             }
@@ -418,6 +452,22 @@ function candidateTabs() {
 
 // Global function for HTMX events to call updateURL
 window.updateCandidateURL = function() {
+    // First, restore job selector value from URL if it exists
+    const urlParams = new URLSearchParams(window.location.search);
+    const jobId = urlParams.get('job_id');
+    if (jobId) {
+        const jobSelector = document.getElementById('job-selector');
+        if (jobSelector && jobSelector.options.length > 1) {
+            // Check if the job_id exists in options
+            for (let option of jobSelector.options) {
+                if (option.value === jobId) {
+                    jobSelector.value = jobId;
+                    break;
+                }
+            }
+        }
+    }
+    
     // Find the Alpine component instance
     const candidateTabsElement = document.querySelector('[x-data*="candidateTabs"]');
     if (candidateTabsElement && candidateTabsElement._x_dataStack) {
@@ -427,9 +477,6 @@ window.updateCandidateURL = function() {
         }
     }
 };
-
-// Toast notification is defined in base.html and exposed as window.showToast
-// No need to redefine it here
 
 // ============================================================================
 // Global HTMX Loading & Error Handling
@@ -451,13 +498,41 @@ document.body.addEventListener('htmx:afterRequest', function(event) {
     }
 });
 
-// Handle HTMX errors
-document.body.addEventListener('htmx:responseError', function(event) {
+// Global HTMX error handler to catch swap errors
+document.body.addEventListener('htmx:responseError', function(evt) {
     const loadingIndicator = document.getElementById('global-loading');
     if (loadingIndicator) {
         loadingIndicator.classList.remove('htmx-request');
     }
-    showToast('请求失败: ' + (event.detail.xhr.status || '网络错误'), 'error');
+    console.error('HTMX response error:', evt.detail);
+    const errorMsg = evt.detail?.error || evt.detail?.message || '请求失败';
+    showToast(errorMsg, 'error');
+});
+
+// Catch HTMX swap errors (like insertBefore on null)
+document.body.addEventListener('htmx:swapError', function(evt) {
+    console.error('HTMX swap error:', evt.detail);
+    const target = evt.detail?.target;
+    if (target) {
+        console.error('Target element:', target, 'isConnected:', target.isConnected);
+    }
+    // Don't show toast for swap errors as they're often handled by htmxAjaxPromise
+});
+
+// Catch general HTMX errors
+document.body.addEventListener('htmx:sendError', function(evt) {
+    console.error('HTMX send error:', evt.detail);
+    // Only show toast if not already handled by htmxAjaxPromise
+    if (!evt.detail?.handled) {
+        showToast('网络请求失败，请重试', 'error');
+    }
+});
+
+// Handle custom HX-Trigger events for toast notifications
+document.body.addEventListener('showToast', function(evt) {
+    if (evt.detail && evt.detail.message) {
+        showToast(evt.detail.message, evt.detail.type || 'info');
+    }
 });
 
 // ============================================================================
@@ -591,8 +666,130 @@ document.body.addEventListener('htmx:afterRequest', (event) => {
     }
 });
 
-document.body.addEventListener('htmx:responseError', (event) => {
-    showToast('请求失败，请重试', 'error');
+// Note: htmx:responseError is already handled above in the Global HTMX Error Handling section
+
+// ============================================================================
+// Centralized Candidate Card Update Handler
+// ============================================================================
+
+/**
+ * Check if a card matches the given identifiers
+ */
+function cardMatches(cardData, identifiers) {
+    const { chat_id, conversation_id, candidate_id, name, job_applied } = identifiers;
+    
+    // Match by multiple identifiers (check truthy values, not just existence):
+    // 1. chat_id match (both must be truthy and equal)
+    // 2. conversation_id match (both must be truthy and equal)
+    // 3. candidate_id match (both must be truthy and equal)
+    // 4. Fallback: name + job_applied match (both must be truthy and equal)
+    const chatMatch = chat_id && cardData.chat_id && cardData.chat_id === chat_id;
+    const conversationMatch = conversation_id && cardData.conversation_id && cardData.conversation_id === conversation_id;
+    const candidateMatch = candidate_id && cardData.candidate_id && cardData.candidate_id === candidate_id;
+    const nameMatch = name && job_applied && cardData.name && cardData.job_applied && 
+                     cardData.name === name && cardData.job_applied === job_applied;
+    
+    return chatMatch || conversationMatch || candidateMatch || nameMatch;
+}
+
+/**
+ * Update a candidate card with the given updates
+ */
+function applyCardUpdate(card, updates, identifiers) {
+    const cardData = JSON.parse(card.getAttribute('hx-vals') || '{}');
+    
+    // Update the card's data attributes
+    Object.assign(cardData, updates);
+    
+    // Store conversation_id in card data for future lookups if available
+    if (identifiers.conversation_id && !cardData.conversation_id) {
+        cardData.conversation_id = identifiers.conversation_id;
+    }
+    
+    // Apply updates to candidateData
+    card.setAttribute('hx-vals', JSON.stringify(cardData));
+    
+    // Update tags by toggling visibility
+    const tagsContainer = card.querySelector('#candidate-tags');
+    
+    // Update stage-based tags
+    if (updates.stage !== undefined) {
+        const stage = updates.stage || cardData.stage;
+        const passedTag = tagsContainer?.querySelector('[data-tag="passed"]');
+        const seekTag = tagsContainer?.querySelector('[data-tag="seek"]');
+        const contactTag = tagsContainer?.querySelector('[data-tag="contact"]');
+        const greetedTag = tagsContainer?.querySelector('[data-tag="greeted"]');
+        const savedTag = tagsContainer?.querySelector('[data-tag="saved"]');
+        
+        // Hide all stage tags first
+        if (passedTag) passedTag.classList.add('hidden');
+        if (seekTag) seekTag.classList.add('hidden');
+        if (contactTag) contactTag.classList.add('hidden');
+        if (greetedTag) greetedTag.classList.add('hidden');
+        
+        // Show appropriate tag based on stage
+        switch (stage) {
+            case 'PASS':
+                if (passedTag) passedTag.classList.remove('hidden');
+                if (savedTag) savedTag.classList.remove('hidden');
+                break;
+            case 'CHAT':
+                if (greetedTag) greetedTag.classList.remove('hidden');
+                if (savedTag) savedTag.classList.remove('hidden');
+                break;
+            case 'SEEK':
+                if (seekTag) seekTag.classList.remove('hidden');
+                if (savedTag) savedTag.classList.remove('hidden');
+                break;
+            case 'CONTACT':
+                if (contactTag) contactTag.classList.remove('hidden');
+                if (savedTag) savedTag.classList.remove('hidden');
+                break;
+        }
+    }
+    
+    // Update individual tag flags
+    if (updates.viewed) {
+        const viewedTag = tagsContainer?.querySelector('[data-tag="viewed"]');
+        if (viewedTag) {
+            viewedTag.classList.toggle('hidden', !updates.viewed);
+        }
+    }
+    
+    // Update score badge
+    if (updates.score) {
+        const cardContainer = card.querySelector('.flex.items-start.space-x-3');
+        const scoreBadge = cardContainer?.querySelector('[data-badge="score"]');
+        if (scoreBadge) {
+            scoreBadge.textContent = updates.score.toString();
+            scoreBadge.classList.remove('hidden');
+        }
+    }
+}
+
+// Centralized event listener for candidate updates
+document.addEventListener('candidate:update', function(event) {
+    const { identifiers, updates } = event.detail;
+    const candidateCards = document.querySelectorAll('.candidate-card');
+    let found = false;
+    
+    candidateCards.forEach(card => {
+        const cardData = JSON.parse(card.getAttribute('hx-vals') || '{}');
+        
+        if (cardMatches(cardData, identifiers)) {
+            applyCardUpdate(card, updates, identifiers);
+            found = true;
+        }
+    });
+    
+    if (!found) {
+        const identifier = identifiers.chat_id || identifiers.conversation_id || identifiers.candidate_id;
+        console.warn('candidate:update: could not find matching card', {
+            identifier,
+            identifiers,
+            totalCards: candidateCards.length
+        });
+    }
 });
 
 // ============================================================================

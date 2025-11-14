@@ -9,8 +9,7 @@ from fastapi import APIRouter, Query, Request, Form, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
-from src.config import settings
-from src.jobs_store import jobs_store
+from src.jobs_store import get_all_jobs, get_job_by_id, insert_job, update_job, delete_job
 
 router = APIRouter()
 templates = Jinja2Templates(directory="web/templates")
@@ -18,7 +17,7 @@ templates = Jinja2Templates(directory="web/templates")
 
 def load_jobs():
     """Load jobs from Zilliz Cloud."""
-    return jobs_store.get_all_jobs()
+    return get_all_jobs()
 
 
 def generate_job_id(position: str) -> str:
@@ -73,7 +72,7 @@ async def create_job(request: Request):
         )
     
     # Check if job_id already exists
-    existing_job = jobs_store.get_job_by_id(job_id)
+    existing_job = get_job_by_id(job_id)
     if existing_job:
         return JSONResponse(
             status_code=400,
@@ -114,7 +113,7 @@ async def create_job(request: Request):
             )
     
     # Insert job into Zilliz
-    if jobs_store.insert_job(**new_job):
+    if insert_job(**new_job):
         return JSONResponse(content={"success": True, "data": new_job})
     else:
         return JSONResponse(
@@ -156,7 +155,7 @@ async def update_job(job_id: str, request: Request):
         )
     
     # Check if job exists
-    existing_job = jobs_store.get_job_by_id(job_id)
+    existing_job = get_job_by_id(job_id)
     if not existing_job:
         return JSONResponse(
             status_code=404,
@@ -165,7 +164,7 @@ async def update_job(job_id: str, request: Request):
     
     # Check if new job_id conflicts with existing jobs (excluding current job)
     if new_job_id != job_id:
-        existing_job_with_new_id = jobs_store.get_job_by_id(new_job_id)
+        existing_job_with_new_id = get_job_by_id(new_job_id)
         if existing_job_with_new_id:
             return JSONResponse(
                 status_code=400,
@@ -203,7 +202,7 @@ async def update_job(job_id: str, request: Request):
             )
     
     # Update job in Zilliz
-    if jobs_store.update_job(job_id, **updated_job):
+    if update_job(job_id, **updated_job):
         return JSONResponse(content={"success": True, "data": updated_job})
     else:
         return JSONResponse(
@@ -216,7 +215,7 @@ async def update_job(job_id: str, request: Request):
 async def delete_job(job_id: str):
     """Delete job."""
     # Check if job exists
-    existing_job = jobs_store.get_job_by_id(job_id)
+    existing_job = get_job_by_id(job_id)
     if not existing_job:
         return JSONResponse(
             status_code=404,
@@ -224,7 +223,7 @@ async def delete_job(job_id: str):
         )
     
     # Delete job from Zilliz
-    if jobs_store.delete_job(job_id):
+    if delete_job(job_id):
         return JSONResponse(
             content={"success": True, "message": f"岗位 '{existing_job.get('position', '')}' 已删除"}
         )
@@ -262,7 +261,7 @@ async def api_list_jobs():
 @router.get("/api/{job_id}", response_class=JSONResponse)
 async def api_get_job(job_id: str):
     """API endpoint to get specific job."""
-    job = jobs_store.get_job_by_id(job_id)
+    job = get_job_by_id(job_id)
     
     if not job:
         return JSONResponse(

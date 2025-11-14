@@ -13,7 +13,6 @@ cd bosszhipin_bot
 ### 2. 安装依赖
 ```bash
 pip install -r requirements.txt
-playwright install chromium
 ```
 
 ### 3. 配置文件

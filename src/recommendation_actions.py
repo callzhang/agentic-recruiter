@@ -8,7 +8,7 @@ from typing import Any, Dict, List
 
 from playwright.async_api import Frame, Locator, Page
 
-from src.config import settings
+from src.config import get_boss_zhipin_config
 from .global_logger import get_logger
 from .resume_capture_async import (
     _create_error_result,
@@ -47,7 +47,8 @@ async def _prepare_recommendation_page(page: Page, job_title: str = None, *, wai
         Frame: The configured recommendation iframe Frame object, ready for further actions.
     """
     await close_overlay_dialogs(page)
-    if settings.RECOMMEND_URL not in page.url:
+    boss_config = get_boss_zhipin_config()
+    if boss_config["recommend_url"] not in page.url:
         menu_chat = page.locator("dl.menu-recommend").first
         await menu_chat.click(timeout=10000)
 
@@ -319,6 +320,10 @@ async def apply_filters(frame: Frame, filters: Dict[str, Any]) -> bool:
         await asyncio.sleep(0.5)
         # Wait for panel to appear
         await filter_panel.wait_for(state="visible", timeout=1000)
+    # 取消上次设置
+    reapply_button = frame.locator('div.cancel')
+    if await reapply_button.count() > 0:
+        await reapply_button.click(timeout=1000)
     
     # apply filters
     logger.debug("开始应用筛选条件: %s", filters)
