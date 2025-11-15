@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 from pymilvus import MilvusClient, DataType, FieldSchema
 from pymilvus.exceptions import MilvusException
-from retry import retry
+from tenacity import retry, stop_after_attempt, wait_exponential
 from .global_logger import logger
 from .config import get_zilliz_config
 
@@ -73,7 +73,7 @@ _client: Optional[MilvusClient] = _create_client()
 # ------------------------------------------------------------------
 # Embedding Generation
 # ------------------------------------------------------------------
-@retry(tries=3, delay=1, backoff=2)
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
 @lru_cache(maxsize=1000)
 def get_embedding(text: str) -> Optional[List[float]]:
     """Generate embedding for text using OpenAI.
