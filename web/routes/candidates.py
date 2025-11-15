@@ -6,8 +6,6 @@
 `job_applied` is the job position title that candidate is applying for, used consistently throughout
 """
 
-from __future__ import annotations
-
 from datetime import datetime
 import json
 from typing import Any, Dict, Optional
@@ -15,9 +13,10 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, BackgroundTasks, Form, Query, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
+from tenacity import retry, stop_after_attempt, wait_exponential
 from src.candidate_store import get_candidates, get_candidate_id_by_dict, upsert_candidate
 from src.jobs_store import get_all_jobs, get_job_by_id as get_job_by_id_from_store
-from src.global_logger import logger    
+from src.global_logger import logger
 from src import chat_actions, assistant_actions, assistant_utils, recommendation_actions
 import boss_service
 
@@ -65,7 +64,7 @@ async def list_candidates(
     mode: str = Query("chat", description="Mode: recommend, greet, chat, or followup"),
     job_applied: str = Query(..., description="Job position filter (required)"),
     job_id: str = Query(..., description="Job ID filter (required)"),
-    limit: int = Query(999, description="Limit the number of candidates to return (default: 999)"),
+    limit: int = Query(50, description="Limit the number of candidates to return (default: 999)"),
 ):
     """Get candidate fetched from browser, compare with saved candidates in cloud store, and merge the data when matched
     - last_message will be the candidate's greeting for the first time
@@ -166,17 +165,25 @@ async def list_candidates(
         if stored_candidate:
             candidate.update(stored_candidate) # last_message will be updated by saved candidate
             candidate["saved"] = True
-            # Extract score from analysis if available
-            analysis = stored_candidate.get("analysis")
-            if analysis and isinstance(analysis, dict):
-                candidate["score"] = analysis.get("overall", None)
+            # Extract score from analysis if available)
+            candidate["score"] = stored_candidate.get("analysis", {}).get("overall", None)
             # update greeted status if the candidate is in chat, greet, or seek stage
-            candidate['greeted'] = True if stored_candidate.get('stage') in ['CHAT', 'GREET', 'SEEK'] else candidate.get('greeted', False)
+            candidate['greeted'] = candidate.get('greeted', False)
+
+            # generated message is the last assistant message from the history
+            if not stored_candidate.get('generated_message'):
+                history = stored_candidate.get('metadata', {}).get('history', []) or []
+                stored_last_message = stored_candidate.get('last_message')
+                web_last_message = candidate.get('last_message')
+                last_assistant_message = next((msg.get('content') for msg in history[::-1] if 'assistant' in [msg.get('role'), msg.get('type')]), '') #TODO: 'type' is for lagacy code compatibility
+                generated_message = stored_last_message if stored_last_message != web_last_message else last_assistant_message
+                candidate["generated_message"] = generated_message
+
 
         # Extract resume_text and full_resume from candidate
-        resume_text = candidate.pop("resume_text", None)
-        full_resume = candidate.pop("full_resume", None)
-        analysis = candidate.pop("analysis", None)
+        resume_text = candidate.pop("resume_text", '')
+        full_resume = candidate.pop("full_resume", '')
+        analysis = candidate.pop("analysis", '')
         html += templates.get_template("partials/candidate_card.html").render({
             "candidate": candidate,
             "analysis": analysis,
@@ -208,21 +215,15 @@ async def get_candidate_detail(request: Request):
     )
     candidate_data = results[0] if results else {}
     candidate_data = {k:v for k, v in candidate_data.items() if v}
-    history = candidate_data.get('metadata', {}).get('history', []) or []
-    # generated message is the last assistant message from the history
-    stored_last_message = candidate_data.get('last_message')
-    web_last_message = candidate.get('last_message')
-    last_assistant_message = next((msg.get('content') for msg in history[::-1] if msg.get('role') == 'assistant'), '')
-    generated_message = stored_last_message if stored_last_message != web_last_message else last_assistant_message
     candidate.update(candidate_data)
     candidate['score'] = candidate_data.get("analysis", {}).get("overall")
 
     return templates.TemplateResponse("partials/candidate_detail.html", {
         "request": request,
-        "analysis": candidate.pop("analysis", None),
-        "generated_message": generated_message,
-        "resume_text": candidate.pop("resume_text", None),
-        "full_resume": candidate.pop("full_resume", None),
+        "analysis": candidate.pop("analysis", {}),
+        "generated_message": candidate.pop("generated_message", ''),
+        "resume_text": candidate.pop("resume_text", ''),
+        "full_resume": candidate.pop("full_resume", ''),
         "candidate": candidate,
     })
 
@@ -370,11 +371,6 @@ async def save_candidate_to_cloud(request: Request):
     # Parse form data
     form_data = await request.form()
     kwargs = dict(form_data)
-    logger.debug(f"Saving candidate to cloud: {kwargs}")
-    # Parse analysis back to dict if sent as JSON string
-    analysis = kwargs.get("analysis")
-    if analysis and isinstance(analysis, str):
-        kwargs["analysis"] = json.loads(analysis)
     # Only require job_applied and at least one ID
     assert 'job_applied' in kwargs, "job_applied is required"
 
@@ -506,6 +502,7 @@ async def send_message(
 
 
 @router.post("/fetch-online-resume", response_class=HTMLResponse)
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
 async def fetch_online_resume(
     background_tasks: BackgroundTasks,
     name: str = Form(...),

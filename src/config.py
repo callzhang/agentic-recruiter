@@ -1,6 +1,4 @@
 """Configuration management - loads from config.yaml and secrets.yaml"""
-from __future__ import annotations
-
 import yaml
 from functools import lru_cache
 from pathlib import Path

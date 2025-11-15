@@ -1,7 +1,6 @@
 """Job profile management routes for web UI."""
 
-from __future__ import annotations
-
+import json
 import re
 from typing import Set
 
@@ -9,7 +8,11 @@ from fastapi import APIRouter, Query, Request, Form, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
-from src.jobs_store import get_all_jobs, get_job_by_id, insert_job, update_job, delete_job
+from src.jobs_store import (
+    get_all_jobs, get_job_by_id, insert_job, update_job as update_job_store,
+    delete_job as delete_job_store, delete_job_version,
+    get_job_versions, switch_job_version, get_base_job_id
+)
 
 router = APIRouter()
 templates = Jinja2Templates(directory="web/templates")
@@ -124,7 +127,7 @@ async def create_job(request: Request):
 
 @router.post("/{job_id}/update", response_class=JSONResponse)
 async def update_job(job_id: str, request: Request):
-    """Update existing job."""
+    """Update existing job (creates new version automatically)."""
     json_data = await request.json()
     
     new_job_id = json_data.get("job_id", "").strip()
@@ -154,26 +157,32 @@ async def update_job(job_id: str, request: Request):
             content={"success": False, "error": "岗位ID和岗位名称不能为空"}
         )
     
+    # Extract base job_id from path parameter (remove _vN suffix if present)
+    base_job_id = get_base_job_id(job_id)
+    
+    # Extract base job_id from new_job_id (remove _vN suffix if present)
+    new_base_job_id = get_base_job_id(new_job_id)
+    
     # Check if job exists
-    existing_job = get_job_by_id(job_id)
+    existing_job = get_job_by_id(base_job_id)
     if not existing_job:
         return JSONResponse(
             status_code=404,
             content={"success": False, "error": "岗位未找到"}
         )
     
-    # Check if new job_id conflicts with existing jobs (excluding current job)
-    if new_job_id != job_id:
-        existing_job_with_new_id = get_job_by_id(new_job_id)
+    # Check if new base_job_id conflicts with existing jobs (excluding current job)
+    if new_base_job_id != base_job_id:
+        existing_job_with_new_id = get_job_by_id(new_base_job_id)
         if existing_job_with_new_id:
             return JSONResponse(
                 status_code=400,
-                content={"success": False, "error": f"岗位ID '{new_job_id}' 已存在"}
+                content={"success": False, "error": f"岗位ID '{new_base_job_id}' 已存在"}
             )
     
     # Update job data
     updated_job = {
-        "id": new_job_id,
+        "id": new_base_job_id,  # Use base job_id (without version suffix)
         "position": position,
         "background": background,
         "responsibilities": responsibilities,
@@ -201,9 +210,15 @@ async def update_job(job_id: str, request: Request):
                 content={"success": False, "error": f"YAML格式错误: {str(e)}"}
             )
     
-    # Update job in Zilliz
-    if update_job(job_id, **updated_job):
-        return JSONResponse(content={"success": True, "data": updated_job})
+    # Remove 'id' field from updated_job as update_job() doesn't expect it
+    # (job_id is passed as the first positional argument)
+    updated_job.pop("id", None)
+    
+    # Update job in Zilliz (creates new version automatically)
+    if update_job_store(base_job_id, **updated_job):
+        # Return the new current version
+        new_current_job = get_job_by_id(new_base_job_id)
+        return JSONResponse(content={"success": True, "data": new_current_job})
     else:
         return JSONResponse(
             status_code=500,
@@ -212,25 +227,83 @@ async def update_job(job_id: str, request: Request):
 
 
 @router.delete("/{job_id}/delete", response_class=JSONResponse)
-async def delete_job(job_id: str):
-    """Delete job."""
+async def delete_job(job_id: str, request: Request):
+    """Delete a specific version of a job.
+    
+    Args:
+        job_id: Base job ID (without version suffix)
+    """
+    # Extract base job_id (remove _vN suffix if present)
+    base_job_id = get_base_job_id(job_id)
+    
+    # Get version from request body
+    version = None
+    try:
+        body = await request.body()
+        if body:
+            json_data = json.loads(body)
+            version = json_data.get("version")
+    except Exception:
+        version = None
+    
+    if version is None:
+        return JSONResponse(
+            status_code=400,
+            content={"success": False, "error": "版本号不能为空"}
+        )
+    
+    if not isinstance(version, int):
+        try:
+            version = int(version)
+        except (ValueError, TypeError):
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "error": "版本号必须是整数"}
+            )
+    
     # Check if job exists
-    existing_job = get_job_by_id(job_id)
+    existing_job = get_job_by_id(base_job_id)
     if not existing_job:
         return JSONResponse(
             status_code=404,
             content={"success": False, "error": "岗位不存在"}
         )
     
-    # Delete job from Zilliz
-    if delete_job(job_id):
+    # Get all versions to check if this is the only one
+    all_versions = get_job_versions(base_job_id)
+    if len(all_versions) <= 1:
         return JSONResponse(
-            content={"success": True, "message": f"岗位 '{existing_job.get('position', '')}' 已删除"}
+            status_code=400,
+            content={"success": False, "error": "至少需要保留一个版本"}
+        )
+    
+    # Check if the version exists
+    version_exists = any(v.get("version") == version for v in all_versions)
+    if not version_exists:
+        return JSONResponse(
+            status_code=404,
+            content={"success": False, "error": f"版本 v{version} 不存在"}
+        )
+    
+    # Delete the specific version
+    if delete_job_version(base_job_id, version):
+        # If we deleted the current version, switch to the latest remaining version
+        remaining_versions = get_job_versions(base_job_id)
+        if remaining_versions:
+            # Find the version that was current, or use the latest
+            current_version = next((v for v in remaining_versions if v.get("current")), None)
+            if not current_version:
+                # No current version, set the latest as current
+                latest = remaining_versions[0]  # Already sorted by created_at DESC
+                switch_job_version(base_job_id, latest.get("version"))
+        
+        return JSONResponse(
+            content={"success": True, "message": f"版本 v{version} 已删除"}
         )
     else:
         return JSONResponse(
             status_code=500,
-            content={"success": False, "error": "删除岗位失败"}
+            content={"success": False, "error": "删除版本失败"}
         )
 
 
@@ -260,8 +333,10 @@ async def api_list_jobs():
 
 @router.get("/api/{job_id}", response_class=JSONResponse)
 async def api_get_job(job_id: str):
-    """API endpoint to get specific job."""
-    job = get_job_by_id(job_id)
+    """API endpoint to get specific job (returns current version)."""
+    # Extract base job_id (remove _vN suffix if present)
+    base_job_id = get_base_job_id(job_id)
+    job = get_job_by_id(base_job_id)
     
     if not job:
         return JSONResponse(
@@ -270,3 +345,56 @@ async def api_get_job(job_id: str):
         )
     
     return JSONResponse(content={"success": True, "data": job})
+
+
+@router.get("/{job_id}/versions", response_class=JSONResponse)
+async def get_job_versions_endpoint(job_id: str):
+    """Get all versions of a job.
+    
+    Args:
+        job_id: Job ID (can be base_job_id or versioned job_id)
+    """
+    # Extract base job_id (remove _vN suffix if present)
+    base_job_id = get_base_job_id(job_id)
+    versions = get_job_versions(base_job_id)
+    
+    return JSONResponse(content={"success": True, "data": versions})
+
+
+@router.post("/{job_id}/switch-version", response_class=JSONResponse)
+async def switch_job_version_endpoint(job_id: str, request: Request):
+    """Switch the current version of a job.
+    
+    Args:
+        job_id: Job ID (can be base_job_id or versioned job_id)
+    """
+    # Extract base job_id (remove _vN suffix if present)
+    base_job_id = get_base_job_id(job_id)
+    
+    json_data = await request.json()
+    version = json_data.get("version")
+    
+    if version is None:
+        return JSONResponse(
+            status_code=400,
+            content={"success": False, "error": "版本号不能为空"}
+        )
+    
+    if not isinstance(version, int):
+        try:
+            version = int(version)
+        except (ValueError, TypeError):
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "error": "版本号必须是整数"}
+            )
+    
+    if switch_job_version(base_job_id, version):
+        # Return updated job data
+        updated_job = get_job_by_id(base_job_id)
+        return JSONResponse(content={"success": True, "data": updated_job})
+    else:
+        return JSONResponse(
+            status_code=404,
+            content={"success": False, "error": f"版本 {version} 不存在"}
+        )

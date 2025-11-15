@@ -5,8 +5,6 @@ Playwright automation (viewing online resumes, exporting WASM data, canvas
 fallbacks, etc.) behaves the same when running with the async Playwright API.
 """
 
-from __future__ import annotations
-
 import asyncio
 import json
 import re

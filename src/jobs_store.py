@@ -1,13 +1,12 @@
 """Zilliz/Milvus-backed job profile store integration."""
-from __future__ import annotations
-
+import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional
-from pymilvus import DataType, FieldSchema
+from pymilvus import DataType, FieldSchema, CollectionSchema
 # Use the same client instance as candidate_store
-from src.candidate_store import _client
+from src.candidate_store import _client, truncate_field
 from .global_logger import logger
-from .config import get_zilliz_config
+from .config import get_zilliz_config, get_openai_config
 _job_store_config = get_zilliz_config()
 # ------------------------------------------------------------------
 # Schema Definition
@@ -19,29 +18,33 @@ def get_job_collection_schema() -> list[FieldSchema]:
     Returns the schema as a list of FieldSchema objects.
     """
     fields: list[FieldSchema] = [
-        # Primary key
-        FieldSchema(name="job_id", dtype=DataType.VARCHAR, max_length=64, is_primary=True),
-        
-        # Job content fields
-        FieldSchema(name="position", dtype=DataType.VARCHAR, max_length=200),
-        FieldSchema(name="background", dtype=DataType.VARCHAR, max_length=5000, nullable=True),
-        FieldSchema(name="description", dtype=DataType.VARCHAR, max_length=5000, nullable=True),
-        FieldSchema(name="responsibilities", dtype=DataType.VARCHAR, max_length=5000, nullable=True),
-        FieldSchema(name="requirements", dtype=DataType.VARCHAR, max_length=5000, nullable=True),
-        FieldSchema(name="target_profile", dtype=DataType.VARCHAR, max_length=5000, nullable=True),
-        FieldSchema(name="keywords", dtype=DataType.JSON, nullable=True),
-        FieldSchema(name="drill_down_questions", dtype=DataType.VARCHAR, max_length=65000, nullable=True),
-        
-        # Candidate search filters (stored as JSON)
-        FieldSchema(name="candidate_filters", dtype=DataType.JSON, nullable=True),
-        
-        # Vector field for future semantic search
+    # Primary key
+    FieldSchema(name="job_id", dtype=DataType.VARCHAR, max_length=64, is_primary=True),
+    
+    # Job content fields
+    FieldSchema(name="position", dtype=DataType.VARCHAR, max_length=200),
+    FieldSchema(name="background", dtype=DataType.VARCHAR, max_length=5000, nullable=True),
+    FieldSchema(name="description", dtype=DataType.VARCHAR, max_length=5000, nullable=True),
+    FieldSchema(name="responsibilities", dtype=DataType.VARCHAR, max_length=5000, nullable=True),
+    FieldSchema(name="requirements", dtype=DataType.VARCHAR, max_length=5000, nullable=True),
+    FieldSchema(name="target_profile", dtype=DataType.VARCHAR, max_length=5000, nullable=True),
+    FieldSchema(name="keywords", dtype=DataType.JSON, nullable=True),
+    FieldSchema(name="drill_down_questions", dtype=DataType.VARCHAR, max_length=65000, nullable=True),
+    
+    # Candidate search filters (stored as JSON)
+    FieldSchema(name="candidate_filters", dtype=DataType.JSON, nullable=True),
+    
+    # Vector field for future semantic search
         FieldSchema(name="job_embedding", dtype=DataType.FLOAT_VECTOR, dim=_job_store_config["embedding_dim"]),
-        
-        # Timestamps
-        FieldSchema(name="created_at", dtype=DataType.VARCHAR, max_length=64),
-        FieldSchema(name="updated_at", dtype=DataType.VARCHAR, max_length=64),
-    ]
+    
+    # Versioning fields
+    FieldSchema(name="version", dtype=DataType.INT64),
+    FieldSchema(name="current", dtype=DataType.BOOL),
+    
+    # Timestamps
+    FieldSchema(name="created_at", dtype=DataType.VARCHAR, max_length=64),
+    FieldSchema(name="updated_at", dtype=DataType.VARCHAR, max_length=64),
+]
     return fields
 
 # Define field names for the collection
@@ -51,11 +54,30 @@ _collection_name = _job_store_config["job_collection_name"]
 
 
 # ------------------------------------------------------------------
+# Helper Functions
+# ------------------------------------------------------------------
+
+def get_base_job_id(job_id: str) -> str:
+    """Extract base job_id by removing version suffix.
+    
+    Args:
+        job_id: Job ID with optional version suffix (e.g., "ml_engineer_v2")
+        
+    Returns:
+        Base job_id without version suffix (e.g., "ml_engineer")
+    """
+    return re.sub(r'_v\d+$', '', job_id)
+
+
+# ------------------------------------------------------------------
 # Collection Management
 # ------------------------------------------------------------------
 
 def create_job_collection(collection_name: Optional[str] = None) -> bool:
-    """Create the jobs collection with the defined schema.
+    """Create the jobs collection with the defined schema and embedding function.
+    
+    The collection includes a built-in OpenAI embedding function that automatically
+    generates vectors for job_embedding field from concatenated text fields.
     
     Args:
         collection_name: Name of collection to create (defaults to "CN_jobs")
@@ -77,6 +99,50 @@ def create_job_collection(collection_name: Optional[str] = None) -> bool:
         
         logger.info(f"Creating collection {collection_name}...")
         
+        # Create CollectionSchema from FieldSchema list
+        schema = CollectionSchema(
+            fields=get_job_collection_schema(),
+            description="Jobs collection with versioning support and automatic embeddings"
+        )
+        
+        # Create OpenAI embedding function for automatic vector generation
+        openai_config = get_openai_config()
+        openai_api_key = openai_config.get("api_key")
+        
+        if not openai_api_key:
+            logger.warning("OpenAI API key not found in config, creating collection without embedding function")
+        else:
+            try:
+                # Add embedding function to schema - it will automatically generate embeddings
+                # The function will generate vectors from concatenated text fields
+                # Input fields: all text fields that should be embedded
+                # Output field: job_embedding (the vector field)
+                from pymilvus import Function, FunctionType
+                
+                # Create a function that combines multiple text fields and generates embeddings
+                # Using FunctionType.TEXTEMBEDDING with OpenAI provider
+                # Include API key in params if Milvus requires it
+                embedding_fn = Function(
+                    name="job_embedding_fn",
+                    function_type=FunctionType.TEXTEMBEDDING,
+                    input_field_names=[
+                        "position", "background", "description", "responsibilities",
+                        "requirements", "target_profile"
+                    ],
+                    output_field_names=["job_embedding"],
+                    params={
+                        "provider": "openai",
+                        "model_name": "text-embedding-3-small",  # Using text-embedding-3-small as per docs
+                        "api_key": openai_api_key,  # Pass API key from config
+                    }
+                )
+                
+                schema.add_function(embedding_fn)
+                logger.info("✅ Added OpenAI embedding function to schema (using API key from config)")
+            except Exception as e:
+                logger.warning(f"Failed to add embedding function: {e}")
+                logger.warning("Creating collection without embedding function")
+        
         # Create collection with schema
         _client.create_collection(
             collection_name=collection_name,
@@ -87,7 +153,7 @@ def create_job_collection(collection_name: Optional[str] = None) -> bool:
             auto_id=False,  # job_id is provided, not auto-generated
             max_length=64,
             metric_type="IP",
-            schema=get_job_collection_schema(),
+            schema=schema,
         )
         
         # Create scalar field indexes for faster queries
@@ -97,7 +163,7 @@ def create_job_collection(collection_name: Optional[str] = None) -> bool:
         
         logger.info(f"✅ Collection {collection_name} created successfully")
         return True
-        
+            
     except Exception as exc:
         logger.exception(f"Failed to create collection {collection_name}: %s", exc)
         return False
@@ -107,59 +173,74 @@ def create_job_collection(collection_name: Optional[str] = None) -> bool:
 # ------------------------------------------------------------------
 
 def get_all_jobs() -> List[Dict[str, Any]]:
-    """Get all jobs from the collection."""
-    if not _client:
-        logger.warning("Zilliz client not available")
-        return []
+    """Get all jobs from the collection (only current versions).
     
-    try:
-        # Query all records (empty filter means get all)
-        results = _client.query(
-            collection_name=_collection_name,
-            filter="",
-            output_fields=_readable_fields,
-            limit=1000  # Reasonable limit
-        )
-        
-        # Remove empty fields
-        jobs = [{k: v for k, v in job.items() if v or v == 0} for job in results]
-        
-        logger.debug("Retrieved %d jobs from collection", len(jobs))
-        return jobs
-        
-    except Exception as exc:
-        logger.exception("Failed to get all jobs: %s", exc)
-        return []
-
+    Returns jobs with base job_id extracted (version suffix removed) for display.
+    Jobs are sorted by updated_at in descending order (most recently updated first).
+    """
+    # Query only current versions
+    results = _client.query(
+        collection_name=_collection_name,
+        filter='current == true',
+        output_fields=_readable_fields,
+        limit=1000  # Reasonable limit
+    )
+    
+    # Remove empty fields and extract base job_id for display
+    jobs = []
+    for job in results:
+        job_dict = {k: v for k, v in job.items() if v or v == 0}
+        # Extract base job_id for display (remove _vN suffix)
+        if "job_id" in job_dict:
+            job_dict["base_job_id"] = get_base_job_id(job_dict["job_id"])
+        jobs.append(job_dict)
+    
+    # Sort by updated_at in descending order (most recent first)
+    jobs.sort(key=lambda x: x.get("updated_at", ""), reverse=True)
+    
+    logger.debug("Retrieved %d current jobs from collection (sorted by updated_at)", len(jobs))
+    return jobs
+            
 
 def get_job_by_id(job_id: str) -> Optional[Dict[str, Any]]:
-    """Get a specific job by ID."""
-    if not _client:
-        logger.warning("Zilliz client not available")
-        return None
+    """Get a specific job by ID (returns current version).
     
-    try:
-        results = _client.query(
-            collection_name=_collection_name,
-            filter=f'job_id == "{job_id}"',
-            output_fields=_readable_fields,
-            limit=1
-        )
+    If job_id has a version suffix, extracts base_job_id and returns current version.
+    If job_id is base (no suffix), returns current version directly.
+    
+    Args:
+        job_id: Job ID (can be base_job_id or versioned job_id)
         
-        if results:
-            # Remove empty fields
-            job = {k: v for k, v in results[0].items() if v or v == 0}
-            return job
-        
-        return None
-        
-    except Exception as exc:
-        logger.exception("Failed to get job by ID %s: %s", job_id, exc)
-        return None
-
+    Returns:
+        Current version of the job, or None if not found
+    """
+    # Extract base job_id (remove _vN suffix if present)
+    base_job_id = get_base_job_id(job_id)
+    
+    # Query current version for this base job_id
+    # We need to find the job where job_id starts with base_job_id_v and current=True
+    results = _client.query(
+        collection_name=_collection_name,
+        filter=f'job_id >= "{base_job_id}_v" and job_id < "{base_job_id}_w" and current == true',
+        output_fields=_readable_fields,
+        limit=100
+    )
+    
+    # Filter to exact matches and get the first one (should be only one current version)
+    for job in results:
+        job_dict = {k: v for k, v in job.items() if v or v == 0}
+        job_id_value = job_dict.get("job_id", "")
+        # Verify it matches the pattern
+        if job_id_value.startswith(f"{base_job_id}_v") and re.match(rf'^{re.escape(base_job_id)}_v\d+$', job_id_value):
+            return job_dict
+    
+    return None
+            
 
 def insert_job(**job_data) -> bool:
     """Insert a new job.
+    
+    Creates the first version (v1) with current=True.
     
     Args:
         **job_data: Job data including id, position, background, etc.
@@ -167,137 +248,223 @@ def insert_job(**job_data) -> bool:
     Returns:
         bool: True if successful, False otherwise
     """
-    if not _client:
-        logger.warning("Zilliz client not available")
-        return False
+    # Extract base job_id (remove any existing _vN suffix if present)
+    base_job_id = get_base_job_id(job_data["id"])
+    versioned_job_id = f"{base_job_id}_v1"
     
-    try:
-        # Prepare data for insertion
-        now = datetime.now().isoformat()
-        drill_down = str(job_data.get("drill_down_questions", ""))[:30000]
+    now = datetime.now().isoformat()
+    drill_down_questions = job_data.get("drill_down_questions", "")
+    drill_down_questions = truncate_field(drill_down_questions, 30000)
+    insert_data = {
+        "job_id": versioned_job_id,
+        "position": job_data["position"],
+        "background": job_data.get("background", ""),
+        "description": job_data.get("description", ""),
+        "responsibilities": job_data.get("responsibilities", ""),
+        "requirements": job_data.get("requirements", ""),
+        "target_profile": job_data.get("target_profile", ""),
+        "keywords": job_data.get("keywords", {"positive": [], "negative": []}),
+        "drill_down_questions": drill_down_questions,
+        "candidate_filters": job_data.get("candidate_filters"),
+        "job_embedding": [0.0] * _job_store_config["embedding_dim"],  # Empty embedding for now
+        "version": 1,
+        "current": True,
+        "created_at": now,
+        "updated_at": now,
+    }
+    
+    # Filter to only valid fields
+    insert_data = {k: v for k, v in insert_data.items() if k in _all_fields and (v or v == 0)}
         
-        insert_data = {
-            "job_id": job_data["id"],
-            "position": job_data["position"],
-            "background": job_data.get("background", ""),
-            "description": job_data.get("description", ""),
-            "responsibilities": job_data.get("responsibilities", ""),
-            "requirements": job_data.get("requirements", ""),
-            "target_profile": job_data.get("target_profile", ""),
-            "keywords": job_data.get("keywords", {"positive": [], "negative": []}),
-            "drill_down_questions": drill_down,
-            "candidate_filters": job_data.get("candidate_filters"),
-            "job_embedding": [0.0] * _job_store_config["embedding_dim"],  # Empty embedding for now
-            "created_at": now,
-            "updated_at": now,
-        }
+    # Insert data
+    _client.insert(collection_name=_collection_name, data=[insert_data])
         
-        # Filter to only valid fields
-        insert_data = {k: v for k, v in insert_data.items() if k in _all_fields and (v or v == 0)}
-        
-        # Insert data
-        _client.insert(collection_name=_collection_name, data=[insert_data])
-        
-        logger.debug("Successfully inserted job: %s", job_data["id"])
-        return True
-        
-    except Exception as exc:
-        logger.exception("Failed to insert job %s: %s", job_data.get("id"), exc)
-        return False
-
-
+    logger.debug("Successfully inserted job: %s (version 1)", versioned_job_id)
+    return True
+            
+    
+    
 def update_job(job_id: str, **job_data) -> bool:
     """Update an existing job.
     
+    Creates a new version by:
+    1. Getting the current version (where current=True)
+    2. Setting current=False on the old version
+    3. Creating a new version with current=True and incremented version number
+    
     Args:
-        job_id: Job ID to update
+        job_id: Job ID to update (can be base_job_id or versioned job_id)
         **job_data: Job data to update
         
     Returns:
         bool: True if successful, False otherwise
     """
-    if not _client:
-        logger.warning("Zilliz client not available")
-        return False
+    # Extract base job_id
+    base_job_id = get_base_job_id(job_id)
     
-    try:
-        # Check if job exists
-        existing = get_job_by_id(job_id)
-        if not existing:
-            logger.warning("Job %s not found for update", job_id)
-            return False
-        
-        # Prepare update data
-        now = datetime.now().isoformat()
-        
-        update_data = {
-            "job_id": job_id,
-            "position": job_data.get("position", existing.get("position", "")),
-            "background": job_data.get("background", existing.get("background", "")),
-            "description": job_data.get("description", existing.get("description", "")),
-            "responsibilities": job_data.get("responsibilities", existing.get("responsibilities", "")),
-            "requirements": job_data.get("requirements", existing.get("requirements", "")),
-            "target_profile": job_data.get("target_profile", existing.get("target_profile", "")),
-            "keywords": job_data.get("keywords", existing.get("keywords", {"positive": [], "negative": []})),
-            "drill_down_questions": str(job_data.get("drill_down_questions", existing.get("drill_down_questions", "")))[:30000],
-            "candidate_filters": job_data.get("candidate_filters", existing.get("candidate_filters")),
-            "job_embedding": [0.0] * _job_store_config["embedding_dim"],  # Keep empty for now
-            "created_at": existing.get("created_at", now),  # Keep original creation time
-            "updated_at": now,
-        }
-        
-        # Filter to only valid fields
-        update_data = {k: v for k, v in update_data.items() if k in _all_fields and (v or v == 0)}
-        
-        # Use upsert to update
+    # Get current job (where current=True)
+    current_job = get_job_by_id(base_job_id)
+    if not current_job:
+        logger.warning("Job %s not found for update", base_job_id)
+        return False
+            
+    # Get all versions to determine next version number
+    all_versions = get_job_versions(base_job_id)
+    max_version = max([v.get("version", 0) for v in all_versions], default=0)
+    next_version = max_version + 1
+    new_versioned_job_id = f"{base_job_id}_v{next_version}"
+    
+    # Set current job's current=False
+    old_job_id = current_job.get("job_id")
+    if old_job_id:
         _client.upsert(
             collection_name=_collection_name,
-            data=[update_data],
-            partial_update=bool(job_id),  # Partial update if job_id exists
+            data=[{"job_id": old_job_id, "current": False}],
+            partial_update=True,
         )
-        
-        logger.debug("Successfully updated job: %s", job_id)
-        return True
-        
-    except Exception as exc:
-        logger.exception("Failed to update job %s: %s", job_id, exc)
-        return False
+    
+    # Create new version with updated data
+    now = datetime.now().isoformat()
+    drill_down_questions = job_data.get("drill_down_questions", current_job.get("drill_down_questions", ""))
+    drill_down_questions = truncate_field(str(drill_down_questions), 30000)
+    new_version_data = {
+        "job_id": new_versioned_job_id,
+        "position": job_data.get("position", current_job.get("position", "")),
+        "background": job_data.get("background", current_job.get("background", "")),
+        "description": job_data.get("description", current_job.get("description", "")),
+        "responsibilities": job_data.get("responsibilities", current_job.get("responsibilities", "")),
+        "requirements": job_data.get("requirements", current_job.get("requirements", "")),
+        "target_profile": job_data.get("target_profile", current_job.get("target_profile", "")),
+        "keywords": job_data.get("keywords", current_job.get("keywords", {"positive": [], "negative": []})),
+        "drill_down_questions": drill_down_questions,
+        "candidate_filters": job_data.get("candidate_filters", current_job.get("candidate_filters")),
+        "job_embedding": [0.0] * _job_store_config["embedding_dim"],  # Keep empty for now
+        "version": next_version,
+        "current": True,
+        "created_at": current_job.get("created_at", now),  # Keep original creation time
+        "updated_at": now,
+    }
 
-
-def delete_job(job_id: str) -> bool:
-    """Delete a job by ID.
+    # Filter to only valid fields
+    new_version_data = {k: v for k, v in new_version_data.items() if k in _all_fields and (v or v == 0)}
+        
+    # Insert new version
+    _client.insert(collection_name=_collection_name, data=[new_version_data])
+    
+    logger.debug("Successfully updated job: %s (created version %d)", new_versioned_job_id, next_version)
+    return True
+            
+def get_job_versions(base_job_id: str) -> List[Dict[str, Any]]:
+    """Get all versions of a job.
     
     Args:
-        job_id: Job ID to delete
+        base_job_id: Base job ID without version suffix
+        
+    Returns:
+        List of all versions sorted by created_at DESC (latest first)
+    """
+    # Query all records where job_id starts with base_job_id_v
+    results = _client.query(
+        collection_name=_collection_name,
+        filter=f'job_id >= "{base_job_id}_v" and job_id < "{base_job_id}_w"',  # String range query
+        output_fields=_readable_fields,
+        limit=1000
+    )
+    
+    # Filter to only exact matches (job_id starts with base_job_id_v followed by digits)
+    versions = [
+        {k: v for k, v in job.items() if v or v == 0}
+        for job in results
+        if job.get("job_id", "").startswith(f"{base_job_id}_v") and re.match(rf'^{re.escape(base_job_id)}_v\d+$', job.get("job_id", ""))
+    ]
+    
+    # Sort by created_at DESC (latest first)
+    versions.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+    
+    logger.debug("Retrieved %d versions for job %s", len(versions), base_job_id)
+    return versions
+
+
+def switch_job_version(base_job_id: str, version: int) -> bool:
+    """Switch the current version of a job.
+    
+    Sets all versions' current=False, then sets the selected version's current=True.
+    
+    Args:
+        base_job_id: Base job ID without version suffix
+        version: Version number to make current
         
     Returns:
         bool: True if successful, False otherwise
     """
-    if not _client:
-        logger.warning("Zilliz client not available")
-        return False
+    # Get all versions
+    all_versions = get_job_versions(base_job_id)
     
-    try:
-        # Delete by primary key
-        _client.delete(
-            collection_name=_collection_name,
-            filter=f'job_id == "{job_id}"'
-        )
-        
-        logger.debug("Successfully deleted job: %s", job_id)
-        return True
-        
-    except Exception as exc:
-        logger.exception("Failed to delete job %s: %s", job_id, exc)
+    # Find the target version
+    target_job_id = f"{base_job_id}_v{version}"
+    target_version = next((v for v in all_versions if v.get("job_id") == target_job_id), None)
+    
+    if not target_version:
+        logger.warning("Version %d not found for job %s", version, base_job_id)
         return False
 
+    # Set all versions' current=False
+    for v in all_versions:
+        job_id = v.get("job_id")
+        if job_id:
+            _client.upsert(
+                collection_name=_collection_name,
+                data=[{"job_id": job_id, "current": False}],
+                partial_update=True,
+            )
+    
+    # Set target version's current=True
+    _client.upsert(
+        collection_name=_collection_name,
+        data=[{"job_id": target_job_id, "current": True}],
+        partial_update=True,
+    )
+    
+    logger.debug("Switched job %s to version %d", base_job_id, version)
+    return True
 
-__all__ = [
-    "get_job_collection_schema",
-    "create_job_collection",
-    "get_all_jobs",
-    "get_job_by_id",
-    "insert_job",
-    "update_job",
-    "delete_job",
-]
+
+def delete_job_version(base_job_id: str, version: int) -> bool:
+    """Delete a specific version of a job.
+    
+    Args:
+        base_job_id: Base job ID without version suffix
+        version: Version number to delete
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    versioned_job_id = f"{base_job_id}_v{version}"
+    _client.delete(collection_name=_collection_name, filter=f'job_id == "{versioned_job_id}"')
+    
+    logger.debug("Successfully deleted job version: %s", versioned_job_id)
+    return True
+
+
+def delete_job(job_id: str) -> bool:
+    """Delete a job by ID (deletes all versions).
+    
+    Args:
+        job_id: Job ID to delete (can be base_job_id or versioned job_id)
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    # Extract base job_id
+    base_job_id = get_base_job_id(job_id)
+    
+    # Delete all versions
+    all_versions = get_job_versions(base_job_id)
+    for v in all_versions:
+        versioned_job_id = v.get("job_id")
+        if versioned_job_id:
+            _client.delete(collection_name=_collection_name, filter=f'job_id == "{versioned_job_id}"')
+    
+    logger.debug("Successfully deleted job: %s (all versions)", base_job_id)
+    return True
+

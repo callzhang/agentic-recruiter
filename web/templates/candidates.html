@@ -127,14 +127,29 @@
                 
                 <!-- Load more button at bottom of list -->
                 <div class="p-4 border-t bg-gray-50">
+                    <div class="flex gap-2 items-end">
+                        <div class="flex-1">
+                            <label class="block text-sm font-medium text-gray-700 mb-1">数量限制</label>
+                            <input 
+                                type="number" 
+                                id="limit-input" 
+                                name="limit" 
+                                value="50" 
+                                min="1" 
+                                max="999" 
+                                step="1"
+                                @change="updateURL()"
+                                class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+                        </div>
                     <button 
                         @click="loadCandidates()"
                         id="load-more-btn"
                         :disabled="loading"
                         :class="loading ? 'opacity-50 cursor-not-allowed' : ''"
-                        class="w-full px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition">
+                            class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition">
                         <span x-text="loading ? '⏳ 加载中...' : '🔍 查询候选人'"></span>
                     </button>
+                    </div>
                 </div>
             </div>
         </div>

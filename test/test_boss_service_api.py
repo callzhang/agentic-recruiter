@@ -1,7 +1,5 @@
 """Automated tests for FastAPI endpoints exposed by boss_service."""
 
-from __future__ import annotations
-
 import types
 from typing import Any, Dict, List
 

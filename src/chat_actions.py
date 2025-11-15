@@ -1,7 +1,5 @@
 """Common high-level chat actions used by automation flows (async version)."""
 
-from __future__ import annotations
-
 import asyncio
 import re
 from datetime import date
@@ -66,7 +64,7 @@ async def _prepare_chat_page(page: Page, tab = None, status = None, job_title = 
             # Wait for page to update, then check if candidates exist
             start_time = time.time()
             while await page.locator(CHAT_ITEM_SELECTORS).first.count() == 0:
-                await asyncio.sleep(0.5)
+                await page.wait_for_timeout(500)
                 if time.time() - start_time > wait_timeout:
                     raise ValueError(f"未找到标签为 '{tab}' 的对话")
     
@@ -78,7 +76,7 @@ async def _prepare_chat_page(page: Page, tab = None, status = None, job_title = 
             # Wait for page to update, then check if candidates exist
             start_time = time.time()
             while await page.locator(CHAT_ITEM_SELECTORS).first.count() == 0:
-                await asyncio.sleep(0.5)
+                await page.wait_for_timeout(500)
                 if time.time() - start_time > wait_timeout:
                     raise ValueError(f"未找到状态为 '{status}' 的聊天对话")
     
@@ -96,7 +94,7 @@ async def _prepare_chat_page(page: Page, tab = None, status = None, job_title = 
                     # Wait for page to update, then check if candidates exist
                     start_time = time.time()
                     while await page.locator(CHAT_ITEM_SELECTORS).first.count() == 0:
-                        await asyncio.sleep(0.5)
+                        await page.wait_for_timeout(500)
                         if time.time() - start_time > wait_timeout:
                             raise ValueError(f"未找到职位为 '{job_title}' 的岗位")
                 else:
@@ -120,22 +118,25 @@ async def _go_to_chat_dialog(page: Page, chat_id: str, wait_timeout: int = 5000)
             break
     if not target:
         return None
-
+    # check if the target is already selected
     await target.scroll_into_view_if_needed(timeout=1000)
     classes = await target.get_attribute("class") or ""
+    # prepare for the click
     if "selected" not in classes:
         old_conversation_selector = page.locator(CONVERSATION_SELECTOR)
         old_text = await old_conversation_selector.inner_text(timeout=1000) if await old_conversation_selector.count() > 0 else ""
-        await target.click()
-        t0 = time.time()
-        while time.time() - t0 < wait_timeout:
-            new_text = await page.locator(CONVERSATION_SELECTOR).inner_text(timeout=1000)
-            if new_text and new_text != old_text:
-                break
-            await asyncio.sleep(0.2)
-        else:
-            logger.warning("等待对话面板刷新失败")
-            return None
+    # click the target
+    await target.click()
+    # wait for the conversation panel to refresh
+    t0 = time.time()
+    while time.time() - t0 < wait_timeout:
+        new_text = await page.locator(CONVERSATION_SELECTOR).inner_text(timeout=1000)
+        if new_text and new_text != old_text:
+            break
+        await page.wait_for_timeout(200)
+    else:
+        logger.warning("等待对话面板刷新失败")
+        return None
     return target
 
 
@@ -209,7 +210,7 @@ async def discard_candidate_action(page: Page, chat_id: str) -> bool:
     not_fit_button = page.locator("div.not-fit-wrap").first
     await not_fit_button.wait_for(state="visible", timeout=3000)
     await not_fit_button.hover()
-    await asyncio.sleep(1)
+    await page.wait_for_timeout(1000)
     
     # wait for dialog to be deleted
     max_attempts = 10
@@ -217,7 +218,7 @@ async def discard_candidate_action(page: Page, chat_id: str) -> bool:
         if not await _go_to_chat_dialog(page, chat_id):
             return True  # Successfully discarded
         await not_fit_button.click()
-        await asyncio.sleep(0.5)
+        await page.wait_for_timeout(500)
     
     # If we get here, the dialog wasn't deleted
     raise ValueError("PASS失败: 未删除对话")
@@ -431,7 +432,7 @@ async def request_full_resume_action(page: Page, chat_id: str) -> bool:
         success_indicator = page.locator("div.item-system >> span:has-text('简历请求已发送')")
         if await success_indicator.count() >= 0:
             return True
-        await asyncio.sleep(0.5)
+        await page.wait_for_timeout(500)
     else:
         logger.error("简历请求未发送或超时")
     
@@ -483,7 +484,7 @@ async def check_full_resume_available(page: Page, chat_id: str):
         if "disabled" not in classes: # 按钮不是disabled状态，则表示简历已上传
             # Resume is available!
             return True
-        await asyncio.sleep(0.1)
+        await page.wait_for_timeout(200)
     
     # Button still disabled after waiting
     logger.warning("暂无离线简历")

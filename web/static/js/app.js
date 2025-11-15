@@ -33,6 +33,75 @@ function showToast(message, type = 'info') {
 // Expose showToast globally
 window.showToast = showToast;
 
+/**
+ * Confirm modal helper using Alpine.js store (minimal JS, matching index.html pattern)
+ * Returns a Promise that resolves to true/false
+ */
+function showConfirm(message, title = '确认') {
+    return new Promise((resolve) => {
+        // Use Alpine store to manage modal state
+        if (!window.Alpine) {
+            console.error('Alpine.js not loaded');
+            resolve(false);
+            return;
+        }
+        
+        const store = Alpine.store('confirmModal');
+        if (!store) {
+            // Initialize store if it doesn't exist
+            Alpine.store('confirmModal', {
+                show: false,
+                message: '',
+                title: '',
+                resolve: null
+            });
+        }
+        
+        const modalStore = Alpine.store('confirmModal');
+        modalStore.message = message;
+        modalStore.title = title;
+        modalStore.resolve = resolve;
+        modalStore.show = true;
+    });
+}
+
+// Expose showConfirm globally
+window.showConfirm = showConfirm;
+
+/**
+ * Show loading indicator
+ */
+function showLoading(message = '处理中...') {
+    const indicator = document.getElementById('global-loading');
+    if (indicator) {
+        const textEl = indicator.querySelector('span');
+        if (textEl) {
+            textEl.textContent = message;
+        } else {
+            const span = document.createElement('span');
+            span.className = 'font-medium';
+            span.textContent = message;
+            indicator.appendChild(span);
+        }
+        indicator.classList.add('htmx-request');
+        indicator.style.display = 'flex';
+    }
+}
+
+/**
+ * Hide loading indicator
+ */
+function hideLoading() {
+    const indicator = document.getElementById('global-loading');
+    if (indicator) {
+        indicator.classList.remove('htmx-request');
+    }
+}
+
+// Expose loading functions globally
+window.showLoading = showLoading;
+window.hideLoading = hideLoading;
+
 document.addEventListener('alpine:init', () => {
     // Global application state
     Alpine.store('app', {
@@ -56,6 +125,30 @@ document.addEventListener('alpine:init', () => {
             const assistant = localStorage.getItem('currentAssistant');
             if (job) this.currentJob = JSON.parse(job);
             if (assistant) this.currentAssistant = JSON.parse(assistant);
+        }
+    });
+    
+    // Confirm modal store (matching index.html pattern)
+    Alpine.store('confirmModal', {
+        show: false,
+        message: '',
+        title: '确认',
+        resolve: null,
+        
+        confirm() {
+            if (this.resolve) {
+                this.resolve(true);
+                this.resolve = null;
+            }
+            this.show = false;
+        },
+        
+        cancel() {
+            if (this.resolve) {
+                this.resolve(false);
+                this.resolve = null;
+            }
+            this.show = false;
         }
     });
     
@@ -195,6 +288,13 @@ function candidateTabs() {
                 // Stop checking after 5 seconds
                 setTimeout(() => clearInterval(checkJobSelector), 5000);
             }
+            
+            // Set limit from URL
+            const limit = urlParams.get('limit');
+            if (limit) {
+                const limitInput = document.getElementById('limit-input');
+                if (limitInput) limitInput.value = limit;
+            }
         },
         
         updateURL() {
@@ -218,6 +318,13 @@ function candidateTabs() {
             const jobId = jobSelector?.value;
             if (jobId && jobId !== '加载中...') {
                 params.set('job_id', jobId);
+            }
+            
+            // Add limit
+            const limitInput = document.getElementById('limit-input');
+            const limit = limitInput?.value;
+            if (limit) {
+                params.set('limit', limit);
             }
             
             // Update URL without page reload
@@ -279,11 +386,16 @@ function candidateTabs() {
                 chat_type = tabMap[this.activeTab] || '新招呼';
             }
             
+            // Get limit from input
+            const limitInput = document.getElementById('limit-input');
+            const limit = limitInput?.value || '50';
+            
             const params = new URLSearchParams({
                 mode: mode,
                 chat_type: chat_type,
                 job_applied: job_title,
-                job_id: job_id
+                job_id: job_id,
+                limit: limit
             });
             
             console.log('Loading candidates, activeTab:', this.activeTab, 'params:', params);
@@ -483,17 +595,55 @@ window.updateCandidateURL = function() {
 // ============================================================================
 
 // Show loading indicator before any HTMX request
+// Track active fetch requests for loading indicator
+let activeFetchRequests = 0;
+
+// Intercept fetch to show loading indicator
+const originalFetch = window.fetch;
+window.fetch = function(...args) {
+    const loadingIndicator = document.getElementById('global-loading');
+    if (loadingIndicator) {
+        activeFetchRequests++;
+        loadingIndicator.classList.add('htmx-request');
+        loadingIndicator.style.display = 'flex';
+    }
+    
+    return originalFetch.apply(this, args)
+        .then(response => {
+            activeFetchRequests--;
+            if (activeFetchRequests <= 0) {
+                activeFetchRequests = 0;
+                if (loadingIndicator) {
+                    loadingIndicator.classList.remove('htmx-request');
+                }
+            }
+            return response;
+        })
+        .catch(error => {
+            activeFetchRequests--;
+            if (activeFetchRequests <= 0) {
+                activeFetchRequests = 0;
+                if (loadingIndicator) {
+                    loadingIndicator.classList.remove('htmx-request');
+                }
+            }
+            throw error;
+        });
+};
+
+// HTMX request handlers (for HTMX-specific requests)
 document.body.addEventListener('htmx:beforeRequest', function(event) {
     const loadingIndicator = document.getElementById('global-loading');
     if (loadingIndicator) {
         loadingIndicator.classList.add('htmx-request');
+        loadingIndicator.style.display = 'flex';
     }
 });
 
 // Hide loading indicator after any HTMX request completes
 document.body.addEventListener('htmx:afterRequest', function(event) {
     const loadingIndicator = document.getElementById('global-loading');
-    if (loadingIndicator) {
+    if (loadingIndicator && activeFetchRequests === 0) {
         loadingIndicator.classList.remove('htmx-request');
     }
 });
@@ -574,6 +724,9 @@ document.body.addEventListener('htmx:beforeRequest', function(event) {
     event.detail.elt.classList.remove('border-gray-200');
     event.detail.elt.classList.add('bg-blue-50', 'border-blue-500', 'ring-2', 'ring-blue-300');
     
+    // Scroll card into view in the left panel
+    event.detail.elt.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
+    
     // Update selected ID
     window.selectedCandidateId = candidate_id;
     console.log('Selected candidate:', candidate_id);
@@ -629,16 +782,194 @@ window.handleApiResponse = async function handleApiResponse(response) {
 }
 
 // ============================================================================
-// Batch Processing (fallback - will be overridden by candidate_detail.html)
+// Helper functions to disable/enable candidate cards
 // ============================================================================
+
+function disableAllCards() {
+    const cards = document.querySelectorAll('.candidate-card');
+    cards.forEach(card => {
+        card.style.pointerEvents = 'none';
+        card.style.opacity = '0.6';
+    });
+}
+
+function enableAllCards() {
+    const cards = document.querySelectorAll('.candidate-card');
+    cards.forEach(card => {
+        card.style.pointerEvents = '';
+        card.style.opacity = '';
+    });
+}
+
+// ============================================================================
+// Batch Processing Functions
+// ============================================================================
+
+// Global flags for batch processing control
+window.batchProcessingActive = false;
+window.stopBatchProcessing = false;
 
 /**
  * Process all candidate cards sequentially
- * This is a fallback definition. The actual implementation is in candidate_detail.html
- * and will override this when that template loads.
  */
 window.processAllCandidates = async function processAllCandidates() {
-    showToast('请先点击一个候选人卡片以加载处理功能', 'warning');
+    const cards = document.querySelectorAll('.candidate-card');
+    if (cards.length === 0) {
+        showToast('没有找到候选人', 'warning');
+        return;
+    }
+    
+    const total = cards.length;
+    let processed = 0;
+    let failed = 0;
+    
+    // Set batch processing flag
+    window.batchProcessingActive = true;
+    window.stopBatchProcessing = false;
+    
+    // Disable all candidate cards
+    disableAllCards();
+    
+    // Update button to stop button
+    const batchBtn = document.getElementById('batch-analyze-btn');
+    if (batchBtn) {
+        batchBtn.disabled = false;
+        batchBtn.textContent = '⏸ 停止处理';
+        batchBtn.onclick = stopBatchProcessingHandler;
+        batchBtn.classList.remove('bg-purple-600', 'hover:bg-purple-700');
+        batchBtn.classList.add('bg-red-600', 'hover:bg-red-700');
+    }
+    
+    showToast(`开始批量处理 ${total} 个候选人`, 'info');
+    
+    for (let i = 0; i < cards.length; i++) {
+        // Check if user requested stop
+        if (window.stopBatchProcessing) {
+            showToast(`批量处理已停止 (${processed}/${total} 完成)`, 'warning');
+            break;
+        }
+        
+        const card = cards[i];
+        const cardData = JSON.parse(card.getAttribute('hx-vals'));
+        const name = cardData.name || `候选人 ${i + 1}`;
+        
+        showToast(`正在处理候选人 ${i + 1}/${total}: ${name}`, 'info');
+        
+        try {
+            const detailPane = document.getElementById('detail-pane');
+            if (!detailPane) {
+                throw new Error('Detail pane not found');
+            }
+            
+            // Set up event listeners BEFORE triggering HTMX click
+            // This ensures we catch the event even if process_candidate() completes quickly
+            const processingPromise = new Promise((resolve, reject) => {
+                const timeout = setTimeout(() => {
+                    document.removeEventListener('candidate:processing-complete', onComplete);
+                    document.removeEventListener('candidate:processing-error', onError);
+                    reject(new Error('Processing timeout (180s)'));
+                }, 180000); // 180 second timeout
+                
+                const onComplete = (event) => {
+                    clearTimeout(timeout);
+                    document.removeEventListener('candidate:processing-complete', onComplete);
+                    document.removeEventListener('candidate:processing-error', onError);
+                    resolve(event.detail);
+                };
+                
+                const onError = (event) => {
+                    clearTimeout(timeout);
+                    document.removeEventListener('candidate:processing-complete', onComplete);
+                    document.removeEventListener('candidate:processing-error', onError);
+                    reject(new Error(event.detail.error || 'Processing failed'));
+                };
+                
+                document.addEventListener('candidate:processing-complete', onComplete, { once: true });
+                document.addEventListener('candidate:processing-error', onError, { once: true });
+            });
+            
+            // Wait for HTMX swap to complete
+            await new Promise((resolve, reject) => {
+                const timeout = setTimeout(() => {
+                    detailPane.removeEventListener('htmx:afterSwap', onSwap);
+                    detailPane.removeEventListener('htmx:responseError', onError);
+                    reject(new Error('HTMX swap timeout'));
+                }, 10000); // 10 second timeout for swap
+                
+                const onSwap = () => {
+                    clearTimeout(timeout);
+                    detailPane.removeEventListener('htmx:afterSwap', onSwap);
+                    detailPane.removeEventListener('htmx:responseError', onError);
+                    // Wait a bit for DOM to be ready
+                    setTimeout(resolve, 200);
+                };
+                
+                const onError = (evt) => {
+                    clearTimeout(timeout);
+                    detailPane.removeEventListener('htmx:afterSwap', onSwap);
+                    detailPane.removeEventListener('htmx:responseError', onError);
+                    reject(new Error(evt.detail.error || 'HTMX request failed'));
+                };
+                
+                detailPane.addEventListener('htmx:afterSwap', onSwap, { once: true });
+                detailPane.addEventListener('htmx:responseError', onError, { once: true });
+                
+                // Reset selectedCandidateId to force HTMX request even if card is already selected
+                // This prevents timeout when batch processing starts with the first card already selected
+                const cardCandidateId = card.getAttribute('data-candidate-id');
+                if (window.selectedCandidateId === cardCandidateId) {
+                    window.selectedCandidateId = null;
+                }
+                
+                // Scroll card into view before triggering click
+                card.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
+                
+                // Trigger HTMX click
+                htmx.trigger(card, 'click');
+            });
+            
+            // Wait for process_candidate() to complete
+            await processingPromise;
+            
+            processed++;
+            showToast(`✅ ${name} 处理完成 (${processed}/${total})`, 'success');
+        } catch (error) {
+            failed++;
+            console.error(`Failed to process candidate ${i + 1}:`, error);
+            showToast(`❌ ${name} 处理失败: ${error.message}`, 'error');
+            // Continue to next candidate
+        }
+    }
+    
+    // Re-enable candidate cards
+    enableAllCards();
+    
+    // Reset batch processing flag
+    window.batchProcessingActive = false;
+    window.stopBatchProcessing = false;
+    
+    // Reset button
+    if (batchBtn) {
+        batchBtn.disabled = false;
+        batchBtn.textContent = '全部分析';
+        batchBtn.onclick = processAllCandidates;
+        batchBtn.classList.remove('bg-red-600', 'hover:bg-red-700');
+        batchBtn.classList.add('bg-purple-600', 'hover:bg-purple-700');
+    }
+    
+    // Final summary
+    const summary = `批量处理完成: 成功 ${processed}/${total}, 失败 ${failed}`;
+    showToast(summary, processed === total ? 'success' : 'warning');
+}
+
+function stopBatchProcessingHandler() {
+    window.stopBatchProcessing = true;
+    const batchBtn = document.getElementById('batch-analyze-btn');
+    if (batchBtn) {
+        batchBtn.disabled = true;
+        batchBtn.textContent = '正在停止...';
+    }
+    showToast('正在停止批量处理...', 'info');
 }
 
 // ============================================================================
@@ -722,10 +1053,11 @@ function applyCardUpdate(card, updates, identifiers) {
     if ('stage' in updates) {
         const stageBadge = card.querySelector('[data-badge="stage"]');
         if (stageBadge) {
-            // Remove all stage classes
-            stageBadge.className = 'inline-flex items-center px-2 py-0.5 text-xs font-medium rounded-full shrink-0';
+            // Set base classes if not already set
+            if (!stageBadge.className.includes('inline-flex')) {
+                stageBadge.className = 'inline-flex items-center px-2 py-0.5 text-xs font-medium rounded-full shrink-0';
+            }
             
-            // Add appropriate classes and emoji based on stage
             let stageEmoji = '';
             let stageClasses = '';
             
@@ -735,11 +1067,11 @@ function applyCardUpdate(card, updates, identifiers) {
                     stageClasses = 'bg-blue-100 text-blue-700';
                     break;
                 case 'SEEK':
-                    stageEmoji = '⭐';
+                    stageEmoji = '✅';
                     stageClasses = 'bg-yellow-100 text-yellow-700';
                     break;
                 case 'CONTACT':
-                    stageEmoji = '📞';
+                    stageEmoji = '⭐';
                     stageClasses = 'bg-emerald-100 text-emerald-700';
                     break;
                 case 'GREET':
@@ -755,6 +1087,8 @@ function applyCardUpdate(card, updates, identifiers) {
                     stageClasses = 'bg-gray-100 text-gray-700';
             }
             
+            // Remove old stage color classes and add new one
+            stageBadge.className = stageBadge.className.replace(/\b(bg-(blue|yellow|emerald|green|red|gray)-100 text-(blue|yellow|emerald|green|red|gray)-700)\b/g, '');
             stageBadge.className += ' ' + stageClasses;
             stageBadge.textContent = stageEmoji;
             
@@ -764,33 +1098,28 @@ function applyCardUpdate(card, updates, identifiers) {
                 stageBadge.classList.add('hidden');
             }
         }
+        // If stageBadge doesn't exist, silently skip the update
     }
     
     // Update tags (greeted and saved only - viewed is handled by card opacity)
     const tagsContainer = card.querySelector('#candidate-tags');
-    if (tagsContainer) {
-        // Update greeted tag
-        if ('greeted' in updates) {
-            const greetedTag = tagsContainer.querySelector('[data-tag="greeted"]');
-            if (greetedTag) {
-                if (updates.greeted) {
-                    greetedTag.classList.remove('hidden');
-                } else {
-                    greetedTag.classList.add('hidden');
-                }
-            }
+    // Update greeted tag
+    if ('greeted' in updates) {
+        const greetedTag = tagsContainer.querySelector('[data-tag="greeted"]');
+        if (updates.greeted) {
+            greetedTag.classList.remove('hidden');
+        } else {
+            greetedTag.classList.add('hidden');
         }
-        
-        // Update saved tag
-        if ('saved' in updates) {
-            const savedTag = tagsContainer.querySelector('[data-tag="saved"]');
-            if (savedTag) {
-                if (updates.saved) {
-                    savedTag.classList.remove('hidden');
-                } else {
-                    savedTag.classList.add('hidden');
-                }
-            }
+    }
+    
+    // Update saved tag
+    if ('saved' in updates) {
+        const savedTag = tagsContainer.querySelector('[data-tag="saved"]');
+        if (updates.saved) {
+            savedTag.classList.remove('hidden');
+        } else {
+            savedTag.classList.add('hidden');
         }
     }
     
@@ -798,13 +1127,11 @@ function applyCardUpdate(card, updates, identifiers) {
     if ('score' in updates) {
         const cardContainer = card.querySelector('.flex.items-start.space-x-3');
         const scoreBadge = cardContainer?.querySelector('[data-badge="score"]');
-        if (scoreBadge) {
-            if (updates.score !== null && updates.score !== undefined) {
-                scoreBadge.textContent = updates.score.toString();
-                scoreBadge.classList.remove('hidden');
-            } else {
-                scoreBadge.classList.add('hidden');
-            }
+        if (updates.score !== null && updates.score !== undefined) {
+            scoreBadge.textContent = updates.score.toString();
+            scoreBadge.classList.remove('hidden');
+        } else {
+            scoreBadge.classList.add('hidden');
         }
     }
 }

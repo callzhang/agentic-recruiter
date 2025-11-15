@@ -1,7 +1,5 @@
 """Async Playwright helpers shared across chat and recommendation flows."""
 
-from __future__ import annotations
-
 from typing import Optional
 
 from playwright.async_api import Page

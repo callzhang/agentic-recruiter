@@ -20,7 +20,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from pymilvus import MilvusClient, Collection, CollectionSchema, FieldSchema, DataType, connections
-from src.config import settings
+from src.config import get_zilliz_config
 from src.global_logger import logger
 
 # Use the same max_length as candidate_store.py
@@ -34,15 +34,19 @@ def migrate_candidates_data():
     Returns True if successful, False otherwise.
     """
     
+    # Get Zilliz config
+    zilliz_config = get_zilliz_config()
+    
     # Create MilvusClient
     client = MilvusClient(
-        uri=settings.ZILLIZ_ENDPOINT,
-        user=settings.ZILLIZ_USER,
-        password=settings.ZILLIZ_PASSWORD,
-        secure=True
+        uri=zilliz_config["endpoint"],
+        user=zilliz_config["user"],
+        password=zilliz_config["password"],
+        token=zilliz_config.get("token", ""),
+        secure=zilliz_config["endpoint"].startswith("https://")
     )
     
-    old_collection = settings.ZILLIZ_COLLECTION_NAME  # Use current collection from config
+    old_collection = zilliz_config["candidate_collection_name"]  # Use current collection from config
     new_collection = "CN_candidates_v3"
     
     try:
@@ -56,10 +60,11 @@ def migrate_candidates_data():
         # Connect for Collection API
         connections.connect(
             alias="default",
-            uri=settings.ZILLIZ_ENDPOINT,
-            user=settings.ZILLIZ_USER,
-            password=settings.ZILLIZ_PASSWORD,
-            secure=True
+            uri=zilliz_config["endpoint"],
+            user=zilliz_config["user"],
+            password=zilliz_config["password"],
+            token=zilliz_config.get("token", ""),
+            secure=zilliz_config["endpoint"].startswith("https://")
         )
         
         # Create new collection schema WITHOUT thread_id, WITH conversation_id
@@ -70,7 +75,7 @@ def migrate_candidates_data():
         # Define new schema
         new_fields = [
             FieldSchema(name="candidate_id", dtype=DataType.VARCHAR, max_length=64, is_primary=True, auto_id=True),
-            FieldSchema(name="resume_vector", dtype=DataType.FLOAT_VECTOR, dim=settings.ZILLIZ_EMBEDDING_DIM),
+            FieldSchema(name="resume_vector", dtype=DataType.FLOAT_VECTOR, dim=zilliz_config["embedding_dim"]),
             FieldSchema(name="chat_id", dtype=DataType.VARCHAR, max_length=100, nullable=True),
             FieldSchema(name="name", dtype=DataType.VARCHAR, max_length=200, nullable=True),
             FieldSchema(name="job_applied", dtype=DataType.VARCHAR, max_length=128, nullable=True),
@@ -83,6 +88,8 @@ def migrate_candidates_data():
             FieldSchema(name="full_resume", dtype=DataType.VARCHAR, max_length=MAX_LENGTH, nullable=True),
             # NEW: conversation_id instead of thread_id
             FieldSchema(name="conversation_id", dtype=DataType.VARCHAR, max_length=100, nullable=True),
+            # NEW: generated_message field
+            FieldSchema(name="generated_message", dtype=DataType.VARCHAR, max_length=5000, nullable=True),
         ]
         
         schema = CollectionSchema(

@@ -1,7 +1,5 @@
 """End-to-end style flow test covering candidate management APIs."""
 
-from __future__ import annotations
-
 import types
 from typing import Any, Dict, List
 

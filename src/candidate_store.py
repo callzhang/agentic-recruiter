@@ -1,6 +1,4 @@
 """Zilliz/Milvus-backed QA and candidate interaction store integration."""
-from __future__ import annotations
-
 from functools import lru_cache
 import json
 from datetime import datetime
@@ -39,6 +37,7 @@ def get_collection_schema() -> list[FieldSchema]:
         FieldSchema(name="stage", dtype=DataType.VARCHAR, max_length=20, nullable=True),
         FieldSchema(name="full_resume", dtype=DataType.VARCHAR, max_length=_max_length, nullable=True),
         FieldSchema(name="conversation_id", dtype=DataType.VARCHAR, max_length=100, nullable=True),
+        FieldSchema(name="generated_message", dtype=DataType.VARCHAR, max_length=5000, nullable=True),
     ]
     return fields
 # Define field names for the collection
@@ -173,7 +172,7 @@ def get_candidates(
     identifiers: Optional[List[str]] = None,
     names: Optional[List[str]] = None,
     job_applied: Optional[str] = None,
-    limit: Optional[int] = None,
+    limit: Optional[int] = 100,
     fields: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """Query candidates by identifiers (chat_id/candidate_id/conversation_id) or by names/job_applied.
@@ -199,8 +198,6 @@ def get_candidates(
     if job_applied:
         job_applied = job_applied.strip() or None
     
-    # Build query expression
-    query_limit = limit or 100
     
     if identifiers:
         quoted_ids = [f"'{id}'" for id in identifiers]
@@ -214,7 +211,7 @@ def get_candidates(
         quoted_names = [f"'{n}'" for n in names]
         names_str = ', '.join(quoted_names)
         expr_2 = f"name in [{names_str}] and job_applied == '{job_applied}'"
-        query_limit = limit or len(names)
+        query_limit = (limit or len(names)) * 2
     else:
         expr_2 = None
 
@@ -234,13 +231,27 @@ def get_candidates(
             filter=filter_expr,
             output_fields=fields,
             limit=query_limit,
+            output_fields_order='updated_at DESC',
         )
+        
         # Remove empty fields
-        return [{k: v for k, v in result.items() if v or v == 0} for result in results]
+        candidates = [{k: v for k, v in result.items() if v or v == 0} for result in results]
+        
+        # Sort by updated_at in descending order (most recent first)
+        # Fallback to candidate_id if updated_at is missing (newer IDs are generally later)
+        candidates.sort(key=lambda x: (x.get("updated_at")), reverse=True)
+        
+        # Apply the original limit after sorting
+        if limit and len(candidates) > limit:
+            candidates = candidates[:limit]
+        
+        return candidates
     except Exception as exc:
         logger.exception("Failed to query candidates: %s", exc)
         return []
 
+
+truncate_field = lambda field, length: field.encode('utf-8')[:length].decode('utf-8', errors='ignore')
 
 def upsert_candidate(**kwargs) -> Optional[str]:
     """Insert or update candidate information.
@@ -262,12 +273,11 @@ def upsert_candidate(**kwargs) -> Optional[str]:
         kwargs['candidate_id'] = candidate_id
     
     # Truncate varchar fields
-    truncate_field = lambda field, length: field.encode('utf-8')[:length].decode('utf-8', errors='ignore')
     for k, v in kwargs.items():
         field = next((f for f in get_collection_schema() if f.name == k), None)
         if v and field and field.dtype == DataType.VARCHAR:
             kwargs[k] = truncate_field(v, field.max_length)
-
+    
     # Parse JSON fields if strings
     analysis = kwargs.get("analysis")
     if analysis and isinstance(analysis, str):
@@ -279,18 +289,19 @@ def upsert_candidate(**kwargs) -> Optional[str]:
     kwargs['updated_at'] = datetime.now().isoformat()
     
     # Filter to only valid fields
-    kwargs = {k: v.strip() if isinstance(v, str) else v for k, v in kwargs.items() if k in _all_fields and (v or v == 0)}
+    kwargs = {k: v.strip() if isinstance(v, str) else v for k, v in kwargs.items() if(k in _all_fields and (v or v == 0))}
     
     # Generate embedding if needed
     resume_text = kwargs.get("resume_text")
     resume_vector = kwargs.get("resume_vector")
-        
+    
     # For updates with candidate_id, let it fail if invalid and recover
     if not resume_vector and resume_text:
         # Generate embedding from resume_text
         kwargs["resume_vector"] = get_embedding(resume_text)
     
     # Insert if no candidate_id
+    logger.debug(f'upsert_candidate:{kwargs}');
     if not candidate_id:
         kwargs["resume_vector"] = [0.0] * _zilliz_config["embedding_dim"] if not resume_vector else resume_vector
         results = _client.insert(collection_name=_collection_name, data=kwargs)

@@ -297,14 +297,14 @@ def start_service(*, scheduler_options: Optional[Dict[str, Any]] | None = None):
                             repeat with t in tabs of w
                                 set tabIndex to tabIndex + 1
                                 try
-                                    if URL of t starts with "{url}" then
+                                if URL of t starts with "{url}" then
                                         set active tab index of w to tabIndex
                                         set index of w to 1
                                         tell application "System Events"
                                             tell process "Google Chrome" to set frontmost to true
                                         end tell
                                         return true
-                                    end if
+                                end if
                                 on error
                                     -- skip tabs that fail URL retrieval
                                 end try

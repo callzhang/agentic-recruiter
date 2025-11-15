@@ -1,7 +1,5 @@
 """Scheduler for BRD-defined automation workflows."""
 
-from __future__ import annotations
-
 import asyncio
 import threading
 from concurrent.futures import Future

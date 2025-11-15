@@ -1,6 +1,4 @@
 """Assistant actions for recruitment automation with AI and storage."""
-from __future__ import annotations
-
 import logging
 import json
 from functools import lru_cache

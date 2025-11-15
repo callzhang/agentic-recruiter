@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """Async FastAPI service that automates Boss直聘 via Playwright."""
 
-from __future__ import annotations
-
 import asyncio
 import os
 import tempfile

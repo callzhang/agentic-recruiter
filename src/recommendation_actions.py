@@ -1,7 +1,5 @@
 """Async recommendation page actions for Boss Zhipin automation."""
 
-from __future__ import annotations
-
 import asyncio
 import time
 from typing import Any, Dict, List
@@ -84,7 +82,7 @@ async def _prepare_recommendation_page(page: Page, job_title: str = None, *, wai
         t0 = time.time()
         while job_title not in current_selected_job:
             current_selected_job = await dropdown_label.inner_text(timeout=500)
-            await asyncio.sleep(0.2)
+            await page.wait_for_timeout(200)
             if time.time() - t0 > wait_timeout:
                 raise ValueError(f"职位选择可能失败。当前选择: {current_selected_job}")
             
@@ -129,11 +127,12 @@ async def list_recommended_candidates_action(page: Page, *, limit: int = 999, jo
     candidates: List[Dict[str, Any]] = []
     cards = frame.locator(CANDIDATE_CARD_SELECTOR)
     t0 = time.time()
-    while time.time() - t0 < 5000:
+    while time.time() - t0 < 8000:
         count = await cards.count()
         if count > 0:
             break
-        await asyncio.sleep(0.5)
+        await page.wait_for_timeout(200)
+        logger.debug("等待推荐候选人卡片出现... %d 秒", time.time() - t0)
     else:
         raise ValueError("未找到推荐候选人")
 
@@ -177,11 +176,10 @@ async def view_recommend_candidate_resume_action(page: Page, index: int) -> Dict
     card = cards.nth(index)
     await card.hover(timeout=5000)
     await card.click(timeout=800)
-    await asyncio.sleep(3000)
     await _setup_wasm_route(page.context)
     await _install_parent_message_listener(page, logger)
 
-    context = await _get_resume_handle(page, 10000, logger)
+    context = await _get_resume_handle(page, 20000, logger)
     if not context.get("success"):
         raise ValueError(context.get("details", "未找到在线简历"))
 
@@ -226,7 +224,7 @@ async def greet_recommend_candidate_action(page: Page, index: int, message: str 
     if message:
         try:
             # 点击继续沟通按钮
-            await asyncio.sleep(3)
+            await page.wait_for_timeout(3000)
             chat_btn = card.locator(chat_selectors)
             await chat_btn.click(timeout=1000)
             # input_box = page.locator("div.conversation-bd-content").first
@@ -274,7 +272,7 @@ async def discard_recommend_candidate_action(page: Page, index: int, reason: str
     discard_btn = card.locator("button.btn-quxiao:has-text('不合适')").first
     if await discard_btn.count() > 0:
         await discard_btn.click(timeout=1000)
-        await asyncio.sleep(100)
+        await page.wait_for_timeout(1000)
     else:
         raise ValueError("未找到不合适按钮")
     # click the popup dialog's close button
@@ -317,7 +315,7 @@ async def apply_filters(frame: Frame, filters: Dict[str, Any]) -> bool:
     if await filter_panel.count() == 0:
         # open the filter panel
         await filter_wrap.click(timeout=1000)
-        await asyncio.sleep(0.5)
+        await page.wait_for_timeout(500)
         # Wait for panel to appear
         await filter_panel.wait_for(state="visible", timeout=1000)
     # 取消上次设置

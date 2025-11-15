@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
 """Deep WASM resume debug helper with structured logging."""
-from __future__ import annotations
-
 import argparse
 import json
 import pathlib

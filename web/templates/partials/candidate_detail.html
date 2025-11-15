@@ -28,7 +28,7 @@
     </div>
 
     <!-- Hidden context for HTMX requests - using JSON to preserve types -->
-    <div id="candidate-context" class="hidden" hx-vals='{{ candidate | tojson }}'></div>
+    <div id="candidate-context" class="hidden" hx-vals='{{ candidate | tojson | safe }}'></div>
     
     <!-- 1. Resume Section -->
     <div id="resume-section" class="bg-white rounded-lg border shadow-sm">
@@ -147,6 +147,9 @@ async function process_candidate() {
     // Emit identifier for event listeners (use current conversationId value)
     const getIdentifier = () => chat_id || conversationId || candidate_id || 'unknown';
     
+    // Disable cards during processing
+    disableAllCards();
+    
     try {
         // Step 1: Ensure resume is loaded
         const online_resume_div = document.getElementById('resume-textarea-online');
@@ -250,6 +253,9 @@ async function process_candidate() {
         });
         document.dispatchEvent(event);
         throw error;
+    } finally {
+        // Re-enable cards after processing
+        enableAllCards();
     }
 }
 
@@ -384,7 +390,7 @@ async function startAnalysis() {
         swap: 'innerHTML',
         values: values
     });
-    console.log('Analysis completed:', result);
+    console.log('Analysis completed:', result.overall);
     // Extract analysis from data attribute
     const analysis_container = document.querySelector('#analysis-content #analysis-result-container');
     const analysis = analysis_container ? JSON.parse(analysis_container.getAttribute('data-analysis')) : null;
@@ -476,10 +482,12 @@ function updateCandidateData(record) {
     
     // Broadcast update to card (filter out null/undefined, keep false values)
     const updates = Object.fromEntries(
-        Object.entries(record).filter(([_, v]) => v !== null && v !== undefined && v !== '')
+        Object.entries(record).filter(([k, v]) => v!== currentData[k] && v !== null && v !== undefined && v !== '')
     );
     
     if (Object.keys(updates).length > 0) {
+        console.log('updateCandidateData:', updates);
+        debugger;
         // Get identifiers from the updated data for matching
         const chat_id = updatedData.chat_id;
         const conversation_id = updatedData.conversation_id;
@@ -501,8 +509,9 @@ function updateCandidateData(record) {
             }
         });
         document.dispatchEvent(event);
+    }else{
+        return;
     }
-
     // update to cloud - use values from hx-vals
     htmx.ajax('POST', '/candidates/save', {
         values: updatedData,
@@ -567,175 +576,7 @@ function getThresholdValues() {
     });
 }
 
-// ============================================================================
-// Batch Processing Function
-// ============================================================================
-
-/**
- * Process all candidate cards sequentially
- */
-// Global flag for batch processing control
-window.batchProcessingActive = false;
-window.stopBatchProcessing = false;
-
-async function processAllCandidates() {
-    const cards = document.querySelectorAll('.candidate-card');
-    if (cards.length === 0) {
-        showToast('没有找到候选人', 'warning');
-        return;
-    }
-    
-    const total = cards.length;
-    let processed = 0;
-    let failed = 0;
-    
-    // Set batch processing flag
-    window.batchProcessingActive = true;
-    window.stopBatchProcessing = false;
-    
-    // Disable all candidate cards
-    cards.forEach(card => {
-        card.style.pointerEvents = 'none';
-        card.style.opacity = '0.6';
-    });
-    
-    // Update button to stop button
-    const batchBtn = document.getElementById('batch-analyze-btn');
-    if (batchBtn) {
-        batchBtn.disabled = false;
-        batchBtn.textContent = '⏸ 停止处理';
-        batchBtn.onclick = stopBatchProcessingHandler;
-        batchBtn.classList.remove('bg-purple-600', 'hover:bg-purple-700');
-        batchBtn.classList.add('bg-red-600', 'hover:bg-red-700');
-    }
-    
-    showToast(`开始批量处理 ${total} 个候选人`, 'info');
-    
-    for (let i = 0; i < cards.length; i++) {
-        // Check if user requested stop
-        if (window.stopBatchProcessing) {
-            showToast(`批量处理已停止 (${processed}/${total} 完成)`, 'warning');
-            break;
-        }
-        
-        const card = cards[i];
-        const cardData = JSON.parse(card.getAttribute('hx-vals'));
-        const name = cardData.name || `候选人 ${i + 1}`;
-        
-        showToast(`正在处理候选人 ${i + 1}/${total}: ${name}`, 'info');
-        
-        try {
-            const detailPane = document.getElementById('detail-pane');
-            if (!detailPane) {
-                throw new Error('Detail pane not found');
-            }
-            
-            // Set up event listeners BEFORE triggering HTMX click
-            // This ensures we catch the event even if process_candidate() completes quickly
-            const processingPromise = new Promise((resolve, reject) => {
-                const timeout = setTimeout(() => {
-                    document.removeEventListener('candidate:processing-complete', onComplete);
-                    document.removeEventListener('candidate:processing-error', onError);
-                    reject(new Error('Processing timeout (180s)'));
-                }, 180000); // 180 second timeout
-                
-                const onComplete = (event) => {
-                    clearTimeout(timeout);
-                    document.removeEventListener('candidate:processing-complete', onComplete);
-                    document.removeEventListener('candidate:processing-error', onError);
-                    resolve(event.detail);
-                };
-                
-                const onError = (event) => {
-                    clearTimeout(timeout);
-                    document.removeEventListener('candidate:processing-complete', onComplete);
-                    document.removeEventListener('candidate:processing-error', onError);
-                    reject(new Error(event.detail.error || 'Processing failed'));
-                };
-                
-                document.addEventListener('candidate:processing-complete', onComplete, { once: true });
-                document.addEventListener('candidate:processing-error', onError, { once: true });
-            });
-            
-            // Wait for HTMX swap to complete
-            await new Promise((resolve, reject) => {
-                const timeout = setTimeout(() => {
-                    detailPane.removeEventListener('htmx:afterSwap', onSwap);
-                    detailPane.removeEventListener('htmx:responseError', onError);
-                    reject(new Error('HTMX swap timeout'));
-                }, 10000); // 10 second timeout for swap
-                
-                const onSwap = () => {
-                    clearTimeout(timeout);
-                    detailPane.removeEventListener('htmx:afterSwap', onSwap);
-                    detailPane.removeEventListener('htmx:responseError', onError);
-                    // Wait a bit for DOM to be ready
-                    setTimeout(resolve, 200);
-                };
-                
-                const onError = (evt) => {
-                    clearTimeout(timeout);
-                    detailPane.removeEventListener('htmx:afterSwap', onSwap);
-                    detailPane.removeEventListener('htmx:responseError', onError);
-                    reject(new Error(evt.detail.error || 'HTMX request failed'));
-                };
-                
-                detailPane.addEventListener('htmx:afterSwap', onSwap, { once: true });
-                detailPane.addEventListener('htmx:responseError', onError, { once: true });
-                
-                // Trigger HTMX click
-                htmx.trigger(card, 'click');
-            });
-            
-            // Wait for process_candidate() to complete
-            await processingPromise;
-            
-            processed++;
-            showToast(`✅ ${name} 处理完成 (${processed}/${total})`, 'success');
-        } catch (error) {
-            failed++;
-            console.error(`Failed to process candidate ${i + 1}:`, error);
-            showToast(`❌ ${name} 处理失败: ${error.message}`, 'error');
-            // Continue to next candidate
-        }
-    }
-    
-    // Re-enable candidate cards
-    cards.forEach(card => {
-        card.style.pointerEvents = '';
-        card.style.opacity = '';
-    });
-    
-    // Reset batch processing flag
-    window.batchProcessingActive = false;
-    window.stopBatchProcessing = false;
-    
-    // Reset button
-    if (batchBtn) {
-        batchBtn.disabled = false;
-        batchBtn.textContent = '全部分析';
-        batchBtn.onclick = processAllCandidates;
-        batchBtn.classList.remove('bg-red-600', 'hover:bg-red-700');
-        batchBtn.classList.add('bg-purple-600', 'hover:bg-purple-700');
-    }
-    
-    // Final summary
-    const summary = `批量处理完成: 成功 ${processed}/${total}, 失败 ${failed}`;
-    showToast(summary, processed === total ? 'success' : 'warning');
-}
-
-function stopBatchProcessingHandler() {
-    window.stopBatchProcessing = true;
-    const batchBtn = document.getElementById('batch-analyze-btn');
-    if (batchBtn) {
-        batchBtn.disabled = true;
-        batchBtn.textContent = '正在停止...';
-    }
-    showToast('正在停止批量处理...', 'info');
-}
-
-// Make function globally available
-window.processAllCandidates = processAllCandidates;
+// Batch processing functions are now in app.js
 
 // Trigger workflow when this partial is loaded via HTMX
 // Since this script runs when HTMX swaps content, we can call it directly

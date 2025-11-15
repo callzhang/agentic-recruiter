@@ -3,6 +3,51 @@
 {% block title %}岗位画像 - BOSS招聘助手{% endblock %}
 
 {% block content %}
+<!-- Confirm Modal (matching index.html style) -->
+<div x-data="{ 
+        get modal() { return Alpine.store('confirmModal'); }
+     }" 
+     x-show="modal.show"
+     x-transition:enter="transition ease-out duration-300"
+     x-transition:enter-start="opacity-0"
+     x-transition:enter-end="opacity-100"
+     x-transition:leave="transition ease-in duration-200"
+     x-transition:leave-start="opacity-100"
+     x-transition:leave-end="opacity-0"
+     class="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50"
+     style="display: none;"
+     @keydown.escape.window="modal.cancel()">
+    <div class="bg-white rounded-lg shadow-2xl max-w-md w-full mx-4"
+         x-transition:enter="transition ease-out duration-300"
+         x-transition:enter-start="opacity-0 transform scale-95"
+         x-transition:enter-end="opacity-100 transform scale-100"
+         x-transition:leave="transition ease-in duration-200"
+         x-transition:leave-start="opacity-100 transform scale-100"
+         x-transition:leave-end="opacity-0 transform scale-95"
+         @click.away="modal.cancel()">
+        <div class="p-6">
+            <div class="flex items-center mb-4">
+                <div class="w-10 h-10 bg-yellow-100 rounded-full flex items-center justify-center mr-3">
+                    <span class="text-2xl">⚠️</span>
+                </div>
+                <h3 class="text-xl font-bold text-gray-800" x-text="modal.title"></h3>
+            </div>
+            <div class="mb-6">
+                <p class="text-gray-700 leading-relaxed whitespace-pre-line" x-text="modal.message"></p>
+            </div>
+            <div class="flex justify-end">
+                <button @click="modal.cancel()" 
+                        class="px-6 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition font-medium mr-3">
+                    取消
+                </button>
+                <button @click="modal.confirm()" 
+                        class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-medium">
+                    确定
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
 <div class="space-y-6">
     <!-- Page header -->
     <div class="bg-white rounded-lg shadow p-6">
@@ -46,8 +91,15 @@ async function loadJobsData() {
     try {
         const response = await fetch('/jobs/api/list');
         const result = await response.json();
+        
         if (result.success) {
-            jobsData = result.data;
+            // Sort by updated_at in descending order (most recent first)
+            // Backend already sorts, but ensure frontend maintains order
+            jobsData = result.data.sort((a, b) => {
+                const dateA = new Date(a.updated_at || a.created_at || 0);
+                const dateB = new Date(b.updated_at || b.created_at || 0);
+                return dateB - dateA; // Descending order (newest first)
+            });
             
             renderJobTabs();
             
@@ -56,8 +108,11 @@ async function loadJobsData() {
             const tabParam = urlParams.get('tab');
             
             if (tabParam) {
-                // Find job by ID
-                const jobIndex = jobsData.findIndex(job => job.job_id === tabParam);
+                // Find job by base_job_id (remove _vN suffix from both)
+                const jobIndex = jobsData.findIndex(job => {
+                    const jobBaseId = job.base_job_id || getBaseJobId(job.job_id || '');
+                    return jobBaseId === tabParam;
+                });
                 if (jobIndex !== -1) {
                     
                     switchToJob(jobIndex);
@@ -91,10 +146,12 @@ function renderJobTabs() {
     // Add existing job tabs
     jobsData.forEach((job, index) => {
         const activeClass = index === currentJobIndex ? 'active bg-blue-50 border-blue-500 text-blue-700' : 'inactive bg-gray-50 border-gray-300 text-gray-700';
+        // Display base job_id (remove _vN suffix) for tab display
+        const displayJobId = job.base_job_id || getBaseJobId(job.job_id || '');
         tabsHtml += `
             <button class="job-tab px-4 py-2 border-b-2 ${activeClass} hover:bg-blue-50 transition-colors"
                     onclick="switchToJob(${index})">
-                ${job.position || job.job_id || 'Unknown'}
+                ${job.position || displayJobId || 'Unknown'}
             </button>
         `;
     });
@@ -119,9 +176,12 @@ function switchToJob(jobIndex) {
     // Update URL
     const url = new URL(window.location);
     if (jobIndex < jobsData.length) {
-        url.searchParams.set('tab', jobsData[jobIndex].job_id);
+        // Use base_job_id for URL (remove _vN suffix)
+        const job = jobsData[jobIndex];
+        const baseJobId = job.base_job_id || getBaseJobId(job.job_id || '');
+        url.searchParams.set('tab', baseJobId);
         // Load existing job
-        loadJobForm(jobsData[jobIndex]);
+        loadJobForm(job);
     } else {
         url.searchParams.delete('tab');
         // Load new job form
@@ -130,25 +190,74 @@ function switchToJob(jobIndex) {
     window.history.pushState({}, '', url);
 }
 
+// Helper function to extract base job_id
+function getBaseJobId(jobId) {
+    return jobId.replace(/_v\d+$/, '');
+}
+
 // Load job form
-function loadJobForm(job) {
+async function loadJobForm(job) {
+    // Extract base job_id from job.job_id (remove _vN suffix)
+    const baseJobId = getBaseJobId(job.job_id || job.base_job_id || '');
+    const currentVersion = job.version || 1;
+    const isCurrent = job.current !== false; // Default to true if not specified
+    
+    // Fetch all versions
+    let versions = [];
+    try {
+        const versionsResponse = await fetch(`/jobs/${baseJobId}/versions`);
+        const versionsResult = await versionsResponse.json();
+        
+        if (versionsResult.success) {
+            versions = versionsResult.data;
+        }
+    } catch (error) {
+        console.error('Failed to load versions:', error);
+    }
+    
     const content = document.getElementById('job-content');
     content.innerHTML = `
         <!-- Job form content -->
         <div class="max-w-6xl mx-auto space-y-6">
             <div class="bg-white rounded-lg shadow-lg p-6">
                 <form id="job-form" onsubmit="saveJob(event)">
-                    <input type="hidden" name="job_id" value="${job.job_id}">
+                    <input type="hidden" name="job_id" value="${baseJobId}">
                     
                     <!-- Basic Information -->
                     <div class="space-y-4">
-                        <h2 class="text-xl font-semibold text-gray-800">基本信息</h2>
+                        <div class="flex items-center justify-between">
+                            <div class="flex items-center gap-3">
+                                <h2 class="text-xl font-semibold text-gray-800">基本信息</h2>
+                                <!-- Version tag - always visible -->
+                                <span class="px-2 py-1 bg-blue-100 text-blue-700 rounded-md text-xs font-medium">
+                                    v${currentVersion}${isCurrent ? ' (当前版本)' : ' (历史版本)'}
+                                </span>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                ${versions.length > 1 ? `
+                                <select id="version-selector" onchange="switchVersion('${baseJobId}', this.value)" 
+                                        class="px-3 py-1 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 bg-white">
+                                    ${versions.map(v => `
+                                        <option value="${v.version}" ${v.version === currentVersion ? 'selected' : ''}>
+                                            v${v.version} ${v.current ? '(当前)' : ''} - ${new Date(v.created_at).toLocaleDateString('zh-CN')}
+                                        </option>
+                                    `).join('')}
+                                </select>
+                                ` : ''}
+                                ${!isCurrent ? `
+                                <button type="button" onclick="useThisVersion('${baseJobId}', ${currentVersion})" 
+                                        class="px-4 py-1 bg-green-600 text-white rounded-lg hover:bg-green-700 text-sm font-medium shadow-sm">
+                                    切换至该版本
+                                </button>
+                                ` : ''}
+                            </div>
+                        </div>
                         
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div>
                                 <label for="job_id" class="block text-sm font-medium text-gray-700 mb-2">岗位 ID *</label>
                                 <input type="text" id="job_id" name="job_id" required readonly
-                                       value="${job.job_id}"
+                                       value="${baseJobId}"
                                        class="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-100 text-gray-600 cursor-not-allowed"
                                        placeholder="例如: python_developer">
                             </div>
@@ -288,9 +397,10 @@ function loadJobForm(job) {
                             💾 保存
                         </button>
                         
-                        <button type="button" onclick="deleteJob('${job.job_id}')" 
-                                class="px-6 py-3 bg-red-600 text-white rounded-lg hover:bg-red-700 font-medium">
-                            🗑️ 删除岗位
+                        <button type="button" onclick="deleteJob('${baseJobId}', ${currentVersion}, ${versions.length})" 
+                                class="px-6 py-3 rounded-lg font-medium ${versions.length <= 1 ? 'bg-gray-400 text-gray-200 cursor-not-allowed' : 'bg-red-600 text-white hover:bg-red-700'}"
+                                ${versions.length <= 1 ? 'disabled title="至少需要保留一个版本"' : ''}>
+                            🗑️ 删除当前版本
                         </button>
                     </div>
                 </form>
@@ -524,14 +634,14 @@ async function saveJob(event) {
     const candidateFiltersEl = document.getElementById('candidate_filters_json');
     if (candidateFiltersEl && candidateFiltersEl.value.trim()) {
         if (!validateCandidateFilters()) {
-            alert('候选人筛选条件 JSON 格式错误，请修正后再保存');
+            showToast('候选人筛选条件 JSON 格式错误，请修正后再保存', 'error');
             candidateFiltersEl.focus();
             return;
         }
         try {
             jobData.candidate_filters = JSON.parse(candidateFiltersEl.value);
         } catch (e) {
-            alert('候选人筛选条件 JSON 格式错误: ' + e.message);
+            showToast('候选人筛选条件 JSON 格式错误: ' + e.message, 'error');
             candidateFiltersEl.focus();
             return;
         }
@@ -550,8 +660,10 @@ async function saveJob(event) {
     
     try {
         // Determine if this is a new job or an update
-        const isNewJob = currentJobIndex === -1;
-        const endpoint = isNewJob ? '/jobs/create' : `/jobs/${jobsData[currentJobIndex].job_id}/update`;
+        const isNewJob = currentJobIndex === -1 || currentJobIndex >= jobsData.length;
+        // Extract base job_id from form (remove _vN suffix if present)
+        const baseJobId = getBaseJobId(jobData.job_id || '');
+        const endpoint = isNewJob ? '/jobs/create' : `/jobs/${baseJobId}/update`;
         
         const response = await fetch(endpoint, {
             method: 'POST',
@@ -563,17 +675,15 @@ async function saveJob(event) {
         
         const result = await response.json();
         
-        
         if (result.success) {
-            alert('岗位已保存');
+            showToast('岗位已保存', 'success');
             // Reload jobs data to get fresh data from server
             await loadJobsData();
         } else {
-            alert('保存失败: ' + (result.error || '未知错误'));
+            showToast('保存失败: ' + (result.error || '未知错误'), 'error');
         }
     } catch (error) {
-        
-        alert('保存失败: ' + error.message);
+        showToast('保存失败: ' + error.message, 'error');
     }
 }
 
@@ -592,14 +702,14 @@ async function createJob(event) {
     const candidateFiltersEl = document.getElementById('candidate_filters_json');
     if (candidateFiltersEl && candidateFiltersEl.value.trim()) {
         if (!validateCandidateFilters()) {
-            alert('候选人筛选条件 JSON 格式错误，请修正后再保存');
+            showToast('候选人筛选条件 JSON 格式错误，请修正后再保存', 'error');
             candidateFiltersEl.focus();
             return;
         }
         try {
             jobData.candidate_filters = JSON.parse(candidateFiltersEl.value);
         } catch (e) {
-            alert('候选人筛选条件 JSON 格式错误: ' + e.message);
+            showToast('候选人筛选条件 JSON 格式错误: ' + e.message, 'error');
             candidateFiltersEl.focus();
             return;
         }
@@ -627,56 +737,149 @@ async function createJob(event) {
         
         const result = await response.json();
         
-        
         if (result.success) {
-            alert('岗位已创建');
+            showToast('岗位已创建', 'success');
             // Reload jobs data to get fresh data from server
             await loadJobsData();
-            // Switch to the last job (newly created)
-            switchToJob(jobsData.length - 1);
+            // Find the newly created job by base_job_id
+            const baseJobId = getBaseJobId(jobData.job_id || '');
+            const jobIndex = jobsData.findIndex(j => {
+                const jBaseId = j.base_job_id || getBaseJobId(j.job_id || '');
+                return jBaseId === baseJobId;
+            });
+            if (jobIndex !== -1) {
+                switchToJob(jobIndex);
+            } else if (jobsData.length > 0) {
+                switchToJob(jobsData.length - 1);
+            }
         } else {
-            alert('创建失败: ' + (result.error || '未知错误'));
+            showToast('创建失败: ' + (result.error || '未知错误'), 'error');
         }
     } catch (error) {
         console.error('Create error:', error);
-        alert('创建失败: ' + error.message);
+        showToast('创建失败: ' + error.message, 'error');
     }
 }
 
-// Delete job
-async function deleteJob(job_id) {
-    if (confirm('⚠️ 您确定要删除这个岗位吗？\n此操作无法撤销！')) {
-        try {
-            const response = await fetch(`/jobs/${job_id}/delete`, {
-                method: 'DELETE',
-                headers: {
-                    'Content-Type': 'application/json',
-                }
-            });
-            
-            const result = await response.json();
-            
-            if (result.success) {
-                alert('岗位已删除');
-                // Reload jobs data to get fresh data from server
-                await loadJobsData();
-                if (jobsData.length > 0) {
-                    switchToJob(0);
-                } else {
-                    loadNewJobForm();
-                }
+// Delete job version
+async function deleteJob(job_id, version, totalVersions) {
+    // Extract base job_id (remove _vN suffix if present)
+    const baseJobId = getBaseJobId(job_id);
+    
+    // Check if it's the only version
+    if (totalVersions <= 1) {
+        showToast('至少需要保留一个版本', 'warning');
+        return;
+    }
+    
+    const confirmed = await showConfirm(`您确定要删除版本 v${version} 吗？\n此操作无法撤销！`, '删除版本');
+    if (!confirmed) {
+        return;
+    }
+    
+    try {
+        const response = await fetch(`/jobs/${baseJobId}/delete`, {
+            method: 'DELETE',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ version: version })
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+            showToast(`版本 v${version} 已删除`, 'success');
+            // Reload jobs data to get fresh data from server
+            await loadJobsData();
+            // Find the job index and switch to it (will show the current version)
+            const jobIndex = jobsData.findIndex(j => getBaseJobId(j.job_id || j.base_job_id || '') === baseJobId);
+            if (jobIndex !== -1) {
+                switchToJob(jobIndex);
+            } else if (jobsData.length > 0) {
+                switchToJob(0);
             } else {
-                alert('删除失败: ' + result.error);
+                loadNewJobForm();
             }
-        } catch (error) {
-            alert('删除失败: ' + error);
+        } else {
+            showToast('删除失败: ' + (result.error || '未知错误'), 'error');
         }
+    } catch (error) {
+        console.error('Delete version error:', error);
+        showToast('删除失败: ' + error.message, 'error');
     }
 }
 
 // Create new job
 function createNewJob() {
     switchToJob(jobsData.length);
+}
+
+// Switch version
+async function switchVersion(baseJobId, version) {
+    const versionNum = parseInt(version);
+    if (isNaN(versionNum)) return;
+    
+    // Find the version in the versions list
+    try {
+        const versionsResponse = await fetch(`/jobs/${baseJobId}/versions`);
+        const versionsResult = await versionsResponse.json();
+        
+        if (versionsResult.success) {
+            const selectedVersion = versionsResult.data.find(v => v.version === versionNum);
+            if (selectedVersion) {
+                // Load the selected version's data
+                loadJobForm(selectedVersion);
+            }
+        }
+    } catch (error) {
+        console.error('Failed to switch version:', error);
+        showToast('切换版本失败: ' + error.message, 'error');
+    }
+}
+
+// Use this version (make it current)
+async function useThisVersion(baseJobId, version) {
+    // Ensure version is a number
+    const versionNum = parseInt(version);
+    if (isNaN(versionNum)) {
+        console.error('Invalid version number:', version);
+        showToast('无效的版本号', 'error');
+        return;
+    }
+    
+    const confirmed = await showConfirm(`确定要将版本 v${versionNum} 设为当前版本吗？`, '切换当前版本');
+    if (!confirmed) {
+        return;
+    }
+    
+    try {
+        const response = await fetch(`/jobs/${baseJobId}/switch-version`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ version: versionNum })
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+            showToast('版本切换成功', 'success');
+            // Reload jobs data to get fresh data from server
+            await loadJobsData();
+            // Find the job index and switch to it
+            const jobIndex = jobsData.findIndex(j => getBaseJobId(j.job_id || j.base_job_id || '') === baseJobId);
+            if (jobIndex !== -1) {
+                switchToJob(jobIndex);
+            }
+        } else {
+            showToast('切换版本失败: ' + (result.error || '未知错误'), 'error');
+        }
+    } catch (error) {
+        console.error('Switch version error:', error);
+        showToast('切换版本失败: ' + error.message, 'error');
+    }
 }
 </script>
 

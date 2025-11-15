@@ -13,8 +13,6 @@ Steps (in order):
 
 This module is intentionally verbose and defensive.
 """
-
-from __future__ import annotations
 import re, json
 import time
 from textwrap import dedent
