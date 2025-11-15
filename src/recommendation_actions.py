@@ -315,7 +315,7 @@ async def apply_filters(frame: Frame, filters: Dict[str, Any]) -> bool:
     if await filter_panel.count() == 0:
         # open the filter panel
         await filter_wrap.click(timeout=1000)
-        await page.wait_for_timeout(500)
+        await frame.wait_for_timeout(500)
         # Wait for panel to appear
         await filter_panel.wait_for(state="visible", timeout=1000)
     # 取消上次设置

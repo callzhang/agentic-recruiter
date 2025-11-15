@@ -55,8 +55,10 @@ Boss直聘自动化机器人 - 基于 Playwright 的智能招聘助手，集成 
 
 - **后端**: FastAPI + Playwright (异步)
 - **前端**: FastAPI Web UI (Jinja2 templates + Alpine.js/HTMX)
-- **AI**: OpenAI GPT-4 (Conversations API)
-- **数据库**: Zilliz (Milvus 向量数据库)
+- **AI**: OpenAI GPT-5-mini (Responses API)
+- **Agent 框架**: LangGraph (双 Agent 架构)
+- **数据库**: Zilliz (Milvus 向量数据库) - 内置 OpenAI 嵌入函数
+- **通知**: DingTalk Webhook
 - **监控**: Sentry (错误追踪)
 - **配置**: YAML (config.yaml + secrets.yaml)
 
@@ -88,6 +90,7 @@ AI 助手功能
 - `generate_message()` - 生成定制化消息
 - `init_chat()` - 创建 OpenAI Conversation
 - `upsert_candidate()` - 存储到 Zilliz
+- `send_dingtalk_notification()` - 发送 DingTalk 通知
 
 ### 5. src/candidate_store.py
 Zilliz 数据存储
@@ -95,11 +98,22 @@ Zilliz 数据存储
 - 向量搜索
 - CRUD 操作
 - 字符串查询语法（使用双引号和 AND 运算符）
+- 支持 `generated_message` 字段存储 AI 生成的消息
+- 按 `updated_at` 排序，返回最新匹配的候选人
 
-### 6. src/config.py
+### 6. src/jobs_store.py
+岗位画像存储（Zilliz）
+- 岗位信息版本管理
+- 支持岗位版本历史（`job_id_v1`, `job_id_v2`, ...）
+- `current` 字段标识当前使用的版本
+- 内置 OpenAI 嵌入函数（`text-embedding-3-small`）
+- 自动向量生成
+
+### 7. src/config.py
 配置管理
 - `config.yaml` - 非敏感配置（URLs, 端口等）
 - `secrets.yaml` - 敏感配置（API keys, 密码）
+- `get_dingtalk_config()` - 获取 DingTalk 配置
 
 ## 核心设计
 
@@ -364,14 +378,16 @@ settings.get_zilliz_config()
 - Web UI 通过模板渲染，业务逻辑在服务端
 - REST API 提供程序化访问接口
 
-### 3. OpenAI Conversations API
-每个候选人一个 Conversation，持久化对话历史，保持上下文连续性。使用 `conversation_id` 作为主要标识符，同时保持对 `thread_id` 的向后兼容。
+### 3. OpenAI Responses API
+每个候选人一个 Conversation，持久化对话历史，保持上下文连续性。使用 `conversation_id` 作为主要标识符，同时保持对 `thread_id` 的向后兼容。支持结构化输出（JSON Schema）用于分析任务。
 
 ### 4. Zilliz 向量存储
 - 存储简历文本 + Embedding
 - 快速相似度搜索
 - 缓存策略（避免重复 Playwright 操作）
 - 使用正确的 Milvus 查询语法（双引号字符串，AND 运算符）
+- **岗位集合**：内置 OpenAI `text-embedding-3-small` 嵌入函数，自动生成向量
+- **候选人集合**：支持 `generated_message` 字段，按 `updated_at` 排序
 
 ### 5. 异常驱动的错误处理
 - 不使用 `{"success": bool}` 包装
@@ -387,7 +403,10 @@ settings.get_zilliz_config()
 | FastAPI 服务 | ✅ | 端口 5001, CDP 模式 |
 | Web UI | ✅ | FastAPI Web UI (Jinja2) |
 | 浏览器连接 | ✅ | 外部 Chrome CDP |
-| AI 助手 | ✅ | OpenAI Conversations API + Zilliz |
+| AI 助手 | ✅ | OpenAI Responses API + Zilliz |
+| Agent 系统 | ✅ | LangGraph 双 Agent 架构 |
+| 岗位版本管理 | ✅ | 支持版本历史和切换 |
+| DingTalk 通知 | ✅ | 自动通知优质候选人 |
 | Sentry 追踪 | ✅ | 错误监控 |
 
 ## 快速查找

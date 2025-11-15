@@ -18,6 +18,7 @@ from src.candidate_store import get_candidates, get_candidate_id_by_dict, upsert
 from src.jobs_store import get_all_jobs, get_job_by_id as get_job_by_id_from_store
 from src.global_logger import logger
 from src import chat_actions, assistant_actions, assistant_utils, recommendation_actions
+from src.assistant_actions import send_dingtalk_notification
 import boss_service
 
 router = APIRouter()
@@ -503,6 +504,42 @@ async def send_message(
 #         return HTMLResponse(content='<div class="text-green-600 p-4">✅ 简历请求已发送</div>')
 #     else:
 #         return HTMLResponse(content='<div class="text-red-500 p-4">❌ 请求失败</div>', status_code=500)
+
+#--------------------------------------------------
+# DingTalk Notification
+#--------------------------------------------------
+
+@router.post("/notify", response_class=JSONResponse)
+async def notify_hr(
+    title: str = Form(...),
+    message: str = Form(...),
+):
+    """Send DingTalk notification to HR.
+    
+    Args:
+        title: Notification title
+        message: Notification message in markdown format
+        
+    Returns:
+        JSONResponse: Success status
+    """
+    try:
+        success = send_dingtalk_notification(title=title, message=message)
+        if success:
+            return JSONResponse(
+                content={"success": True, "message": "通知发送成功"}
+            )
+        else:
+            return JSONResponse(
+                status_code=500,
+                content={"success": False, "error": "通知发送失败"}
+            )
+    except Exception as exc:
+        logger.exception("Failed to send DingTalk notification")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": f"通知发送失败: {str(exc)}"}
+        )
 
 
 @router.post("/fetch-online-resume", response_class=HTMLResponse)

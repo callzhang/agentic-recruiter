@@ -1,8 +1,13 @@
 # 自动化工作流
 
-Boss直聘自动化机器人的 4 个独立工作流入口
+Boss直聘自动化机器人的工作流系统
 
 ## 概述
+
+系统提供两种工作流模式：
+
+1. **半自动化工作流**（候选人管理页面）：HR 手动触发，AI 自动执行分析、评分、消息生成
+2. **全自动化工作流**（Agent 智能体系统）：基于 LangGraph 的完全自主 Agent 系统
 
 每个工作流可独立执行，处理不同来源的候选人，支持阶段双向转换。
 
@@ -71,16 +76,20 @@ PASS ↔ GREET ↔ SEEK ↔ CONTACT
 
 ```python
 generate_message(
-    thread_id=...,
-    assistant_id=...,
-    purpose="GREET_ACTION|CHAT_ACTION|ANALYZE_ACTION|FOLLOWUP_ACTION"
+    conversation_id=...,
+    input_message=...,
+    purpose="analyze|chat|greet|followup|contact"
 )
 ```
 
-- **GREET_ACTION**: 首次打招呼
-- **CHAT_ACTION**: 常规对话回复
-- **ANALYZE_ACTION**: 分析候选人
-- **FOLLOWUP_ACTION**: 跟进催促
+**支持的 Purpose**:
+- **analyze** → `ANALYZE_ACTION`: 分析候选人（返回结构化评分）
+- **chat** → `ASK_FOR_RESUME_DETAILS_ACTION`: 常规对话回复，挖掘简历细节
+- **greet** → `GREET_ACTION`: 首次打招呼
+- **followup** → `ASK_FOR_RESUME_DETAILS_ACTION`: 跟进催促
+- **contact** → `CONTACT_ACTION`: 请求联系方式
+
+**注意**: 使用 `conversation_id` 作为主要标识符（替代 `thread_id`），通过 `init_chat()` 创建。
 
 ## 故障排查
 
