@@ -99,6 +99,15 @@ def is_chrome_running(cdp_port: str) -> bool:
     except Exception:
         return False
 
+def wait_for_chrome_cdp(cdp_port: str, timeout: int = 30) -> bool:
+    """等待Chrome CDP端点准备就绪"""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if is_chrome_running(cdp_port):
+            return True
+        time.sleep(0.5)
+    return False
+
 def kill_existing_chrome(user_data: str):
     """杀死现有的Chrome进程（基于user-data-dir）"""
     try:
@@ -222,8 +231,22 @@ def start_service(*, scheduler_options: Optional[Dict[str, Any]] | None = None):
 
         # 检查Chrome是否已经在运行
         if is_chrome_running(cdp_port):
-            print(f"[*] Chrome已在端口 {cdp_port} 运行，跳过启动")
+            print(f"[*] Chrome已在端口 {cdp_port} 运行，验证CDP端点...")
+            if not wait_for_chrome_cdp(cdp_port, timeout=5):
+                print(f"[!] 警告: 检测到Chrome运行，但CDP端点未响应")
+                print(f"[!] 将尝试重新启动Chrome...")
+                kill_existing_chrome(user_data)
+                time.sleep(1)
+                # Fall through to start Chrome
+            else:
+                print(f"[+] Chrome CDP端点已验证")
+                # Skip Chrome startup
+                chrome_started = True
         else:
+            chrome_started = False
+        
+        # Start Chrome if not already running and verified
+        if not chrome_started:
             print(f"[*] 启动Chrome (CDP端口: {cdp_port})...")
             # 清理可能存在的旧Chrome进程
             kill_existing_chrome(user_data)
@@ -265,8 +288,12 @@ def start_service(*, scheduler_options: Optional[Dict[str, Any]] | None = None):
             ]
             try:
                 subprocess.Popen(chrome_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, preexec_fn=os.setsid)
-                time.sleep(2.0)  # 增加等待时间确保Chrome完全启动
-                print(f"[+] Chrome启动完成")
+                print(f"[*] 等待Chrome CDP端点准备就绪...")
+                if wait_for_chrome_cdp(cdp_port, timeout=30):
+                    print(f"[+] Chrome启动完成，CDP端点已就绪")
+                else:
+                    print(f"[!] 警告: Chrome启动超时，CDP端点可能未就绪")
+                    print(f"[!] 服务将继续启动，但可能无法连接到浏览器")
             except Exception as e:
                 print(f"[!] Chrome启动失败: {e}")
                 return False
@@ -336,7 +363,14 @@ def start_service(*, scheduler_options: Optional[Dict[str, Any]] | None = None):
                 
                 try:
                     if sys.platform == "darwin":
-                        subprocess.Popen(["open", service_url])
+                        # Open Chrome specifically to avoid Safari's HTTPS-Only mode blocking HTTP URLs
+                        # Chrome is already being used for CDP, so it should be available
+                        chrome_path = "/Applications/Google Chrome.app"
+                        if os.path.exists(chrome_path):
+                            subprocess.Popen(["open", "-a", "Google Chrome", service_url])
+                        else:
+                            # Fall back to default browser (may fail with Safari HTTPS-Only mode)
+                            subprocess.Popen(["open", service_url])
                     elif sys.platform == "win32":
                         subprocess.Popen(["start", service_url], shell=True)
                     else:

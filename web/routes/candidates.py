@@ -442,6 +442,7 @@ async def generate_message(
             chat_id=chat_id,
             mode=mode,
             conversation_id=conversation_id,
+            generated_message=message,
             metadata={'history': chat_history + [new_message]},
         )
     else:
