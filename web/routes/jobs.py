@@ -269,13 +269,8 @@ async def delete_job(job_id: str, request: Request):
             content={"success": False, "error": "岗位不存在"}
         )
     
-    # Get all versions to check if this is the only one
+    # Get all versions (allow deletion even if only 1 version left - frontend handles confirmation)
     all_versions = get_job_versions(base_job_id)
-    if len(all_versions) <= 1:
-        return JSONResponse(
-            status_code=400,
-            content={"success": False, "error": "至少需要保留一个版本"}
-        )
     
     # Check if the version exists
     version_exists = any(v.get("version") == version for v in all_versions)
@@ -285,21 +280,52 @@ async def delete_job(job_id: str, request: Request):
             content={"success": False, "error": f"版本 v{version} 不存在"}
         )
     
+    # Check if the version to delete is the current one
+    version_to_delete = next((v for v in all_versions if v.get("version") == version), None)
+    if not version_to_delete:
+        return JSONResponse(
+            status_code=404,
+            content={"success": False, "error": f"版本 v{version} 不存在"}
+        )
+    
+    is_deleting_current = version_to_delete.get("current", False)
+    
     # Delete the specific version
     if delete_job_version(base_job_id, version):
-        # If we deleted the current version, switch to the latest remaining version
         remaining_versions = get_job_versions(base_job_id)
         if remaining_versions:
-            # Find the version that was current, or use the latest
+            # Always ensure there's a current version after deletion
             current_version = next((v for v in remaining_versions if v.get("current")), None)
-            if not current_version:
-                # No current version, set the latest as current
-                latest = remaining_versions[0]  # Already sorted by created_at DESC
-                switch_job_version(base_job_id, latest.get("version"))
-        
-        return JSONResponse(
-            content={"success": True, "message": f"版本 v{version} 已删除"}
-        )
+            
+            if not current_version or is_deleting_current:
+                # No current version found, or we deleted the current version
+                if is_deleting_current:
+                    # If we deleted the current version N, try to set N-1 as current
+                    # If N-1 doesn't exist, set the highest remaining version
+                    version_minus_one = next((v for v in remaining_versions if v.get("version") == version - 1), None)
+                    if version_minus_one:
+                        # Set N-1 as current
+                        switch_job_version(base_job_id, version - 1)
+                    else:
+                        # N-1 doesn't exist, set the highest remaining version as current
+                        remaining_versions_sorted = sorted(remaining_versions, key=lambda v: v.get("version", 0), reverse=True)
+                        if remaining_versions_sorted:
+                            switch_job_version(base_job_id, remaining_versions_sorted[0].get("version"))
+                else:
+                    # We deleted a non-current version, but there's no current version
+                    # Set the highest remaining version as current
+                    remaining_versions_sorted = sorted(remaining_versions, key=lambda v: v.get("version", 0), reverse=True)
+                    if remaining_versions_sorted:
+                        switch_job_version(base_job_id, remaining_versions_sorted[0].get("version"))
+            
+            return JSONResponse(
+                content={"success": True, "message": f"版本 v{version} 已删除"}
+            )
+        else:
+            # Last version deleted - job is completely removed
+            return JSONResponse(
+                content={"success": True, "message": "岗位已删除 (最后版本已移除)"}
+            )
     else:
         return JSONResponse(
             status_code=500,

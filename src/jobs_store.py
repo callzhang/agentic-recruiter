@@ -389,6 +389,7 @@ def switch_job_version(base_job_id: str, version: int) -> bool:
     """Switch the current version of a job.
     
     Sets all versions' current=False, then sets the selected version's current=True.
+    Includes position field in upsert to avoid DataNotMatchException.
     
     Args:
         base_job_id: Base job ID without version suffix
@@ -408,22 +409,49 @@ def switch_job_version(base_job_id: str, version: int) -> bool:
         logger.warning("Version %d not found for job %s", version, base_job_id)
         return False
 
-    # Set all versions' current=False
+    # Query all versions to get position fields
+    results = _client.query(
+        collection_name=_collection_name,
+        filter=f'job_id >= "{base_job_id}_v" and job_id < "{base_job_id}_w"',
+        output_fields=['job_id', 'position', 'current'],
+        limit=1000
+    )
+    
+    # Create a map of job_id to position for quick lookup
+    job_positions = {job.get("job_id"): job.get("position", "") for job in results if job.get("job_id")}
+
+    # Set all versions' current=False (include position to avoid DataNotMatchException)
     for v in all_versions:
         job_id = v.get("job_id")
         if job_id:
+            job_position = job_positions.get(job_id, "")
+            if job_position:  # Only update if we have the position
+                _client.upsert(
+                    collection_name=_collection_name,
+                    data=[{"job_id": job_id, "position": job_position, "current": False}],
+                    partial_update=True,
+                )
+    
+    # Set target version's current=True (include position to avoid DataNotMatchException)
+    target_position = job_positions.get(target_job_id, "")
+    if target_position:
+        _client.upsert(
+            collection_name=_collection_name,
+            data=[{"job_id": target_job_id, "position": target_position, "current": True}],
+            partial_update=True,
+        )
+    else:
+        # Fallback: query the specific job to get its position
+        target_job = get_job_by_id(target_job_id)
+        if target_job and target_job.get("position"):
             _client.upsert(
                 collection_name=_collection_name,
-                data=[{"job_id": job_id, "current": False}],
+                data=[{"job_id": target_job_id, "position": target_job["position"], "current": True}],
                 partial_update=True,
             )
-    
-    # Set target version's current=True
-    _client.upsert(
-        collection_name=_collection_name,
-        data=[{"job_id": target_job_id, "current": True}],
-        partial_update=True,
-    )
+        else:
+            logger.warning("Could not find position for job %s", target_job_id)
+            return False
     
     logger.debug("Switched job %s to version %d", base_job_id, version)
     return True

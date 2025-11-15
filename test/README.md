@@ -69,7 +69,25 @@ pytest test/test_end_to_end.py -v
 
 ---
 
-#### 4. `test_resume_capture.py`
+#### 4. `test_jobs_comprehensive.py`
+**描述**: Comprehensive tests for job management and versioning  
+**类型**: Unit tests with mocking  
+**覆盖范围**:
+- Job store helper functions (get_base_job_id, etc.)
+- Job CRUD operations (insert, update, get, delete)
+- Job versioning (create versions, switch versions, delete versions)
+- FastAPI job endpoints (create, update, delete, versions, switch-version)
+- Edge cases and error handling
+- Last version deletion logic (N-1 becomes current)
+
+**运行**:
+```bash
+pytest test/test_jobs_comprehensive.py -v
+```
+
+---
+
+#### 5. `test_resume_capture.py`
 **描述**: Resume text capture and grouping logic  
 **类型**: Unit tests  
 **覆盖范围**:
@@ -127,9 +145,15 @@ pip install pytest pytest-cov pytest-asyncio httpx
 
 ---
 
-## 已移除的测试 (Removed Tests - v2.4.0)
+## 已移除的测试 (Removed Tests)
 
-以下测试文件已被移除，因为它们测试的功能不再存在或已过时:
+以下测试文件已被移除，因为它们测试的功能不再存在或已过时，或者已被合并到其他测试文件中:
+
+### ❌ `test_job_versioning.py`
+- **原因**: 所有测试已合并到 `test_jobs_comprehensive.py`
+- **功能**: 岗位版本管理测试（已完全覆盖）
+- **移除日期**: v2.4.2 (2025-11-15)
+- **替代**: 使用 `test_jobs_comprehensive.py`，包含更全面的测试覆盖
 
 ### ❌ `test_decide_pipeline.py`
 - **原因**: 依赖已移除的 `boss_client` 模块
@@ -209,6 +233,11 @@ pip install pytest pytest-cov pytest-asyncio httpx
 
 ## 版本历史 (Version History)
 
+### v2.4.2 (2025-11-15)
+- ✅ 合并 `test_job_versioning.py` 到 `test_jobs_comprehensive.py`
+- ✅ 统一岗位版本管理测试，提高测试覆盖率
+- 📝 更新 README 文档
+
 ### v2.4.0 (2025-11-13)
 - ✅ 更新 `test_boss_service_api.py` 使用 `conversation_id` 替代 `thread_id`
 - ❌ 移除 `test_decide_pipeline.py`（已过时）
@@ -229,6 +258,6 @@ pip install pytest pytest-cov pytest-asyncio httpx
 ---
 
 **维护者**: Boss Zhipin Bot Team  
-**最后更新**: 2025-11-13  
-**当前版本**: v2.4.0
+**最后更新**: 2025-11-15  
+**当前版本**: v2.4.2
 

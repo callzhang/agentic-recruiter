@@ -119,6 +119,52 @@
         </div>
     </div>
     
+    <!-- Delete Job Modal (for deleting last version) -->
+    <div x-data="{ 
+            get modal() { return Alpine.store('deleteJobModal'); }
+         }" 
+         x-show="modal.show"
+         x-transition:enter="transition ease-out duration-300"
+         x-transition:enter-start="opacity-0"
+         x-transition:enter-end="opacity-100"
+         x-transition:leave="transition ease-in duration-200"
+         x-transition:leave-start="opacity-100"
+         x-transition:leave-end="opacity-0"
+         class="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50"
+         style="display: none;"
+         @keydown.escape.window="modal.cancel()">
+        <div class="bg-white rounded-lg shadow-2xl max-w-md w-full mx-4"
+             x-transition:enter="transition ease-out duration-300"
+             x-transition:enter-start="opacity-0 transform scale-95"
+             x-transition:enter-end="opacity-100 transform scale-100"
+             x-transition:leave="transition ease-in duration-200"
+             x-transition:leave-start="opacity-100 transform scale-100"
+             x-transition:leave-end="opacity-0 transform scale-95"
+             @click.away="modal.cancel()">
+            <div class="p-6">
+                <div class="flex items-center mb-4">
+                    <div class="w-10 h-10 bg-red-100 rounded-full flex items-center justify-center mr-3">
+                        <span class="text-2xl">🗑️</span>
+                    </div>
+                    <h3 class="text-xl font-bold text-gray-800" x-text="modal.title"></h3>
+                </div>
+                <div class="mb-6">
+                    <p class="text-gray-700 leading-relaxed whitespace-pre-line" x-text="modal.message"></p>
+                </div>
+                <div class="flex justify-end">
+                    <button @click="modal.cancel()" 
+                            class="px-6 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition font-medium mr-3">
+                        取消
+                    </button>
+                    <button @click="modal.confirm()" 
+                            class="px-6 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition font-medium">
+                        确定要删除这个岗位
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
     <div class="container mx-auto px-4 py-8">
         <div class="space-y-6">
             <!-- Page header -->
@@ -203,12 +249,58 @@
         }
         window.showConfirm = showConfirm;
         
-        // Initialize Alpine store
+        // Special confirm for deleting the last version (green cancel, red confirm)
+        function showDeleteJobConfirm(message, title = '删除岗位') {
+            return new Promise((resolve) => {
+                if (!window.Alpine) {
+                    resolve(false);
+                    return;
+                }
+                const store = Alpine.store('deleteJobModal');
+                if (!store) {
+                    Alpine.store('deleteJobModal', {
+                        show: false,
+                        message: '',
+                        title: '',
+                        resolve: null
+                    });
+                }
+                const modalStore = Alpine.store('deleteJobModal');
+                modalStore.message = message;
+                modalStore.title = title;
+                modalStore.resolve = resolve;
+                modalStore.show = true;
+            });
+        }
+        window.showDeleteJobConfirm = showDeleteJobConfirm;
+        
+        // Initialize Alpine stores
         document.addEventListener('alpine:init', () => {
             Alpine.store('confirmModal', {
                 show: false,
                 message: '',
                 title: '确认',
+                resolve: null,
+                confirm() {
+                    if (this.resolve) {
+                        this.resolve(true);
+                        this.resolve = null;
+                    }
+                    this.show = false;
+                },
+                cancel() {
+                    if (this.resolve) {
+                        this.resolve(false);
+                        this.resolve = null;
+                    }
+                    this.show = false;
+                }
+            });
+            
+            Alpine.store('deleteJobModal', {
+                show: false,
+                message: '',
+                title: '删除岗位',
                 resolve: null,
                 confirm() {
                     if (this.resolve) {
@@ -234,8 +326,7 @@
         // Load jobs data from API
         async function loadJobsData() {
             try {
-                const response = await fetch(`${API_BASE}/jobs/list`);
-                const result = await response.json();
+                const result = await apiCall('/jobs/list');
                 
                 if (result.success) {
                     jobsData = result.data.sort((a, b) => {
@@ -313,9 +404,65 @@
             window.history.pushState({}, '', url);
         }
         
-        // Helper
+        // Helper functions
         function getBaseJobId(jobId) {
             return jobId.replace(/_v\d+$/, '');
+        }
+        
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+        
+        // Extract form data to job object
+        function extractJobDataFromForm() {
+            const form = document.getElementById('job-form');
+            if (!form) return null;
+            const formData = new FormData(form);
+            const jobData = Object.fromEntries(formData.entries());
+            
+            const ddqTextEl = document.getElementById('drill_down_questions_text');
+            jobData.drill_down_questions = ddqTextEl ? ddqTextEl.value : '';
+            
+            const candidateFiltersEl = document.getElementById('candidate_filters_json');
+            if (candidateFiltersEl && candidateFiltersEl.value.trim()) {
+                if (!validateCandidateFilters()) {
+                    showToast('候选人筛选条件 JSON 格式错误，请修正后再保存', 'error');
+                    candidateFiltersEl.focus();
+                    return null;
+                }
+                try {
+                    jobData.candidate_filters = JSON.parse(candidateFiltersEl.value);
+                } catch (e) {
+                    showToast('候选人筛选条件 JSON 格式错误: ' + e.message, 'error');
+                    candidateFiltersEl.focus();
+                    return null;
+                }
+            } else {
+                jobData.candidate_filters = null;
+            }
+            
+            const positiveKeywords = window.tagEditors['positive_keywords'] ? Array.from(window.tagEditors['positive_keywords'].tags) : [];
+            const negativeKeywords = window.tagEditors['negative_keywords'] ? Array.from(window.tagEditors['negative_keywords'].tags) : [];
+            jobData.keywords = {
+                positive: positiveKeywords,
+                negative: negativeKeywords
+            };
+            
+            return jobData;
+        }
+        
+        // API helper
+        async function apiCall(endpoint, method = 'GET', body = null) {
+            const options = {
+                method,
+                headers: { 'Content-Type': 'application/json' }
+            };
+            if (body) options.body = JSON.stringify(body);
+            
+            const response = await fetch(`${API_BASE}${endpoint}`, options);
+            return await response.json();
         }
         
         // Load job form (truncated - full version continues...)
@@ -325,22 +472,15 @@
             const isCurrent = job.current !== false;
             let versions = [];
             try {
-                const versionsResponse = await fetch(`${API_BASE}/jobs/${baseJobId}/versions`);
-                const versionsResult = await versionsResponse.json();
-                if (versionsResult.success) {
-                    versions = versionsResult.data;
+                const result = await apiCall(`/jobs/${baseJobId}/versions`);
+                if (result.success) {
+                    versions = result.data;
                 }
             } catch (error) {
                 console.error('Failed to load versions:', error);
             }
             
             const content = document.getElementById('job-content');
-            // Escape HTML in job data
-            const escapeHtml = (text) => {
-                const div = document.createElement('div');
-                div.textContent = text;
-                return div.innerHTML;
-            };
             
             content.innerHTML = `
                 <div class="max-w-6xl mx-auto space-y-6">
@@ -454,7 +594,7 @@
                             </div>
                             <div class="space-y-4 mt-8">
                                 <h2 class="text-xl font-semibold text-gray-800">关键词</h2>
-                                <p class="text-sm text-gray-500">用于匹配候选人的关键词，正向关键词表示希望具备的技能，负向关键词表示不希望具备的技能</p>
+                                <p class="text-sm text-gray-500">用于匹配候选人的关键词，正向关键词表示希望具备的技能，负向关键词代表扣分的内容，例如初级能力、泛泛而谈、不匹配的能力等</p>
                                 <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                                     <div>
                                         <label class="block text-sm font-medium text-gray-700 mb-2">正向关键词</label>
@@ -490,8 +630,7 @@
                                     💾 保存
                                 </button>
                                 <button type="button" onclick="deleteJob('${escapeHtml(baseJobId)}', ${currentVersion}, ${versions.length})" 
-                                        class="px-6 py-3 rounded-lg font-medium ${versions.length <= 1 ? 'bg-gray-400 text-gray-200 cursor-not-allowed' : 'bg-red-600 text-white hover:bg-red-700'}"
-                                        ${versions.length <= 1 ? 'disabled' : ''}>
+                                        class="px-6 py-3 rounded-lg font-medium bg-red-600 text-white hover:bg-red-700">
                                     🗑️ 删除当前版本
                                 </button>
                             </div>
@@ -613,7 +752,7 @@
                             </div>
                             <div class="space-y-4 mt-8">
                                 <h2 class="text-xl font-semibold text-gray-800">关键词</h2>
-                                <p class="text-sm text-gray-500">用于匹配候选人的关键词，正向关键词表示希望具备的技能，负向关键词表示不希望具备的技能</p>
+                                <p class="text-sm text-gray-500">用于匹配候选人的关键词，正向关键词表示希望具备的技能，负向关键词代表扣分的内容，例如初级能力、泛泛而谈、不匹配的能力等</p>
                                 <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                                     <div>
                                         <label class="block text-sm font-medium text-gray-700 mb-2">正向关键词</label>
@@ -794,139 +933,67 @@
             }
         }
         
-        // Save job
+        // Save or create job (unified function)
         async function saveJob(event) {
             event.preventDefault();
-            const formData = new FormData(event.target);
-            const jobData = Object.fromEntries(formData.entries());
-            const ddqTextEl = document.getElementById('drill_down_questions_text');
-            jobData.drill_down_questions = ddqTextEl ? ddqTextEl.value : '';
-            const candidateFiltersEl = document.getElementById('candidate_filters_json');
-            if (candidateFiltersEl && candidateFiltersEl.value.trim()) {
-                if (!validateCandidateFilters()) {
-                    showToast('候选人筛选条件 JSON 格式错误，请修正后再保存', 'error');
-                    candidateFiltersEl.focus();
-                    return;
-                }
-                try {
-                    jobData.candidate_filters = JSON.parse(candidateFiltersEl.value);
-                } catch (e) {
-                    showToast('候选人筛选条件 JSON 格式错误: ' + e.message, 'error');
-                    candidateFiltersEl.focus();
-                    return;
-                }
-            } else {
-                jobData.candidate_filters = null;
-            }
-            const positiveKeywords = window.tagEditors['positive_keywords'] ? Array.from(window.tagEditors['positive_keywords'].tags) : [];
-            const negativeKeywords = window.tagEditors['negative_keywords'] ? Array.from(window.tagEditors['negative_keywords'].tags) : [];
-            jobData.keywords = {
-                positive: positiveKeywords,
-                negative: negativeKeywords
-            };
+            const jobData = extractJobDataFromForm();
+            if (!jobData) return;
+            
+            const isNewJob = currentJobIndex === -1 || currentJobIndex >= jobsData.length;
+            const baseJobId = getBaseJobId(jobData.job_id || '');
+            const endpoint = isNewJob ? `/jobs/create` : `/jobs/${baseJobId}/update`;
+            
             try {
-                const isNewJob = currentJobIndex === -1 || currentJobIndex >= jobsData.length;
-                const baseJobId = getBaseJobId(jobData.job_id || '');
-                const endpoint = isNewJob ? `${API_BASE}/jobs/create` : `${API_BASE}/jobs/${baseJobId}/update`;
-                const response = await fetch(endpoint, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify(jobData)
-                });
-                const result = await response.json();
+                const result = await apiCall(endpoint, 'POST', jobData);
                 if (result.success) {
-                    showToast('岗位已保存', 'success');
+                    showToast(isNewJob ? '岗位已创建' : '岗位已保存', 'success');
                     await loadJobsData();
+                    
+                    if (isNewJob) {
+                        const jobIndex = jobsData.findIndex(j => {
+                            const jBaseId = j.base_job_id || getBaseJobId(j.job_id || '');
+                            return jBaseId === baseJobId;
+                        });
+                        if (jobIndex !== -1) {
+                            switchToJob(jobIndex);
+                        } else if (jobsData.length > 0) {
+                            switchToJob(jobsData.length - 1);
+                        }
+                    }
                 } else {
-                    showToast('保存失败: ' + (result.error || '未知错误'), 'error');
+                    showToast((isNewJob ? '创建' : '保存') + '失败: ' + (result.error || '未知错误'), 'error');
                 }
             } catch (error) {
-                showToast('保存失败: ' + error.message, 'error');
+                showToast((isNewJob ? '创建' : '保存') + '失败: ' + error.message, 'error');
             }
         }
         
-        // Create job
+        // Alias for createJob (for backward compatibility with form onsubmit)
         async function createJob(event) {
-            event.preventDefault();
-            const formData = new FormData(event.target);
-            const jobData = Object.fromEntries(formData.entries());
-            const ddqTextEl = document.getElementById('drill_down_questions_text');
-            jobData.drill_down_questions = ddqTextEl ? ddqTextEl.value : '';
-            const candidateFiltersEl = document.getElementById('candidate_filters_json');
-            if (candidateFiltersEl && candidateFiltersEl.value.trim()) {
-                if (!validateCandidateFilters()) {
-                    showToast('候选人筛选条件 JSON 格式错误，请修正后再保存', 'error');
-                    candidateFiltersEl.focus();
-                    return;
-                }
-                try {
-                    jobData.candidate_filters = JSON.parse(candidateFiltersEl.value);
-                } catch (e) {
-                    showToast('候选人筛选条件 JSON 格式错误: ' + e.message, 'error');
-                    candidateFiltersEl.focus();
-                    return;
-                }
-            } else {
-                jobData.candidate_filters = null;
-            }
-            const positiveKeywords = window.tagEditors['positive_keywords'] ? Array.from(window.tagEditors['positive_keywords'].tags) : [];
-            const negativeKeywords = window.tagEditors['negative_keywords'] ? Array.from(window.tagEditors['negative_keywords'].tags) : [];
-            jobData.keywords = {
-                positive: positiveKeywords,
-                negative: negativeKeywords
-            };
-            try {
-                const response = await fetch(`${API_BASE}/jobs/create`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify(jobData)
-                });
-                const result = await response.json();
-                if (result.success) {
-                    showToast('岗位已创建', 'success');
-                    await loadJobsData();
-                    const baseJobId = getBaseJobId(jobData.job_id || '');
-                    const jobIndex = jobsData.findIndex(j => {
-                        const jBaseId = j.base_job_id || getBaseJobId(j.job_id || '');
-                        return jBaseId === baseJobId;
-                    });
-                    if (jobIndex !== -1) {
-                        switchToJob(jobIndex);
-                    } else if (jobsData.length > 0) {
-                        switchToJob(jobsData.length - 1);
-                    }
-                } else {
-                    showToast('创建失败: ' + (result.error || '未知错误'), 'error');
-                }
-            } catch (error) {
-                showToast('创建失败: ' + error.message, 'error');
-            }
+            return saveJob(event);
         }
         
         // Delete job version
         async function deleteJob(job_id, version, totalVersions) {
             const baseJobId = getBaseJobId(job_id);
+            
+            // Special handling when only 1 version left
             if (totalVersions <= 1) {
-                showToast('至少需要保留一个版本', 'warning');
-                return;
+                const confirmed = await showDeleteJobConfirm(`确定要删除这个岗位吗？\n删除后将无法恢复！`, '删除岗位');
+                if (!confirmed) return;
+            } else {
+                const confirmed = await showConfirm(`您确定要删除版本 v${version} 吗？\n此操作无法撤销！`, '删除版本');
+                if (!confirmed) return;
             }
-            const confirmed = await showConfirm(`您确定要删除版本 v${version} 吗？\n此操作无法撤销！`, '删除版本');
-            if (!confirmed) return;
+            
             try {
-                const response = await fetch(`${API_BASE}/jobs/${baseJobId}/delete`, {
-                    method: 'DELETE',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({ version: version })
-                });
-                const result = await response.json();
+                const result = await apiCall(`/jobs/${baseJobId}/delete`, 'DELETE', { version });
                 if (result.success) {
-                    showToast(`版本 v${version} 已删除`, 'success');
+                    if (totalVersions <= 1) {
+                        showToast('岗位已删除', 'success');
+                    } else {
+                        showToast(`版本 v${version} 已删除`, 'success');
+                    }
                     await loadJobsData();
                     const jobIndex = jobsData.findIndex(j => getBaseJobId(j.job_id || j.base_job_id || '') === baseJobId);
                     if (jobIndex !== -1) {
@@ -944,30 +1011,31 @@
             }
         }
         
-        // Create new job
+        // Create new job (simple wrapper)
         function createNewJob() {
             switchToJob(jobsData.length);
         }
         
-        // Switch version
+        // Switch to view a different version
         async function switchVersion(baseJobId, version) {
             const versionNum = parseInt(version);
             if (isNaN(versionNum)) return;
+            
             try {
-                const versionsResponse = await fetch(`${API_BASE}/jobs/${baseJobId}/versions`);
-                const versionsResult = await versionsResponse.json();
-                if (versionsResult.success) {
-                    const selectedVersion = versionsResult.data.find(v => v.version === versionNum);
-                    if (selectedVersion) {
-                        loadJobForm(selectedVersion);
-                    }
+                // Fetch the full job data for the specific version
+                const versionedJobId = `${baseJobId}_v${versionNum}`;
+                const result = await apiCall(`/jobs/${versionedJobId}`);
+                if (result.success && result.data) {
+                    loadJobForm(result.data);
+                } else {
+                    showToast('版本数据加载失败', 'error');
                 }
             } catch (error) {
                 showToast('切换版本失败: ' + error.message, 'error');
             }
         }
         
-        // Use this version
+        // Set a version as current
         async function useThisVersion(baseJobId, version) {
             const versionNum = parseInt(version);
             if (isNaN(versionNum)) {
@@ -976,15 +1044,9 @@
             }
             const confirmed = await showConfirm(`确定要将版本 v${versionNum} 设为当前版本吗？`, '切换当前版本');
             if (!confirmed) return;
+            
             try {
-                const response = await fetch(`${API_BASE}/jobs/${baseJobId}/switch-version`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({ version: versionNum })
-                });
-                const result = await response.json();
+                const result = await apiCall(`/jobs/${baseJobId}/switch-version`, 'POST', { version: versionNum });
                 if (result.success) {
                     showToast('版本切换成功', 'success');
                     await loadJobsData();
@@ -1000,43 +1062,13 @@
             }
         }
         
-        // Format candidate filters
-        function formatCandidateFilters() {
-            const el = document.getElementById('candidate_filters_json');
-            if (!el) return;
-            const value = el.value.trim();
-            if (!value) {
-                el.value = '';
-                const validationEl = document.getElementById('candidate_filters_validation');
-                if (validationEl) validationEl.textContent = '';
-                return;
-            }
-            try {
-                const parsed = JSON.parse(value);
-                el.value = JSON.stringify(parsed, null, 2);
-                const validationEl = document.getElementById('candidate_filters_validation');
-                if (validationEl) {
-                    validationEl.textContent = '✓ JSON 格式正确';
-                    validationEl.className = 'text-xs mt-1 text-green-600';
-                }
-                el.classList.remove('border-red-500');
-                el.classList.add('border-gray-300');
-            } catch (e) {
-                const validationEl = document.getElementById('candidate_filters_validation');
-                if (validationEl) {
-                    validationEl.textContent = '✗ JSON 格式错误: ' + e.message;
-                    validationEl.className = 'text-xs mt-1 text-red-600';
-                }
-                el.classList.remove('border-gray-300');
-                el.classList.add('border-red-500');
-            }
-        }
-        
-        // Validate candidate filters
+        // Validate and format candidate filters JSON
         function validateCandidateFilters() {
             const el = document.getElementById('candidate_filters_json');
             const validationEl = document.getElementById('candidate_filters_validation');
-            if (!el || !validationEl) return true;
+            if (!el) return true;
+            if (!validationEl) return true;
+            
             const value = el.value.trim();
             if (!value) {
                 validationEl.textContent = '';
@@ -1044,6 +1076,7 @@
                 el.classList.add('border-gray-300');
                 return true;
             }
+            
             try {
                 JSON.parse(value);
                 validationEl.textContent = '✓ JSON 格式正确';
@@ -1057,6 +1090,26 @@
                 el.classList.remove('border-gray-300', 'border-green-500');
                 el.classList.add('border-red-500');
                 return false;
+            }
+        }
+        
+        // Format candidate filters (validates and formats)
+        function formatCandidateFilters() {
+            const el = document.getElementById('candidate_filters_json');
+            if (!el) return;
+            const value = el.value.trim();
+            if (!value) {
+                el.value = '';
+                const validationEl = document.getElementById('candidate_filters_validation');
+                if (validationEl) validationEl.textContent = '';
+                return;
+            }
+            try {
+                const parsed = JSON.parse(value);
+                el.value = JSON.stringify(parsed, null, 2);
+                validateCandidateFilters(); // Update validation display
+            } catch (e) {
+                validateCandidateFilters(); // Show error
             }
         }
     </script>

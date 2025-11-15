@@ -69,6 +69,39 @@ function showConfirm(message, title = '确认') {
 window.showConfirm = showConfirm;
 
 /**
+ * Special confirm for deleting the last version (green cancel, red confirm)
+ * Returns a Promise that resolves to true/false
+ */
+function showDeleteJobConfirm(message, title = '删除岗位') {
+    return new Promise((resolve) => {
+        if (!window.Alpine) {
+            console.error('Alpine.js not loaded');
+            resolve(false);
+            return;
+        }
+        
+        const store = Alpine.store('deleteJobModal');
+        if (!store) {
+            Alpine.store('deleteJobModal', {
+                show: false,
+                message: '',
+                title: '',
+                resolve: null
+            });
+        }
+        
+        const modalStore = Alpine.store('deleteJobModal');
+        modalStore.message = message;
+        modalStore.title = title;
+        modalStore.resolve = resolve;
+        modalStore.show = true;
+    });
+}
+
+// Expose showDeleteJobConfirm globally
+window.showDeleteJobConfirm = showDeleteJobConfirm;
+
+/**
  * Show loading indicator
  */
 function showLoading(message = '处理中...') {
@@ -133,6 +166,30 @@ document.addEventListener('alpine:init', () => {
         show: false,
         message: '',
         title: '确认',
+        resolve: null,
+        
+        confirm() {
+            if (this.resolve) {
+                this.resolve(true);
+                this.resolve = null;
+            }
+            this.show = false;
+        },
+        
+        cancel() {
+            if (this.resolve) {
+                this.resolve(false);
+                this.resolve = null;
+            }
+            this.show = false;
+        }
+    });
+    
+    // Delete job modal store (for deleting last version - green cancel, red confirm)
+    Alpine.store('deleteJobModal', {
+        show: false,
+        message: '',
+        title: '删除岗位',
         resolve: null,
         
         confirm() {

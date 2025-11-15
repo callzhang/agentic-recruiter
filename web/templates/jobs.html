@@ -48,6 +48,53 @@
         </div>
     </div>
 </div>
+
+<!-- Delete Job Modal (for deleting last version) -->
+<div x-data="{ 
+        get modal() { return Alpine.store('deleteJobModal'); }
+     }" 
+     x-show="modal.show"
+     x-transition:enter="transition ease-out duration-300"
+     x-transition:enter-start="opacity-0"
+     x-transition:enter-end="opacity-100"
+     x-transition:leave="transition ease-in duration-200"
+     x-transition:leave-start="opacity-100"
+     x-transition:leave-end="opacity-0"
+     class="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50"
+     style="display: none;"
+     @keydown.escape.window="modal.cancel()">
+    <div class="bg-white rounded-lg shadow-2xl max-w-md w-full mx-4"
+         x-transition:enter="transition ease-out duration-300"
+         x-transition:enter-start="opacity-0 transform scale-95"
+         x-transition:enter-end="opacity-100 transform scale-100"
+         x-transition:leave="transition ease-in duration-200"
+         x-transition:leave-start="opacity-100 transform scale-100"
+         x-transition:leave-end="opacity-0 transform scale-95"
+         @click.away="modal.cancel()">
+        <div class="p-6">
+            <div class="flex items-center mb-4">
+                <div class="w-10 h-10 bg-red-100 rounded-full flex items-center justify-center mr-3">
+                    <span class="text-2xl">🗑️</span>
+                </div>
+                <h3 class="text-xl font-bold text-gray-800" x-text="modal.title"></h3>
+            </div>
+            <div class="mb-6">
+                <p class="text-gray-700 leading-relaxed whitespace-pre-line" x-text="modal.message"></p>
+            </div>
+            <div class="flex justify-end">
+                <button @click="modal.cancel()" 
+                        class="px-6 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition font-medium mr-3">
+                    取消
+                </button>
+                <button @click="modal.confirm()" 
+                        class="px-6 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition font-medium">
+                    确定要删除这个岗位
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <div class="space-y-6">
     <!-- Page header -->
     <div class="bg-white rounded-lg shadow p-6">
@@ -398,8 +445,7 @@ async function loadJobForm(job) {
                         </button>
                         
                         <button type="button" onclick="deleteJob('${baseJobId}', ${currentVersion}, ${versions.length})" 
-                                class="px-6 py-3 rounded-lg font-medium ${versions.length <= 1 ? 'bg-gray-400 text-gray-200 cursor-not-allowed' : 'bg-red-600 text-white hover:bg-red-700'}"
-                                ${versions.length <= 1 ? 'disabled title="至少需要保留一个版本"' : ''}>
+                                class="px-6 py-3 rounded-lg font-medium bg-red-600 text-white hover:bg-red-700">
                             🗑️ 删除当前版本
                         </button>
                     </div>
@@ -766,13 +812,14 @@ async function deleteJob(job_id, version, totalVersions) {
     // Extract base job_id (remove _vN suffix if present)
     const baseJobId = getBaseJobId(job_id);
     
-    // Check if it's the only version
+    // Special handling when only 1 version left
+    let confirmed;
     if (totalVersions <= 1) {
-        showToast('至少需要保留一个版本', 'warning');
-        return;
+        confirmed = await showDeleteJobConfirm(`确定要删除这个岗位吗？\n删除后将无法恢复！`, '删除岗位');
+    } else {
+        confirmed = await showConfirm(`您确定要删除版本 v${version} 吗？\n此操作无法撤销！`, '删除版本');
     }
     
-    const confirmed = await showConfirm(`您确定要删除版本 v${version} 吗？\n此操作无法撤销！`, '删除版本');
     if (!confirmed) {
         return;
     }
@@ -789,7 +836,11 @@ async function deleteJob(job_id, version, totalVersions) {
         const result = await response.json();
         
         if (result.success) {
-            showToast(`版本 v${version} 已删除`, 'success');
+            if (totalVersions <= 1) {
+                showToast('岗位已删除', 'success');
+            } else {
+                showToast(`版本 v${version} 已删除`, 'success');
+            }
             // Reload jobs data to get fresh data from server
             await loadJobsData();
             // Find the job index and switch to it (will show the current version)

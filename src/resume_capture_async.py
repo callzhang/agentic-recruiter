@@ -1358,6 +1358,7 @@ async def extract_pdf_viewer_text(frame: Frame) -> Dict[str, Any]:
         )
     except Exception as e:
         logger.error(f"evaluate frame文本失败: {e}")
+        pages = {}
 
     if isinstance(pages, dict):
         if "__error" in pages:
