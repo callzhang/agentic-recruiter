@@ -236,10 +236,8 @@ def get_candidates(
         
         # Remove empty fields
         candidates = [{k: v for k, v in result.items() if v or v == 0} for result in results]
-        
-        # Sort by updated_at in descending order (most recent first)
-        # Fallback to candidate_id if updated_at is missing (newer IDs are generally later)
-        candidates.sort(key=lambda x: (x.get("updated_at")), reverse=True)
+
+        # TODO: Sort by updated_at in descending order (most recent first)
         
         # Apply the original limit after sorting
         if limit and len(candidates) > limit:

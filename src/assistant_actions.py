@@ -122,6 +122,7 @@ def init_chat(
     full_history = [job_prompt] + chat_history
     
     # Create openai conversation
+    full_history = [{'role': m['role'], 'content': m['content'], 'type': m.get('type', 'message')} for m in full_history]
     conversation = _openai_client.conversations.create(
         metadata=conversation_metadata, 
         items=full_history

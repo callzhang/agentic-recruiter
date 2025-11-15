@@ -121,22 +121,22 @@ async def _go_to_chat_dialog(page: Page, chat_id: str, wait_timeout: int = 5000)
     # check if the target is already selected
     await target.scroll_into_view_if_needed(timeout=1000)
     classes = await target.get_attribute("class") or ""
-    # prepare for the click
+    # prepare for the click - get old_text before clicking
     if "selected" not in classes:
         old_conversation_selector = page.locator(CONVERSATION_SELECTOR)
         old_text = await old_conversation_selector.inner_text(timeout=1000) if await old_conversation_selector.count() > 0 else ""
-    # click the target
-    await target.click()
-    # wait for the conversation panel to refresh
-    t0 = time.time()
-    while time.time() - t0 < wait_timeout:
-        new_text = await page.locator(CONVERSATION_SELECTOR).inner_text(timeout=1000)
-        if new_text and new_text != old_text:
-            break
-        await page.wait_for_timeout(200)
-    else:
-        logger.warning("等待对话面板刷新失败")
-        return None
+        # click the target
+        await target.click()
+        # wait for the conversation panel to refresh
+        t0 = time.time()
+        while time.time() - t0 < wait_timeout:
+            new_text = await page.locator(CONVERSATION_SELECTOR).inner_text(timeout=1000)
+            if new_text and new_text != old_text:
+                break
+            await page.wait_for_timeout(200)
+        else:
+            logger.warning("等待对话面板刷新失败")
+            return None
     return target
 
 
