@@ -1,0 +1,14 @@
+{
+  "name": "boss-jobs-editor",
+  "version": "1.0.0",
+  "description": "Standalone jobs editor page for Boss Zhipin bot",
+  "scripts": {
+    "build": "node build.js",
+    "dev": "vercel dev",
+    "deploy": "vercel --prod"
+  },
+  "keywords": ["jobs", "editor", "boss-zhipin"],
+  "author": "",
+  "license": "MIT"
+}
+

@@ -163,6 +163,10 @@ async def list_candidates(
             (c.get("name") == candidate.get("name")) and c.get("job_applied") == candidate.get("job_applied")), None)
         
         if stored_candidate:
+            chat_id, chat_id2 = candidate.get("chat_id"), stored_candidate.get("chat_id")
+            if chat_id and chat_id2 and chat_id != chat_id2:
+                logger.warning(f"chat_id mismatch: {chat_id} != {chat_id2}")
+                stored_candidate = {}
             candidate.update(stored_candidate) # last_message will be updated by saved candidate
             candidate["saved"] = True
             # Extract score from analysis if available)
@@ -213,10 +217,10 @@ async def get_candidate_detail(request: Request):
         job_applied=candidate.get('job_applied'), 
         limit=1
     )
-    candidate_data = results[0] if results else {}
-    candidate_data = {k:v for k, v in candidate_data.items() if v}
-    candidate.update(candidate_data)
-    candidate['score'] = candidate_data.get("analysis", {}).get("overall")
+    stored_candidate = results[0] if results else {}
+    stored_candidate = {k:v for k, v in stored_candidate.items() if v}
+    candidate.update(stored_candidate)
+    candidate['score'] = stored_candidate.get("analysis", {}).get("overall")
 
     return templates.TemplateResponse("partials/candidate_detail.html", {
         "request": request,

@@ -13,6 +13,7 @@ from fastapi import Body, FastAPI, Query, Request
 from fastapi.responses import JSONResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from fastapi.middleware.cors import CORSMiddleware
 from playwright.async_api import Browser, BrowserContext, Page, Playwright, TimeoutError as PlaywrightTimeoutError, async_playwright
 
 from src import assistant_actions
@@ -39,21 +40,22 @@ class BossServiceAsync:
     def __init__(self) -> None:
         # Initialize Sentry for error tracking (Sentry 2.x auto-detects FastAPI)
         sentry_config = get_sentry_config()
-        if sentry_config["dsn"]:
+        if sentry_config.get("dsn"):
             # Disable auto-integration detection to avoid timeout during package scanning
             # Manually enable only FastAPI integration to avoid scanning all packages
             from sentry_sdk.integrations.fastapi import FastApiIntegration
             sentry_sdk.init(
                 dsn=sentry_config["dsn"],
                 enable_tracing=True,
-                send_default_pii=sentry_config["send_default_pii"],
-                environment=sentry_config["environment"] or "development",
-                release=sentry_config["release"] or "unknown",
+                send_default_pii=sentry_config.get("send_default_pii", True),
+                environment=sentry_config.get("environment") or "development",
+                release=sentry_config.get("release") or "unknown",
                 default_integrations=False,  # Disable auto-detection to prevent timeout
                 integrations=[FastApiIntegration()],  # Manually enable FastAPI integration only
             )
             logger.info("Sentry initialized: environment=%s, release=%s", 
-                        sentry_config["environment"], sentry_config["release"])
+                        sentry_config.get("environment", "development"), 
+                        sentry_config.get("release", "unknown"))
         else:
             logger.info("Sentry DSN not configured in secrets.yaml, error tracking disabled")
         
@@ -66,6 +68,7 @@ class BossServiceAsync:
         self.browser_lock = asyncio.Lock()
         self.startup_complete = asyncio.Event()
         self.event_manager = None  # Placeholder for legacy debug endpoint
+        self.setup_cors()
         self.setup_routes()
         self.setup_exception_handlers()
 
@@ -326,6 +329,30 @@ class BossServiceAsync:
             await self._shutdown_async()
             await self._startup_async()
             logger.info("浏览器已重启")
+
+    # ------------------------------------------------------------------
+    # CORS configuration
+    # ------------------------------------------------------------------
+    def setup_cors(self) -> None:
+        """Configure CORS middleware to allow Vercel and other origins."""
+        import os
+        # Get allowed origins from environment or use defaults
+        allowed_origins_env = os.environ.get("CORS_ALLOWED_ORIGINS", "")
+        if allowed_origins_env:
+            allowed_origins = [origin.strip() for origin in allowed_origins_env.split(",")]
+        else:
+            # Default: allow all origins (for development and Vercel)
+            # In production, you should restrict this to specific domains
+            allowed_origins = ["*"]
+        
+        self.app.add_middleware(
+            CORSMiddleware,
+            allow_origins=allowed_origins if allowed_origins != ["*"] else ["*"],
+            allow_credentials=allowed_origins != ["*"],  # Can't use credentials with wildcard
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
+        logger.info(f"CORS configured with allowed origins: {allowed_origins}")
 
     # ------------------------------------------------------------------
     # Exception handlers
@@ -1009,10 +1036,12 @@ templates = Jinja2Templates(directory="web/templates")
 
 # Include web UI routers
 from web.routes import candidates, automation, jobs
+from web.routes import jobs_public
 
 app.include_router(candidates.router, prefix="/candidates", tags=["web-candidates"])
 app.include_router(automation.router, prefix="/automation", tags=["web-automation"])
 app.include_router(jobs.router, prefix="/jobs", tags=["web-jobs"])
+app.include_router(jobs_public.router, prefix="/jobs", tags=["web-jobs-public"])
 
 # Chrome DevTools configuration endpoint
 @app.get("/.well-known/appspecific/com.chrome.devtools.json", tags=["system"])

@@ -136,7 +136,7 @@ async def _go_to_chat_dialog(page: Page, chat_id: str, wait_timeout: int = 5000)
             await page.wait_for_timeout(200)
         else:
             logger.warning("等待对话面板刷新失败")
-            return None
+            # return None
     return target
 
 

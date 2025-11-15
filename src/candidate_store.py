@@ -194,7 +194,7 @@ def get_candidates(
     if identifiers:
         identifiers = [id for id in identifiers if id] or None
     if names:
-        names = [name.strip() for name in names if (name and name.strip())] or None
+        names = [name.strip() for name in names if (name.strip() and '先生' not in name and '女士' not in name)] or None
     if job_applied:
         job_applied = job_applied.strip() or None
     

@@ -240,6 +240,7 @@ async function process_candidate() {
         
     } catch (error) {
         console.error('Error processing candidate:', error);
+        showToast(`处理候选人时出错: ${error.message || String(error)}`, 'error');
         // Emit error event (use updated conversationId)
         const event = new CustomEvent('candidate:processing-error', {
             detail: {
@@ -252,9 +253,9 @@ async function process_candidate() {
             }
         });
         document.dispatchEvent(event);
-        throw error;
+        // Don't re-throw - let finally handle cleanup
     } finally {
-        // Re-enable cards after processing
+        // Always re-enable cards after processing, even on error
         enableAllCards();
     }
 }
@@ -597,7 +598,13 @@ requestAnimationFrame(() => {
         switchResumeTab('online');
     }
     
-    process_candidate();
+    // Wrap process_candidate in error handling to ensure cards are re-enabled
+    process_candidate().catch(error => {
+        console.error('Unhandled error in process_candidate:', error);
+        showToast(`处理候选人时出错: ${error.message || error}`, 'error');
+        // Ensure cards are re-enabled even if error wasn't caught by finally
+        enableAllCards();
+    });
 });
 
 </script>
