@@ -16,3 +16,4 @@ screenshots/
 wasm/*.wasm
 # Install script contains credentials and should not be committed
 install_hr.command
+install_hr 2.command
