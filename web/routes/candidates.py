@@ -176,13 +176,13 @@ async def list_candidates(
             candidate['greeted'] = candidate.get('greeted', False)
 
             # generated message is the last assistant message from the history
-            if not stored_candidate.get('generated_message'):
-                history = stored_candidate.get('metadata', {}).get('history', []) or []
-                stored_last_message = stored_candidate.get('last_message')
-                web_last_message = candidate.get('last_message')
-                last_assistant_message = next((msg.get('content') for msg in history[::-1] if 'assistant' in [msg.get('role'), msg.get('type')]), '') #TODO: 'type' is for lagacy code compatibility
-                generated_message = stored_last_message if stored_last_message != web_last_message else last_assistant_message
-                candidate["generated_message"] = generated_message
+            # if not stored_candidate.get('generated_message'):
+            #     history = stored_candidate.get('metadata', {}).get('history', []) or []
+            #     stored_last_message = stored_candidate.get('last_message')
+            #     web_last_message = candidate.get('last_message')
+            #     last_assistant_message = next((msg.get('content') for msg in history[::-1] if 'assistant' in [msg.get('role'), msg.get('type')]), '') #TODO: 'type' is for lagacy code compatibility
+            #     generated_message = stored_last_message if stored_last_message != web_last_message else last_assistant_message
+            #     candidate["generated_message"] = generated_message
 
 
         # Extract resume_text and full_resume from candidate
@@ -442,6 +442,7 @@ async def generate_message(
             chat_id=chat_id,
             mode=mode,
             conversation_id=conversation_id,
+            generated_message=message,
             metadata={'history': chat_history + [new_message]},
         )
     else:

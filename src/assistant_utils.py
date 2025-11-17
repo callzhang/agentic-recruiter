@@ -1,8 +1,10 @@
 # from __future__ import annotations
 import typing_extensions
 import json
-try: import regex as re
-except: import re
+try:
+    import regex as re
+except ImportError:
+    import re
 try:
     from numba import njit
     _NUMBA_AVAILABLE = True

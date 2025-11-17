@@ -536,17 +536,23 @@ async def ask_contact_action(page: Page, chat_id: str) -> bool:
     clicked_phone, clicked_wechat = False, False
     ask_phone_button = page.locator("span.operate-btn:has-text('换电话')").first
     if await ask_phone_button.count() > 0:
-        await ask_phone_button.click(timeout=1000)
-        clicked_phone = True
+        if 'disabled' in await ask_phone_button.get_attribute("class") or await ask_phone_button.evaluate("el => el.disabled"):
+            clicked_phone = True
+        else:
+            await ask_phone_button.click(timeout=2000)
+            clicked_phone = True
     ask_wechat_button = page.locator("span.operate-btn:has-text('换微信')").first
     if await ask_wechat_button.count() > 0:
-        await ask_wechat_button.click(timeout=1000)
-        clicked_wechat = True
+        if 'disabled' in await ask_wechat_button.get_attribute("class") or await ask_wechat_button.evaluate("el => el.disabled"):
+            clicked_wechat = True
+        else:
+            await ask_wechat_button.click(timeout=2000)
+            clicked_wechat = True
 
     if not clicked_phone and not clicked_wechat:
         raise ValueError("未找到换电话或换微信按钮")
 
-    return True
+    return clicked_phone and clicked_wechat
 
 async def notify_hr_action(page: Page, chat_id: str) -> bool:
     """Placeholder for triggering HR notification workflow.
