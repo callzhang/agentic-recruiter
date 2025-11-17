@@ -186,6 +186,12 @@ async function process_candidate() {
             // Step 4b: Check borderline_threshold - try to get full resume and re-analyze
             if (current_score >= borderline_threshold) {
                 newStage = 'SEEK';
+                
+                // Send DingTalk notification with analysis result
+                if (analysis) {
+                    await sendBorderlineNotification(analysis, name, getCandidateData('job_applied') || '未知岗位');
+                }
+                
                 // For chat mode, try to get full resume and re-analyze
                 if (mode !== 'recommend') {
                     const full_resume_div = document.getElementById('resume-textarea-full');
@@ -199,6 +205,11 @@ async function process_candidate() {
                             const updated_analysis_container = document.querySelector('#analysis-content #analysis-result-container');
                             analysis = updated_analysis_container ? JSON.parse(updated_analysis_container.getAttribute('data-analysis')) : analysis;
                             current_score = analysis?.overall || current_score;
+                            
+                            // Send notification again if analysis was updated
+                            if (analysis && current_score >= borderline_threshold) {
+                                await sendBorderlineNotification(analysis, name, getCandidateData('job_applied') || '未知岗位');
+                            }
                         }
                     }
                 }else{
@@ -257,6 +268,50 @@ async function process_candidate() {
     } finally {
         // Always re-enable cards after processing, even on error
         enableAllCards();
+    }
+}
+
+/**
+ * Send DingTalk notification when candidate score exceeds borderline threshold
+ */
+async function sendBorderlineNotification(analysis, candidateName, jobApplied) {
+    try {
+        // Format analysis result in markdown
+        const markdownMessage = `**候选人**: ${candidateName}
+**岗位**: ${jobApplied}
+
+**评分结果**:
+- 技能匹配度: ${analysis.skill || 'N/A'}/10
+- 创业契合度: ${analysis.startup_fit || 'N/A'}/10
+- 基础背景: ${analysis.background || 'N/A'}/10
+- **综合评分: ${analysis.overall || 'N/A'}/10**
+
+**分析总结**:
+${analysis.summary || '暂无'}
+
+**跟进建议**:
+${analysis.followup_tips || '暂无'}`;
+
+        const title = `候选人 ${candidateName} 通过初步筛选`;
+        
+        const formData = new FormData();
+        formData.append('title', title);
+        formData.append('message', markdownMessage);
+        
+        const response = await fetch('/candidates/notify', {
+            method: 'POST',
+            body: formData
+        });
+        
+        const result = await response.json();
+        if (result.success) {
+            console.log('DingTalk notification sent successfully');
+        } else {
+            console.error('Failed to send DingTalk notification:', result.error);
+        }
+    } catch (error) {
+        console.error('Error sending DingTalk notification:', error);
+        // Don't throw - notification failure shouldn't block processing
     }
 }
 

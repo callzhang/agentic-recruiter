@@ -91,9 +91,13 @@ def check_environment(state: ManagerState, runtime: Runtime[ContextSchema]) -> M
             # Create status message for chat interface
             # agent_message = AIMessage(content=f'浏览器成功链接，当前有{status["new_message_count"]}条新消息，{status["new_greet_count"]}条新问候。')
             # get jobs from web portal
-            jobs = _call_api("GET", f"{web_portal}/web/jobs/api/list", timeout=runtime.context.timeout)['data']
+            jobs_response = _call_api("GET", f"{web_portal}/jobs/api/list", timeout=runtime.context.timeout)
+            # jobs endpoint returns {"success": True, "data": [...]}
+            jobs = jobs_response.get('data', jobs_response) if isinstance(jobs_response, dict) else jobs_response
             # get assistants from web portal
-            assistants = _call_api("GET", f"{web_portal}/web/assistants/api/list")['data']
+            assistants_response = _call_api("GET", f"{web_portal}/assistant/list")
+            # assistants endpoint returns a list directly, not wrapped in dict
+            assistants = assistants_response if isinstance(assistants_response, list) else (assistants_response.get('data', []) if isinstance(assistants_response, dict) else [])
             assert len(jobs) > 0 and len(assistants) > 0, "Jobs or Assistants Status: Disconnected"
             names = [candidate.name for candidate in state.processed_candidates]
             system_message = SystemMessage(content=f'''浏览器成功链接，当前有{status["new_message_count"]}条新消息，{status["new_greet_count"]}条新问候。\n

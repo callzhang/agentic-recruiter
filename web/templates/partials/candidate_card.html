@@ -2,7 +2,7 @@
 <div class="candidate-card p-4 border rounded-lg cursor-pointer bg-white hover:bg-blue-50 transition {% if candidate.viewed %}opacity-60{% endif %}"
     data-candidate-id="{% if candidate.chat_id %}{{ candidate.chat_id }}{% else %}recommend_{{ candidate.index }}{% endif %}"
     hx-get="/candidates/detail" hx-vals='{{ candidate | tojson }}' hx-target="#detail-pane"
-    hx-include="#job-selector,#threshold-chat,#threshold-borderline,#threshold-seek,#analysis,#resume_text,#full_resume,#message-content"
+    hx-include="#job-selector,#threshold-chat,#threshold-borderline,#threshold-seek"
     hx-on::click="console.log('Candidate clicked:', JSON.parse(this.dataset.candidate));">
     <div class="flex items-start space-x-3 relative">
         <input type="hidden" name="analysis" value="{{ analysis | tojson }}">

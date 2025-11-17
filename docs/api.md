@@ -15,7 +15,7 @@ Boss直聘自动化机器人 REST API 文档
 
 ## 基础信息
 
-**当前版本**: v2.2.0  
+**当前版本**: v2.4.2  
 **Base URL**: `http://127.0.0.1:5001`
 
 ### 响应格式 (v2.2.0+)
@@ -105,6 +105,22 @@ Boss直聘自动化机器人 REST API 文档
 | `/assistant/init-chat` | POST | 初始化对话线程 |
 | `/assistant/{thread_id}/messages` | GET | 获取线程消息 |
 | `/assistant/{thread_id}/analysis` | GET | 获取线程分析 |
+
+### 岗位管理
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/jobs/api/list` | GET | 获取所有岗位列表（仅当前版本） |
+| `/jobs/api/{job_id}` | GET | 获取岗位详情（当前版本） |
+| `/jobs/{job_id}/versions` | GET | 获取岗位所有版本 |
+| `/jobs/{job_id}/switch-version` | POST | 切换当前使用的版本 |
+| `/jobs/{job_id}/delete` | DELETE | 删除指定版本（需保留至少一个版本） |
+
+### 候选人管理
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/candidates/notify` | POST | 发送 DingTalk 通知 |
 
 ### Web UI
 

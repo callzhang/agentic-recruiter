@@ -136,9 +136,12 @@ async def list_recommended_candidates_action(page: Page, *, limit: int = 999, jo
     else:
         raise ValueError("未找到推荐候选人")
 
-    for index in range(count):
+    from tqdm.asyncio import tqdm as async_tqdm
+
+    # Use tqdm progress bar for candidate extraction
+    async for index in async_tqdm(range(count), desc="Processing candidates"):
         card = cards.nth(index)
-        await card.hover(timeout=3000)
+        # await card.hover(timeout=3000)
         classes = await card.get_attribute("class") or ""
         viewed = "viewed" in classes
         greeted = await card.locator("button:has-text('继续沟通')").count() > 0
@@ -315,7 +318,7 @@ async def apply_filters(frame: Frame, filters: Dict[str, Any]) -> bool:
     if await filter_panel.count() == 0:
         # open the filter panel
         await filter_wrap.click(timeout=1000)
-        await page.wait_for_timeout(500)
+        await frame.wait_for_timeout(500)
         # Wait for panel to appear
         await filter_panel.wait_for(state="visible", timeout=1000)
     # 取消上次设置

@@ -568,9 +568,11 @@ def view_online_resume_tool(
         assert chat_id is not None, "Chat ID is required for chat/greet/followup modes"
         result = _call_api("GET", f"{web_portal}/chat/resume/online/{chat_id}")
     
+    # Extract resume_text from result regardless of mode
+    resume_text = result.get('text', '')
+    
     if chat_id:
         from agent.graph import NAME_SPACE
-        resume_text = result.get('text')
         store = runtime.store
         store.put(
             namespace=NAME_SPACE, 

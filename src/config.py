@@ -7,7 +7,7 @@ from typing import Dict, Any
 
 with open("config/config.yaml", "r", encoding="utf-8") as f:
     _config_values = yaml.safe_load(f)
-
+        
 
 with open("config/secrets.yaml", "r", encoding="utf-8") as f:
     _secrets_values = yaml.safe_load(f)
@@ -40,12 +40,12 @@ def get_openai_config() -> Dict[str, Any]:
     config_openai = _config_values["openai"]
     secrets_openai = _secrets_values["openai"]
     return config_openai | secrets_openai
-
+    
 def get_dingtalk_config() -> Dict[str, str]:
     """Get DingTalk configuration."""
     return _secrets_values["dingtalk"]
 
-
+    
 def get_sentry_config() -> Dict[str, Any]:
     """Get Sentry configuration."""
     return _secrets_values["sentry"]

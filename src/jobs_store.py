@@ -122,18 +122,19 @@ def create_job_collection(collection_name: Optional[str] = None) -> bool:
                 # Create a function that combines multiple text fields and generates embeddings
                 # Using FunctionType.TEXTEMBEDDING with OpenAI provider
                 # Include API key in params if Milvus requires it
+                # Note: Milvus requires exactly 1 input field for TEXTEMBEDDING functions
+                # We need to use a combined text field instead of multiple fields
+                # For now, this function creation will fail until we add job_text_combined field
+                # See migration script for the correct implementation
                 embedding_fn = Function(
                     name="job_embedding_fn",
                     function_type=FunctionType.TEXTEMBEDDING,
-                    input_field_names=[
-                        "position", "background", "description", "responsibilities",
-                        "requirements", "target_profile"
-                    ],
+                    input_field_names=["job_text_combined"],  # Single input field required
                     output_field_names=["job_embedding"],
                     params={
                         "provider": "openai",
-                        "model_name": "text-embedding-3-small",  # Using text-embedding-3-small as per docs
-                        "api_key": openai_api_key,  # Pass API key from config
+                        "model_name": "text-embedding-3-small",
+                        "credential": openai_api_key,  # Use 'credential' per Milvus docs
                     }
                 )
                 
