@@ -415,6 +415,7 @@ async def request_full_resume_action(page: Page, chat_id: str) -> bool:
         if await confirm_continue.count() > 0:
             try:
                 await confirm_continue.click(timeout=1000)
+                logger.info("境外提醒已确认")
             except:
                 pass
         
@@ -423,6 +424,7 @@ async def request_full_resume_action(page: Page, chat_id: str) -> bool:
         if await confirm.count() > 0:
             try:
                 await confirm.click(timeout=1000)
+                logger.info("简历请求已发送")
             except:
                 pass
         else:

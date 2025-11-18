@@ -300,9 +300,17 @@ ${analysis.followup_tips || '暂无'}`;
         
         const title = `候选人 ${candidateName} 通过初步筛选`;
         
-        const formData = new FormData(candidateData);
+        // Create FormData manually from candidateData object
+        const formData = new FormData();
         formData.append('title', title);
         formData.append('message', markdownMessage);
+        
+        // Append candidate fields that the endpoint expects
+        if (candidateData.job_id) formData.append('job_id', candidateData.job_id);
+        if (candidateData.chat_id) formData.append('chat_id', candidateData.chat_id);
+        if (candidateData.conversation_id) formData.append('conversation_id', candidateData.conversation_id);
+        if (candidateData.name) formData.append('name', candidateData.name);
+        if (candidateData.job_applied) formData.append('job_applied', candidateData.job_applied);
         
         const response = await fetch('/candidates/notify', {
             method: 'POST',

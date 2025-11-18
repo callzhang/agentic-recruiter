@@ -1269,18 +1269,18 @@ async def extract_pdf_viewer_text(frame: Frame) -> Dict[str, Any]:
             text = extract_text_from_pdfjs_html(html)
             text_list.append(text)
         text = "\n".join(text_list)
-        cleaned_text = clean_resume_text(text)
-        assert len(cleaned_text) > 100, "PDF文本长度小于100"
-        return {"pages": [], "text": cleaned_text}
+        DOM_text = clean_resume_text(text)
+        assert len(DOM_text) > 100, "PDF文本长度小于100"
+        # return {"pages": [], "text": cleaned_text}
     except Exception as e:
-        logger.error(f"提取PDF文本失败: {e}\n {cleaned_text}")
-        pass
+        logger.error(f"提取PDF文本失败: {e}\n {DOM_text}")
+        # return {"pages": [], "text": DOM_text}
 
     # use evaluate to extract text
     try:
         pages: Any = await frame.evaluate(
             dedent(
-                """
+                r"""
                 (async () => {
                   const app = window.PDFViewerApplication;
                   if (!app || !app.pdfDocument) {
@@ -1328,7 +1328,7 @@ async def extract_pdf_viewer_text(frame: Frame) -> Dict[str, Any]:
                       const joined = buffer
                         .join(' ')
                         .replace(/\u00a0/g, ' ')
-                        .replace(/\\s+/g, ' ')
+                        .replace(/\s+/g, ' ')
                         .trim();
                       if (joined) {
                         lines.push(joined);
@@ -1366,50 +1366,136 @@ async def extract_pdf_viewer_text(frame: Frame) -> Dict[str, Any]:
         else:
             pages = [pages]
 
-    combined: List[str] = []
+    js_text = ""
     for page_data in pages:
-        for line in page_data.get("lines", []) or []:
-            if line:
-                combined.append(line)
+        for line in page_data.get("lines", ''):
+            js_text += line + "\n"
 
-    cleaned_text = clean_resume_text("\n".join(combined))
-    if len(cleaned_text) < 100:
-        logger.error(f"evaluate frame文本长度小于100: {cleaned_text}")
+    js_text = clean_resume_text(js_text)
+    if len(js_text) < 100:
+        logger.error(f"evaluate frame文本长度小于100: {js_text}")
 
     # fallback to inner_text
     pages = []
     fallback = await frame.evaluate("() => document.body ? document.body.innerText || '' : ''")
-    fallback = clean_pdf_text(fallback)
+    fallback = clean_resume_text(fallback)
     if len(fallback) < 100:
         logger.error(f"fallback to inner_text文本长度小于100: {fallback}")
-    return {"pages": [], "text": fallback, "error": str(e)}
+
+    # Select best text version using simple rating function
+    candidates = [
+        ("DOM_text", DOM_text),
+        ("js_text", js_text),
+        ("fallback", fallback)
+    ]
+    
+    # Filter out empty or too short candidates
+    candidates = [(name, text) for name, text in candidates if text and len(text) >= 100]
+    
+    if not candidates:
+        return {"pages": [], "text": fallback if fallback else ""}
+    
+    # Calculate average total length for normalization
+    avg_total_length = sum(len(text) for _, text in candidates) / len(candidates) if candidates else 1
+    
+    def rate_text(name: str, text: str) -> float:
+        """Rate text quality. Higher is better.
+        
+        Rating based on:
+        - avg_line_length / total_length (higher = less garbled, more content per line)
+        - total_length / avg_total_length (higher = more content)
+        
+        We multiply them to ensure both factors are important.
+        """
+        if not text:
+            return 0.0
+        
+        lines = text.split('\n')
+        non_empty_lines = [line.strip() for line in lines if line.strip()]
+        
+        if not non_empty_lines:
+            return 0.0
+        
+        # Calculate average line length
+        avg_line_length = sum(len(line) for line in non_empty_lines) / len(non_empty_lines)
+        
+        # Factor 1: average_line_length / total_length (higher = less garbled)
+        # Scale by 1000 to make it comparable to factor2
+        factor1 = (avg_line_length / len(text)) * 1000 if text else 0.0
+        
+        # Factor 2: total_length / avg_total_length (higher = more content)
+        factor2 = len(text) / avg_total_length if avg_total_length > 0 else 1.0
+        
+        # Multiply factors so both need to be good (garbled text will have low factor1)
+        rating = factor1 * factor2
+        
+        return rating
+    
+    # Sort by rating (higher is better)
+    candidates.sort(key=lambda x: rate_text(x[0], x[1]), reverse=True)
+    
+    best_name, best_text = candidates[0]
+    best_rating = rate_text(best_name, best_text)
+    lines = best_text.split('\n')
+    non_empty = [line.strip() for line in lines if line.strip()]
+    avg_line_len = sum(len(line) for line in non_empty) / len(non_empty) if non_empty else 0
+    logger.debug(f"Selected {best_name} as best text (rating: {best_rating:.3f}, "
+                 f"avg_line_len: {avg_line_len:.1f}, length: {len(best_text)})")
+    
+    return {"pages": [], "text": best_text}
 
 
 
 def clean_resume_text(text: str) -> str:
-    text = re.sub(r"\n{3,}", "<TRIPLE_NL>", text)
-    text = re.sub(r"\n{2,}", "\n", text)
-    text = re.sub(r"\n\s\n", "\n", text)
-    text = text.replace("<TRIPLE_NL>", "\n\n")
-    return text.strip()
-
-import re, unicodedata
-
-def clean_pdf_text(raw: str) -> str:
-    text = raw.replace('\x00', '')
-    text = re.sub(r'[\x01-\x1F\x7F]', '', text)
-    # remove BOSS-style hashed tokens like f6a4b4051154ea161XJ_2tS-GFFTwYu4VvOcWOGkl_7RPhFl3g~~
+    """Clean resume text by removing control characters, BOSS tokens, and normalizing formatting.
+    
+    This function:
+    - Removes null bytes and control characters (PRESERVES newlines and tabs)
+    - Removes BOSS-style hashed tokens (e.g., "07ab71446862f8541Xx629-5F1RQxY6-VfmXWOGkl_7RPhFl3g~~")
+    - Preserves ALL newlines (single and double newlines are kept)
+    - Normalizes unicode
+    - Cleans up excessive spaces (but preserves newlines)
+    """
+    import unicodedata
+    
+    if not text:
+        return ""
+    
+    # Remove null bytes and control characters
+    # IMPORTANT: Preserve \n (0x0A) and \t (0x09) - exclude them from removal
+    # Remove: \x01-\x08, \x0B-\x0C, \x0E-\x1F, \x7F
+    text = text.replace('\x00', '')
+    text = re.sub(r'[\x01-\x08\x0B\x0C\x0E-\x1F\x7F]', '', text)
+    
+    # Remove BOSS-style hashed tokens like f6a4b4051154ea161XJ_2tS-GFFTwYu4VvOcWOGkl_7RPhFl3g~~
+    # Pattern matches: alphanumeric/underscore/hyphen sequences of 10+ chars ending with ~~
     text = re.sub(r'[A-Za-z0-9_-]{10,}~~', '', text)
-    # merge single-char lines
-    text = re.sub(r'(?<=\S)\n(?=\S)', '', text)
-    # collapse newlines and spaces
-    text = re.sub(r'\n{2,}', '\n', text)
-    text = re.sub(r' {2,}', ' ', text)
+    
+    # Normalize unicode (NFKC: compatibility decomposition + canonical composition)
+    # This should preserve newlines
     text = unicodedata.normalize('NFKC', text)
+    
+    # Handle empty lines with only whitespace - preserve the newline structure
+    # Replace newline+whitespace+newline with double newline (paragraph break)
+    text = re.sub(r'\n\s+\n', '\n\n', text)
+    
+    # Collapse excessive newlines (4+) to triple newline, but keep 1-3 newlines as-is
+    # This preserves single newlines (line breaks) and double newlines (paragraph breaks)
+    text = re.sub(r'\n{4,}', '\n\n\n', text)
+    
+    # Clean up excessive spaces within lines (2+ spaces to single space)
+    # CRITICAL: Use negative lookahead to ensure we don't touch anything near newlines
+    # This regex only matches spaces that are NOT immediately followed by a newline
+    text = re.sub(r'[ \t]{2,}(?!\n)', ' ', text)
+    
+    # Remove trailing spaces/tabs from lines (but keep the newlines themselves)
+    # This only removes spaces/tabs that come immediately before a newline
+    text = re.sub(r'[ \t]+\n', '\n', text)
+    
+    # Final strip only removes leading/trailing whitespace, preserves internal newlines
     return text.strip()
 
 from bs4 import BeautifulSoup
-import re
 
 def extract_text_from_pdfjs_html(html: str) -> str:
     soup = BeautifulSoup(html, "html.parser")
