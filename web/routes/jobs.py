@@ -85,6 +85,14 @@ async def create_job(request: Request):
     # Extract candidate filters from JSON
     candidate_filters = json_data.get("candidate_filters")
     
+    # Extract notification config (can be provided directly or built from dingtalk_url/dingtalk_secret)
+    notification = json_data.get("notification")
+    if not notification:
+        dingtalk_url = json_data.get("dingtalk_url", "").strip()
+        dingtalk_secret = json_data.get("dingtalk_secret", "").strip()
+        if dingtalk_url and dingtalk_secret:
+            notification = {"url": dingtalk_url, "secret": dingtalk_secret}
+    
     # Create new job data
     new_job = {
         "id": job_id,
@@ -101,6 +109,10 @@ async def create_job(request: Request):
         "drill_down_questions": drill_down_questions,
         "candidate_filters": candidate_filters
     }
+    
+    # Add notification if provided
+    if notification:
+        new_job["notification"] = notification
     
     # Add extra configuration if provided
     if extra_yaml:
@@ -150,6 +162,14 @@ async def update_job(job_id: str, request: Request):
     # Extract candidate filters from JSON
     candidate_filters = json_data.get("candidate_filters")
     
+    # Extract notification config (can be provided directly or built from dingtalk_url/dingtalk_secret)
+    notification = json_data.get("notification")
+    if not notification:
+        dingtalk_url = json_data.get("dingtalk_url", "").strip()
+        dingtalk_secret = json_data.get("dingtalk_secret", "").strip()
+        if dingtalk_url and dingtalk_secret:
+            notification = {"url": dingtalk_url, "secret": dingtalk_secret}
+    
     # Validate required fields
     if not new_job_id or not position:
         return JSONResponse(
@@ -196,6 +216,10 @@ async def update_job(job_id: str, request: Request):
         "drill_down_questions": drill_down_questions,
         "candidate_filters": candidate_filters
     }
+    
+    # Add notification if provided
+    if notification:
+        updated_job["notification"] = notification
     
     # Add extra configuration if provided
     if extra_yaml:

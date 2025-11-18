@@ -38,6 +38,7 @@ def get_collection_schema() -> list[FieldSchema]:
         FieldSchema(name="full_resume", dtype=DataType.VARCHAR, max_length=_max_length, nullable=True),
         FieldSchema(name="conversation_id", dtype=DataType.VARCHAR, max_length=100, nullable=True),
         FieldSchema(name="generated_message", dtype=DataType.VARCHAR, max_length=5000, nullable=True),
+        FieldSchema(name="notified", dtype=DataType.BOOL, nullable=True),
     ]
     return fields
 # Define field names for the collection
@@ -270,11 +271,15 @@ def upsert_candidate(**kwargs) -> Optional[str]:
     if candidate_id != kwargs.get("candidate_id"):
         kwargs['candidate_id'] = candidate_id
     
-    # Truncate varchar fields
+    # fixing fields types
     for k, v in kwargs.items():
+        if not (v or v == 0) or not k in _all_fields:
+            continue
         field = next((f for f in get_collection_schema() if f.name == k), None)
-        if v and field and field.dtype == DataType.VARCHAR:
+        if field.dtype == DataType.VARCHAR:
             kwargs[k] = truncate_field(v, field.max_length)
+        elif field.dtype == DataType.BOOL:
+            kwargs[k] = True if v==1 or v.lower() in ['true', '1'] else False
     
     # Parse JSON fields if strings
     analysis = kwargs.get("analysis")

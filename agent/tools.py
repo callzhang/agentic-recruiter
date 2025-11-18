@@ -1,9 +1,7 @@
 """LangGraph tools that call FastAPI service endpoints."""
 from datetime import datetime
 from langgraph.graph import END
-import requests, time, json, base64
-import hmac, hashlib
-import urllib.parse
+import requests, json
 from typing import Any, Dict, List, Optional, Callable, Annotated, Literal
 from langgraph.prebuilt import InjectedState, InjectedStore
 from langchain.tools import tool, ToolRuntime, InjectedToolCallId
@@ -39,57 +37,6 @@ def _call_api(method: str, url: str, data: dict | None = None, timeout: float = 
     else:
         return response.text
 
-
-def _send_dingtalk_message(webhook_url: str, message: str, title: str, secret: str=None) -> bool:
-    """
-    Send message to DingTalk group chat using webhook.
-    
-    According to DingTalk documentation: https://open.dingtalk.com/document/dingstart/custom-bot-to-send-group-chat-messages
-    
-    Args:
-        webhook_url: DingTalk webhook URL
-        secret: DingTalk secret for signature (optional, empty string if not used)
-        message: Message content to send
-        title: Optional title for the message
-        
-    Returns:
-        bool: True if message sent successfully, False otherwise
-    """
-    # Generate signature if secret is provided
-    url = webhook_url
-    if secret:
-        timestamp = str(round(time.time() * 1000))
-        string_to_sign = f"{timestamp}\n{secret}"
-        hmac_code = hmac.new(
-            secret.encode('utf-8'),
-            string_to_sign.encode('utf-8'),
-            digestmod=hashlib.sha256
-        ).digest()
-        sign = urllib.parse.quote_plus(base64.b64encode(hmac_code).decode('utf-8'))
-        
-        # Append timestamp and signature to webhook URL
-        separator = '&' if '?' in url else '?'
-        url = f"{url}{separator}timestamp={timestamp}&sign={sign}"
-    
-    
-    # If title is provided, use markdown format for better formatting
-    payload = {
-        "msgtype": "markdown",
-        "markdown": {
-            "title": title,
-            "text": f"## Boss直聘候选人跟进通知\n\n{message}"
-        }
-    }
-    
-    response = requests.post(url, json=payload, timeout=10.0)
-    response.raise_for_status()
-    
-    result = response.json()
-    if result.get("errcode") != 0:
-        logger.error(f"Failed to send DingTalk message: {result.get('errmsg', 'Unknown error')}")
-        raise ValueError(f"Failed to send DingTalk message: {result.get('errmsg', 'Unknown error')}")
-
-    return True
 
 # ============================================================================
 # Manager Tools
@@ -331,16 +278,20 @@ def notify_hr_tool(title: str, report: str, stage: str, contact_info: str) -> bo
         raise ValueError(f"Candidate is not in SEEK stage: {stage}")
 
     runtime = get_runtime(RecruiterState)
-    webhook_url = runtime.context.dingtalk_webhook
-    
-    if not webhook_url:
-        raise ValueError("DingTalk webhook URL is not configured, skipping notification")
+    state = runtime.state
+    candidate = state.get("candidate")
+
     
     # Format message for DingTalk
     message = f"{report}\n\n联系方式: {contact_info}"
     
-    success = _send_dingtalk_message(webhook_url, message, title)
-    return success
+    # Use send_dingtalk_notification from assistant_actions which supports job_id
+    from src.assistant_actions import send_dingtalk_notification
+    return send_dingtalk_notification(
+        title=title,
+        message=message,
+        job_id=candidate.job_id
+    )
 
 
 # ============================================================================

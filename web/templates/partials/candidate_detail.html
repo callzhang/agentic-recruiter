@@ -184,7 +184,6 @@ async function process_candidate() {
         let newStage = 'PASS'; // Default to PASS
         // Step 4a: Check chat_threshold - generate message if above
         if (current_score >= chat_threshold) {
-            debugger;
             newStage = 'CHAT';
             const messageDiv = document.getElementById('message-content');
             if (messageDiv?.textContent?.includes('⏳')) {
@@ -197,6 +196,7 @@ async function process_candidate() {
                 
                 // For chat mode, try to get full resume and re-analyze
                 if (mode !== 'recommend') {
+                    debugger;
                     let full_resume_text = document.getElementById('resume-textarea-full')?.value?.trim() || '';
                     if (full_resume_text.includes('⏳')) {
                         await fetchFullResume();
@@ -288,9 +288,19 @@ ${analysis.summary || '暂无'}
 **跟进建议**:
 ${analysis.followup_tips || '暂无'}`;
 
+        // Get candidate data to check notified field
+        const candidateData = getCandidateData();
+        const notified = candidateData.notified;
+        
+        // Skip if already notified
+        if (notified) {
+            console.log('Candidate already notified, skipping notification');
+            return;
+        }
+        
         const title = `候选人 ${candidateName} 通过初步筛选`;
         
-        const formData = new FormData();
+        const formData = new FormData(candidateData);
         formData.append('title', title);
         formData.append('message', markdownMessage);
         
@@ -302,6 +312,8 @@ ${analysis.followup_tips || '暂无'}`;
         const result = await response.json();
         if (result.success) {
             console.log('DingTalk notification sent successfully');
+            // Update local candidate data to reflect notified status
+            updateCandidateData({ notified: true });
         } else {
             console.error('Failed to send DingTalk notification:', result.error);
         }

@@ -521,19 +521,42 @@ async def send_message(
 async def notify_hr(
     title: str = Form(...),
     message: str = Form(...),
+    job_id: Optional[str] = Form(None),
+    chat_id: Optional[str] = Form(None),
+    name: Optional[str] = Form(None),
+    job_applied: Optional[str] = Form(None),
+    conversation_id: Optional[str] = Form(None),
 ):
     """Send DingTalk notification to HR.
     
     Args:
         title: Notification title
         message: Notification message in markdown format
+        job_id: Optional job ID to lookup job-specific notification config
+        chat_id: Optional candidate chat_id to check/update notified field
+        conversation_id: Optional candidate conversation_id to check/update notified field
         
     Returns:
         JSONResponse: Success status
     """
     try:
-        success = send_dingtalk_notification(title=title, message=message)
+        # Check if candidate has already been notified
+        from src.candidate_store import get_candidates, upsert_candidate
+        candidates = get_candidates(identifiers=[chat_id, conversation_id], names=[name], job_applied=job_applied, limit=1)
+        candidate = candidates[0] if candidates else {}
+        
+        # Skip if already notified
+        if candidate.get("notified"):
+            return {"success": False, "error": "该候选人已发送过通知，避免重复发送"}
+        
+        # Send notification with job_id support
+        success = send_dingtalk_notification(title=title, message=message, job_id=job_id)
+        
         if success:
+            # Update candidate's notified field after successful notification
+            if candidate:
+                candidate["notified"] = True
+                upsert_candidate(**candidate)
             return {"success": True, "message": "通知发送成功"}
         else:
             return {"success": False, "error": "通知发送失败"}

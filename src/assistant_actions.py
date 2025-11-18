@@ -226,8 +226,7 @@ def generate_message(
 def send_dingtalk_notification(
     title: str,
     message: str,
-    webhook_url: Optional[str] = None,
-    secret: Optional[str] = None
+    job_id: str = None
 ) -> bool:
     """
     Send notification to DingTalk group chat using webhook.
@@ -237,8 +236,7 @@ def send_dingtalk_notification(
     Args:
         title: Title of the notification
         message: Message content to send
-        webhook_url: DingTalk webhook URL (if None, will get from config)
-        secret: DingTalk secret for signature (optional, if None will get from config)
+        job_id: Optional job ID to lookup job-specific notification config
         
     Returns:
         bool: True if message sent successfully, False otherwise
@@ -246,12 +244,25 @@ def send_dingtalk_notification(
     Raises:
         ValueError: If webhook URL is not configured or message sending fails
     """
-    # Get config if not provided
+    # Priority: job.notification > default config
+    # Initialize webhook_url and secret
+    webhook_url = None
+    secret = None
+    
+    # Try job-specific config first if job_id provided
+    from src.jobs_store import get_job_by_id
+    job = get_job_by_id(job_id)
+    if job and job.get("notification"):
+        notification = job.get("notification")
+        if isinstance(notification, dict):
+            webhook_url = notification.get("url")
+            secret = notification.get("secret")
+    
+    # Fallback to default config if still not set
     if not webhook_url:
         dingtalk_config = get_dingtalk_config()
         webhook_url = dingtalk_config.get("url")
-        if not secret:
-            secret = dingtalk_config.get("secret")
+        secret = dingtalk_config.get("secret")
     
     if not webhook_url:
         logger.warning("DingTalk webhook URL is not configured, skipping notification")

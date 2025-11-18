@@ -35,7 +35,7 @@ def get_job_collection_schema() -> list[FieldSchema]:
     FieldSchema(name="candidate_filters", dtype=DataType.JSON, nullable=True),
     
     # Vector field for future semantic search
-        FieldSchema(name="job_embedding", dtype=DataType.FLOAT_VECTOR, dim=_job_store_config["embedding_dim"]),
+    FieldSchema(name="job_embedding", dtype=DataType.FLOAT_VECTOR, dim=_job_store_config["embedding_dim"]),
     
     # Versioning fields
     FieldSchema(name="version", dtype=DataType.INT64),
@@ -44,6 +44,9 @@ def get_job_collection_schema() -> list[FieldSchema]:
     # Timestamps
     FieldSchema(name="created_at", dtype=DataType.VARCHAR, max_length=64),
     FieldSchema(name="updated_at", dtype=DataType.VARCHAR, max_length=64),
+    
+    # Notification fields
+    FieldSchema(name="notification", dtype=DataType.JSON, nullable=True),
 ]
     return fields
 
@@ -67,6 +70,52 @@ def get_base_job_id(job_id: str) -> str:
         Base job_id without version suffix (e.g., "ml_engineer")
     """
     return re.sub(r'_v\d+$', '', job_id)
+
+
+def _build_job_data(job_data: Dict[str, Any], current_job: Optional[Dict[str, Any]] = None, 
+                    version: int = 1, created_at: Optional[str] = None) -> Dict[str, Any]:
+    """Build job data dictionary from job_data with optional fallback to current_job.
+    
+    Args:
+        job_data: New job data to use
+        current_job: Optional existing job data for fallback values
+        version: Version number for the job
+        created_at: Optional creation timestamp (uses current time if not provided)
+        
+    Returns:
+        Dictionary with all job fields, filtered to valid fields only
+    """
+    now = datetime.now().isoformat()
+    
+    # Handle drill_down_questions with truncation
+    if "drill_down_questions" in job_data:
+        drill_down_questions = truncate_field(str(job_data["drill_down_questions"]), 30000)
+    elif current_job:
+        drill_down_questions = truncate_field(str(current_job.get("drill_down_questions", "")), 30000)
+    else:
+        drill_down_questions = ""
+    
+    # Build job data dictionary with fallback to current_job if provided
+    built_data = {
+        "position": job_data.get("position", current_job.get("position", "") if current_job else ""),
+        "background": job_data.get("background", current_job.get("background", "") if current_job else ""),
+        "description": job_data.get("description", current_job.get("description", "") if current_job else ""),
+        "responsibilities": job_data.get("responsibilities", current_job.get("responsibilities", "") if current_job else ""),
+        "requirements": job_data.get("requirements", current_job.get("requirements", "") if current_job else ""),
+        "target_profile": job_data.get("target_profile", current_job.get("target_profile", "") if current_job else ""),
+        "keywords": job_data.get("keywords", current_job.get("keywords", {"positive": [], "negative": []}) if current_job else {"positive": [], "negative": []}),
+        "drill_down_questions": drill_down_questions,
+        "candidate_filters": job_data.get("candidate_filters", current_job.get("candidate_filters") if current_job else None),
+        "job_embedding": [0.0] * _job_store_config["embedding_dim"],  # Empty embedding for now
+        "version": version,
+        "current": True,
+        "created_at": created_at or current_job.get("created_at", now) if current_job else now,
+        "updated_at": now,
+        "notification": job_data.get("notification", current_job.get("notification", {}) if current_job else {}),
+    }
+    
+    # Filter to only valid fields
+    return {k: v for k, v in built_data.items() if k in _all_fields and (v or v == 0)}
 
 
 # ------------------------------------------------------------------
@@ -253,29 +302,9 @@ def insert_job(**job_data) -> bool:
     base_job_id = get_base_job_id(job_data["id"])
     versioned_job_id = f"{base_job_id}_v1"
     
-    now = datetime.now().isoformat()
-    drill_down_questions = job_data.get("drill_down_questions", "")
-    drill_down_questions = truncate_field(drill_down_questions, 30000)
-    insert_data = {
-        "job_id": versioned_job_id,
-        "position": job_data["position"],
-        "background": job_data.get("background", ""),
-        "description": job_data.get("description", ""),
-        "responsibilities": job_data.get("responsibilities", ""),
-        "requirements": job_data.get("requirements", ""),
-        "target_profile": job_data.get("target_profile", ""),
-        "keywords": job_data.get("keywords", {"positive": [], "negative": []}),
-        "drill_down_questions": drill_down_questions,
-        "candidate_filters": job_data.get("candidate_filters"),
-        "job_embedding": [0.0] * _job_store_config["embedding_dim"],  # Empty embedding for now
-        "version": 1,
-        "current": True,
-        "created_at": now,
-        "updated_at": now,
-    }
-    
-    # Filter to only valid fields
-    insert_data = {k: v for k, v in insert_data.items() if k in _all_fields and (v or v == 0)}
+    # Build job data using helper function (no current_job for new inserts)
+    insert_data = _build_job_data(job_data, current_job=None, version=1)
+    insert_data["job_id"] = versioned_job_id
         
     # Insert data
     _client.insert(collection_name=_collection_name, data=[insert_data])
@@ -324,30 +353,9 @@ def update_job(job_id: str, **job_data) -> bool:
             partial_update=True,
         )
     
-    # Create new version with updated data
-    now = datetime.now().isoformat()
-    drill_down_questions = job_data.get("drill_down_questions", current_job.get("drill_down_questions", ""))
-    drill_down_questions = truncate_field(str(drill_down_questions), 30000)
-    new_version_data = {
-        "job_id": new_versioned_job_id,
-        "position": job_data.get("position", current_job.get("position", "")),
-        "background": job_data.get("background", current_job.get("background", "")),
-        "description": job_data.get("description", current_job.get("description", "")),
-        "responsibilities": job_data.get("responsibilities", current_job.get("responsibilities", "")),
-        "requirements": job_data.get("requirements", current_job.get("requirements", "")),
-        "target_profile": job_data.get("target_profile", current_job.get("target_profile", "")),
-        "keywords": job_data.get("keywords", current_job.get("keywords", {"positive": [], "negative": []})),
-        "drill_down_questions": drill_down_questions,
-        "candidate_filters": job_data.get("candidate_filters", current_job.get("candidate_filters")),
-        "job_embedding": [0.0] * _job_store_config["embedding_dim"],  # Keep empty for now
-        "version": next_version,
-        "current": True,
-        "created_at": current_job.get("created_at", now),  # Keep original creation time
-        "updated_at": now,
-    }
-
-    # Filter to only valid fields
-    new_version_data = {k: v for k, v in new_version_data.items() if k in _all_fields and (v or v == 0)}
+    # Build new version data using helper function (with current_job for fallback)
+    new_version_data = _build_job_data(job_data, current_job=current_job, version=next_version)
+    new_version_data["job_id"] = new_versioned_job_id
         
     # Insert new version
     _client.insert(collection_name=_collection_name, data=[new_version_data])

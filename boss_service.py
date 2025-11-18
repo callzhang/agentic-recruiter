@@ -265,6 +265,7 @@ class BossServiceAsync:
         Playwright objects.  If a login check is needed, we release the lock and
         perform the polling without holding the lock so other read-only endpoints can
         continue to serve status information.
+        
         """
         while True:
             async with self.browser_lock:
