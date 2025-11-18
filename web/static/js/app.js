@@ -1088,11 +1088,7 @@ function applyCardUpdate(card, updates, identifiers) {
     
     // Update the card's data attributes
     Object.assign(cardData, updates);
-    
-    // Store conversation_id in card data for future lookups if available
-    if (identifiers.conversation_id && !cardData.conversation_id) {
-        cardData.conversation_id = identifiers.conversation_id;
-    }
+    Object.assign(cardData, identifiers);
     
     // Apply updates to candidateData
     card.setAttribute('hx-vals', JSON.stringify(cardData));
@@ -1131,10 +1127,10 @@ function applyCardUpdate(card, updates, identifiers) {
                     stageEmoji = '⭐';
                     stageClasses = 'bg-emerald-100 text-emerald-700';
                     break;
-                case 'GREET':
-                    stageEmoji = '👋';
-                    stageClasses = 'bg-green-100 text-green-700';
-                    break;
+                // case 'GREET':
+                //     stageEmoji = '👋';
+                //     stageClasses = 'bg-green-100 text-green-700';
+                //     break;
                 case 'PASS':
                     stageEmoji = '❌';
                     stageClasses = 'bg-red-100 text-red-700';

@@ -26,6 +26,14 @@
             {% endif %}
         </div>
     </div>
+    {% if candidate.name and ('先生' in candidate.name or '女士' in candidate.name) and not candidate.chat_id%}
+        <div class="flex items-center space-x-2 bg-yellow-100 border-l-4 border-yellow-400 text-yellow-800 px-4 py-2 rounded shadow-sm my-2">
+            <span>⚠️</span>
+            <span>
+                检测到候选人姓名包含<strong>「先生」</strong>或<strong>「女士」</strong>，导致数据可能重复，请认真检查以下内容是否和招聘网站一致。如果不一致，请重新获取简历。
+            </span>
+        </div>
+    {% endif %}
 
     <!-- Hidden context for HTMX requests - using JSON to preserve types -->
     <div id="candidate-context" class="hidden" hx-vals='{{ candidate | tojson | safe }}'></div>
@@ -130,26 +138,24 @@
 
 </div>
 
-<!-- Mode-specific record check logic -->
+<!-- Centralized Candidate Analysis & Workflow Logic -->
 <script>
-// ============================================================================
-// Centralized Candidate Analysis & Workflow Logic
-// ============================================================================
 
 async function process_candidate() {
+    const getIdentifiers = () => {
+        const candidate = getCandidateData();
+        return {
+            candidate_id: candidate.candidate_id,
+            chat_id: candidate.chat_id,
+            conversation_id: candidate.conversation_id,
+            job_applied: candidate.job_applied,
+            name: candidate.name,
+        };
+    };
+    const { candidate_id, chat_id, conversation_id, job_applied, name } = getIdentifiers();
     const mode = getCandidateData('mode');
-    const chat_id = getCandidateData('chat_id');
-    const candidate_id = getCandidateData('candidate_id');
-    const name = getCandidateData('name') || '未知候选人';
-    // Use single mutable variable for conversation_id
-    let conversationId = getCandidateData('conversation_id');
-    
-    // Emit identifier for event listeners (use current conversationId value)
-    const getIdentifier = () => chat_id || conversationId || candidate_id || 'unknown';
-    
     // Disable cards during processing
     disableAllCards();
-    
     try {
         // Step 1: Ensure resume is loaded
         const online_resume_div = document.getElementById('resume-textarea-online');
@@ -158,8 +164,8 @@ async function process_candidate() {
         }
         
         // Step 2: Initialize chat if no conversation_id
-        if (!conversationId) {
-            conversationId = await initializeNewChat();
+        if (!conversation_id) {
+            await initializeNewChat();
         }
         
         // Step 3: Start analysis if pending
@@ -171,12 +177,14 @@ async function process_candidate() {
         // Step 4: Check threshold and determine stage (sequential: chat → borderline → seek)
         const analysis_container = document.querySelector('#analysis-content #analysis-result-container');
         let analysis = analysis_container ? JSON.parse(analysis_container.getAttribute('data-analysis')) : null;
+        let is_full_analysis = analysis.resume_type === 'full';
         let current_score = analysis?.overall || 0;
         const { chat_threshold, borderline_threshold, seek_threshold } = getThresholdValues();
         
         let newStage = 'PASS'; // Default to PASS
         // Step 4a: Check chat_threshold - generate message if above
         if (current_score >= chat_threshold) {
+            debugger;
             newStage = 'CHAT';
             const messageDiv = document.getElementById('message-content');
             if (messageDiv?.textContent?.includes('⏳')) {
@@ -187,42 +195,38 @@ async function process_candidate() {
             if (current_score >= borderline_threshold) {
                 newStage = 'SEEK';
                 
-                // Send DingTalk notification with analysis result
-                if (analysis) {
-                    await sendBorderlineNotification(analysis, name, getCandidateData('job_applied') || '未知岗位');
-                }
-                
                 // For chat mode, try to get full resume and re-analyze
                 if (mode !== 'recommend') {
-                    const full_resume_div = document.getElementById('resume-textarea-full');
-                    if (full_resume_div?.value?.includes('⏳') || !full_resume_div?.value || full_resume_div?.value.includes('None')) {
+                    let full_resume_text = document.getElementById('resume-textarea-full')?.value?.trim() || '';
+                    if (full_resume_text.includes('⏳')) {
                         await fetchFullResume();
-                        const full_resume_textarea = document.getElementById('resume-textarea-full');
-                        const resumeText = full_resume_textarea?.value || '';
-                        if (resumeText.length > 100 && !resumeText.includes('⏳')) {
-                            await startAnalysis();
-                            // Re-read analysis after full resume analysis
-                            const updated_analysis_container = document.querySelector('#analysis-content #analysis-result-container');
-                            analysis = updated_analysis_container ? JSON.parse(updated_analysis_container.getAttribute('data-analysis')) : analysis;
-                            current_score = analysis?.overall || current_score;
-                            
-                            // Send notification again if analysis was updated
-                            if (analysis && current_score >= borderline_threshold) {
-                                await sendBorderlineNotification(analysis, name, getCandidateData('job_applied') || '未知岗位');
-                            }
-                        }
+                        full_resume_text = document.getElementById('resume-textarea-full')?.value?.trim() || '';
+                    }
+                    // check if analysis is from full resume
+                    if (! is_full_analysis && full_resume_text.length > 100 && !full_resume_text.includes('⏳')) {
+                        await startAnalysis();
+                        // Re-read analysis after full resume analysis
+                        const updated_analysis_container = document.querySelector('#analysis-content #analysis-result-container');
+                        analysis = JSON.parse(updated_analysis_container.getAttribute('data-analysis'));
+                        is_full_analysis = analysis.resume_type === 'full';
+                        current_score = analysis?.overall || current_score;
+                    }
+                    // Step 4c: Send notification if analysis was updated
+                    if (is_full_analysis && current_score >= borderline_threshold) {
+                        await sendDingNotification(analysis, name, getCandidateData('job_applied'));
+                    }
+                    // Step 4d: Check seek_threshold - request contact if above
+                    if (is_full_analysis && current_score >= seek_threshold) {
+                        newStage = 'CONTACT';
+                        await requestContact();
                     }
                 }else{
                     // For recommend mode, greet and send message
                     await greetAndSendMessage();
-                }
-                
-                // Step 4c: Check seek_threshold - request contact if above
-                if (current_score >= seek_threshold) {
-                    newStage = 'CONTACT';
-                    await requestContact();
+                    await sendDingNotification(analysis, name, getCandidateData('job_applied'));
                 }
             }
+            
         } else {
             showToast(`匹配度: ${current_score}, 未达最低值: ${chat_threshold}`, 'info');
             newStage = 'PASS';
@@ -238,11 +242,7 @@ async function process_candidate() {
         // Emit success event (use updated conversationId)
         const event = new CustomEvent('candidate:processing-complete', {
             detail: {
-                identifier: getIdentifier(),
-                chat_id: chat_id,
-                conversation_id: conversationId,
-                candidate_id: candidate_id,
-                name: name
+                identifiers: getIdentifiers()
             }
         });
         setTimeout(() => {
@@ -255,11 +255,7 @@ async function process_candidate() {
         // Emit error event (use updated conversationId)
         const event = new CustomEvent('candidate:processing-error', {
             detail: {
-                identifier: getIdentifier(),
-                chat_id: chat_id,
-                conversation_id: conversationId,
-                candidate_id: candidate_id,
-                name: name,
+                identifiers: getIdentifiers(),
                 error: error.message || String(error)
             }
         });
@@ -274,7 +270,7 @@ async function process_candidate() {
 /**
  * Send DingTalk notification when candidate score exceeds borderline threshold
  */
-async function sendBorderlineNotification(analysis, candidateName, jobApplied) {
+async function sendDingNotification(analysis, candidateName, jobApplied) {
     try {
         // Format analysis result in markdown
         const markdownMessage = `**候选人**: ${candidateName}
@@ -488,13 +484,17 @@ async function requestContact() {
  */
 async function initializeNewChat() {
     showToast('初始化对话线程...', 'info');
-    const values = getCandidateData();
+    const candidate = getCandidateData();
     //always use online resume at first time (full resume is not available at first time)
-    const resume_text = document.getElementById('resume-textarea-online').value;
-    values.resume_text = resume_text;
+    const resume_text = document.getElementById('resume-textarea-online')?.value;
+    if (!resume_text) {
+        throw new Error('没有可分析的简历,请先请求简历');
+        return;
+    }
+    candidate.resume_text = resume_text;
 
     const formData = new FormData();
-    for (const [key, value] of Object.entries(values)) {
+    for (const [key, value] of Object.entries(candidate)) {
         if (value !== null && value !== undefined) {
             formData.append(key, value);
         }
@@ -506,13 +506,11 @@ async function initializeNewChat() {
     });
     const data = await window.handleApiResponse(response);
     console.log('Chat initialized:', data);
-    if (data.conversation_id) {
-        updateCandidateData({
-            conversation_id: data.conversation_id,
-            saved: true
-        });
-    }
-    return data.conversation_id;
+    updateCandidateData({
+        ...data,
+        saved: true
+    });
+    return data;
 }
 
 
@@ -531,10 +529,10 @@ function updateCandidateData(record) {
     const currentData = getCandidateData();
     
     // Merge updates
-    const updatedData = { ...currentData, ...record };
+    const mergedData = { ...currentData, ...record };
     
     // Update hx-vals attribute with merged data
-    container.setAttribute('hx-vals', JSON.stringify(updatedData));
+    container.setAttribute('hx-vals', JSON.stringify(mergedData));
     
     // Broadcast update to card (filter out null/undefined, keep false values)
     const updates = Object.fromEntries(
@@ -543,13 +541,12 @@ function updateCandidateData(record) {
     
     if (Object.keys(updates).length > 0) {
         console.log('updateCandidateData:', updates);
-        debugger;
         // Get identifiers from the updated data for matching
-        const chat_id = updatedData.chat_id;
-        const conversation_id = updatedData.conversation_id;
-        const candidate_id = updatedData.candidate_id;
-        const name = updatedData.name;
-        const job_applied = updatedData.job_applied;
+        const chat_id = mergedData.chat_id;
+        const conversation_id = mergedData.conversation_id;
+        const candidate_id = mergedData.candidate_id;
+        const name = mergedData.name;
+        const job_applied = mergedData.job_applied;
         
         // Broadcast the update event
         const event = new CustomEvent('candidate:update', {
@@ -570,7 +567,7 @@ function updateCandidateData(record) {
     }
     // update to cloud - use values from hx-vals
     htmx.ajax('POST', '/candidates/save', {
-        values: updatedData,
+        values: mergedData,
         swap: 'none',
     });
 }
@@ -632,21 +629,14 @@ function getThresholdValues() {
     });
 }
 
-// Batch processing functions are now in app.js
-
 // Trigger workflow when this partial is loaded via HTMX
 // Since this script runs when HTMX swaps content, we can call it directly
 // Use requestAnimationFrame to ensure DOM is ready
 requestAnimationFrame(() => {
     // Set initial tab state - show online tab if resume_text exists, otherwise show full tab
-    const onlineTextarea = document.getElementById('resume-textarea-online');
     const fullTextarea = document.getElementById('resume-textarea-full');
-    const hasOnline = onlineTextarea?.value?.trim();
-    const hasFull = fullTextarea?.value?.trim();
     
-    if (hasOnline) {
-        switchResumeTab('online');
-    } else if (hasFull) {
+    if (fullTextarea?.value?.trim().length > 100) {
         switchResumeTab('full');
     } else {
         // Default to online tab

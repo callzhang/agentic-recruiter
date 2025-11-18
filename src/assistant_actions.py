@@ -84,7 +84,7 @@ def init_chat(
     mode: str,
     name: str,
     job_info: Dict[str, Any],
-    # online_resume_text: str,
+    online_resume_text: str,
     chat_history: List[Dict[str, Any]]=[],
     chat_id: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -99,7 +99,7 @@ def init_chat(
     Args:
         name: str (candidate name)
         job_info: Dict with job position, description, requirements
-        resume_text: str (candidate resume text - REQUIRED)
+        online_resume_text: str (candidate online resume text - REQUIRED)
         chat_id: Optional[str] (for chat workflows, None for recommend workflow)
         chat_history: Optional existing chat history to sync
         
@@ -139,7 +139,7 @@ def init_chat(
         chat_id=chat_id,
         name=name,
         job_applied=job_info["position"],
-        # resume_text=online_resume_text,
+        resume_text=online_resume_text,
         stage=None,  # Not analyzed yet
         conversation_id=conversation.id,
         metadata={'history': chat_history},

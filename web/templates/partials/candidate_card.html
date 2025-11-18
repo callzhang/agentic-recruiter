@@ -24,7 +24,6 @@
                     {{ candidate.name or '未知' }}
                 </h3>
                 <!-- stage badge -->
-                {% if candidate.stage %}
                 <span class="inline-flex items-center px-2 py-0.5 text-xs font-medium rounded-full shrink-0
                     {% if candidate.stage == 'CHAT' %}bg-blue-100 text-blue-700
                     {% elif candidate.stage == 'SEEK' %}bg-yellow-100 text-yellow-700
@@ -37,11 +36,10 @@
                     {% if candidate.stage == 'CHAT' %}💬沟通
                     {% elif candidate.stage == 'SEEK' %}✅推进
                     {% elif candidate.stage == 'CONTACT' %}⭐潜力
-                    {% elif candidate.stage == 'GREET' %}👋打招呼
+                    <!-- {% elif candidate.stage == 'GREET' %}👋打招呼 -->
                     {% elif candidate.stage == 'PASS' %}❌不匹配
                     {% endif %}
                 </span>
-                {% endif %}
             </div>
             <p class="text-sm text-gray-600 truncate">
                 {{ candidate.job_applied or '未指定岗位' }}

@@ -158,11 +158,13 @@ def get_candidate_id_by_dict(kwargs: Dict[str, Any]) -> Optional[Dict[str, Any]]
     names = [name] if name else None
     job_applied = kwargs.get("job_applied")
     identifiers = [candidate_id, chat_id, conversation_id]
+    resume_text = kwargs.get("resume_text")
     
     results = get_candidates(
         identifiers=identifiers, 
         names=names, 
         job_applied=job_applied, 
+        resume_text=resume_text,
         limit=1, 
         fields=['candidate_id']
     )
@@ -172,8 +174,9 @@ def get_candidates(
     identifiers: Optional[List[str]] = None,
     names: Optional[List[str]] = None,
     job_applied: Optional[str] = None,
+    resume_text: Optional[str] = None,
     limit: Optional[int] = 100,
-    fields: Optional[List[str]] = None,
+    fields: Optional[List[str]] = _readable_fields,
 ) -> List[Dict[str, Any]]:
     """Query candidates by identifiers (chat_id/candidate_id/conversation_id) or by names/job_applied.
     
@@ -181,23 +184,19 @@ def get_candidates(
         identifiers: List of chat_id, candidate_id, or conversation_id values
         names: List of candidate names (requires job_applied)
         job_applied: Single job_applied value (required with names)
+        resume_text: Single resume_text value (required with names)
         limit: Maximum number of results to return
         fields: Fields to return (defaults to _readable_fields)
         
     Returns:
         List[Dict[str, Any]]: List of candidate records
     """
-    if fields is None:
-        fields = _readable_fields
     
     # Remove None from identifiers, names, and job_applied
-    if identifiers:
-        identifiers = [id for id in identifiers if id] or None
-    if names:
-        names = [name.strip() for name in names if (name.strip() and '先生' not in name and '女士' not in name)] or None
-    if job_applied:
-        job_applied = job_applied.strip() or None
-    
+    identifiers = [id for id in identifiers if id] or None if identifiers else None
+    names = [name.strip() for name in names if (name.strip())] or None if names else None
+    job_applied = job_applied.strip() or None if job_applied else None
+    resume_text = resume_text.strip() or None if resume_text and len(resume_text) > 100 else None
     
     if identifiers:
         quoted_ids = [f"'{id}'" for id in identifiers]
@@ -220,12 +219,9 @@ def get_candidates(
     else:
         filter_expr = expr_1 or expr_2
     
-    if not filter_expr:
-        logger.warning("No filter expression provided")
-        return []
     
     # Execute query
-    try:
+    if filter_expr:
         results = _client.query(
             collection_name=_collection_name,
             filter=filter_expr,
@@ -233,21 +229,25 @@ def get_candidates(
             limit=query_limit,
             output_fields_order='updated_at DESC',
         )
-        
-        # Remove empty fields
-        candidates = [{k: v for k, v in result.items() if v or v == 0} for result in results]
-
-        # TODO: Sort by updated_at in descending order (most recent first)
-        
-        # Apply the original limit after sorting
-        if limit and len(candidates) > limit:
-            candidates = candidates[:limit]
-        
-        return candidates
-    except Exception as exc:
-        logger.exception("Failed to query candidates: %s", exc)
+    elif resume_text:
+        results = search_candidates_by_resume(
+            resume_text=resume_text, 
+            filter_expr=f'job_applied == "{job_applied}"' if job_applied else None, 
+            fields=fields, 
+            limit=limit
+        )
+    else:
+        logger.error("No valid identifiers or resume_text provided, returning empty list")
         return []
 
+    # Remove empty fields
+    candidates = [{k: v for k, v in result.items() if v or v == 0} for result in results]
+
+    # Sort by updated_at in descending order (most recent first)
+    candidates.sort(key=lambda x: x.get("updated_at", ""), reverse=True)
+    # Apply the original limit after sorting
+    return candidates[:limit]
+        
 
 truncate_field = lambda field, length: field.encode('utf-8')[:length].decode('utf-8', errors='ignore')
 
@@ -299,8 +299,8 @@ def upsert_candidate(**kwargs) -> Optional[str]:
         kwargs["resume_vector"] = get_embedding(resume_text)
     
     # Insert if no candidate_id
-    logger.debug(f'upsert_candidate:{kwargs}');
     if not candidate_id:
+        logger.debug(f'upsert_candidate: no candidate_id, inserting new candidate: {kwargs.get("name")}');
         kwargs["resume_vector"] = [0.0] * _zilliz_config["embedding_dim"] if not resume_vector else resume_vector
         results = _client.insert(collection_name=_collection_name, data=kwargs)
         return results['ids'][0]
@@ -336,6 +336,8 @@ def upsert_candidate(**kwargs) -> Optional[str]:
 
 def search_candidates_by_resume(
     resume_text: str,
+    filter_expr: Optional[str] = None,
+    fields: Optional[List[str]] = None,
     limit: Optional[int] = None,
     similarity_threshold: float = 0.9,
 ) -> Optional[Dict[str, Any]]:
@@ -349,33 +351,25 @@ def search_candidates_by_resume(
     Returns:
         Dict with candidate data if found, None otherwise
     """
-    if not _client:
-        return None
-    
-    limit = limit or _zilliz_config["similarity_top_k"]
-    
+        
     resume_vector = get_embedding(resume_text)
     
     try:
         results = _client.search(
             collection_name=_collection_name,
             data=[resume_vector],
-            filter="",
-            limit=limit,
-            output_fields=_readable_fields,
+            filter=filter_expr,
+            limit=limit or _zilliz_config["similarity_top_k"],
+            output_fields=fields or _readable_fields,
             search_params={"metric_type": "IP", "params": {}},
         )
         
         # Filter by similarity threshold
-        if results and len(results) > 0:
-            for result in results[0]:
-                if result.get('distance', 0) > similarity_threshold:
-                    return result
-        
-        return None
+        candidates = [r['entity'] for r in results[0] if  r['distance'] > similarity_threshold]
+        return candidates
     except Exception as exc:
         logger.exception("Failed to search candidates: %s", exc)
-        return None
+        return []
 
 def get_candidate_count() -> int:
     """Get the number of candidates in the collection."""

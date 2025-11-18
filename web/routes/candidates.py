@@ -287,12 +287,30 @@ async def init_chat(
     mode: str = Form(...),
     chat_id: Optional[str] = Form(None),
     job_id: str = Form(...),
+    job_applied: str = Form(...),
     name: str = Form(...),
     last_message: str = Form(...),
-    # resume_text: str = Form(...),
+    resume_text: str = Form(...),
 ):
-    """Initialize chat thread with proper data preparation."""
+    """Initialize chat thread with proper data preparation.
+    1. If in recommend mode, first check if exisiting candidate has been saved before by using semantic search
+    2. If not found, create a new candidate record with history or last_message
+    """
+
     job_info = get_job_by_id(job_id)
+    # check if existing candidate has been saved before by using semantic search
+    if not chat_id and resume_text:
+        results = get_candidates(identifiers=[], names=[name], job_applied=job_applied, resume_text=resume_text, limit=1)
+        candidate = results[0] if results else {}
+        if candidate:
+            logger.info(f"Found existing candidate: {candidate.get('candidate_id')} for name: {candidate.get('name')}")
+            return {
+                "candidate_id": candidate.get('candidate_id'), 
+                "chat_id": candidate.get('chat_id'), 
+                "conversation_id": candidate.get('conversation_id'), 
+                "success": True,
+            }
+    
     if mode == "recommend":
         history = [{'role': 'user', 'content': last_message}]
     else:
@@ -305,19 +323,18 @@ async def init_chat(
         chat_id=chat_id,
         job_info=job_info,
         name=name,
-        # online_resume_text=resume_text,
+        online_resume_text=resume_text,
         chat_history=history
     )
     
-    return JSONResponse(content={
+    return {
         "conversation_id": conversation_id,
         "success": True
-    })
+    }
 
 
-@router.post("/analyze", response_class=HTMLResponse)
+@router.post("/analyze")
 async def analyze_candidate(
-    background_tasks: BackgroundTasks,
     request: Request,
     mode: str = Form(...),
     chat_id: Optional[str] = Form(None),
@@ -343,10 +360,11 @@ async def analyze_candidate(
         conversation_id=conversation_id,
         purpose="ANALYZE_ACTION"
     )
+    resume_type = "online" if not full_resume else "full"
+    analysis_result["resume_type"] = resume_type
     
     # Save analysis in background
-    candidate_id = _save_candidate_background(
-        background_tasks,
+    candidate_id = upsert_candidate(
         analysis=analysis_result,
         chat_id=chat_id,
         mode=mode,
@@ -357,20 +375,11 @@ async def analyze_candidate(
     
     return templates.TemplateResponse("partials/analysis_result.html", {
         "request": request,
-        "candidate": {
-            "chat_id": chat_id,
-            "mode": mode,
-            "conversation_id": conversation_id,
-            "candidate_id": candidate_id,
-            "job_applied": job_applied,
-            "name": name,
-            "resume_type": "online" if not full_resume else "full",
-        },
         "analysis": analysis_result,
     })
 
 
-@router.post("/save", response_class=JSONResponse)
+@router.post("/save")
 async def save_candidate_to_cloud(request: Request):
     """Save candidate record to Zilliz cloud using all form data."""
     # Parse form data
@@ -381,15 +390,14 @@ async def save_candidate_to_cloud(request: Request):
 
     # update candidate passes all relevant kwargs
     candidate_id = upsert_candidate(**kwargs)
-    return JSONResponse(content={
+    return {
         "candidate_id": candidate_id,
         "success": True
-    })
+    }
 
 
 @router.post("/generate-message", response_class=HTMLResponse)
 async def generate_message(
-    background_tasks: BackgroundTasks,
     mode: str = Form(...),
     chat_id: Optional[str] = Form(None),
     index: Optional[int] = Form(None),
@@ -436,8 +444,7 @@ async def generate_message(
         
         # append the new message to the chat_history from DOM
         new_message = {"role": "assistant", "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "content": message}
-        candidate_id = _save_candidate_background(
-            background_tasks,
+        candidate_id = upsert_candidate(
             last_message=message,
             chat_id=chat_id,
             mode=mode,
@@ -510,7 +517,7 @@ async def send_message(
 # DingTalk Notification
 #--------------------------------------------------
 
-@router.post("/notify", response_class=JSONResponse)
+@router.post("/notify")
 async def notify_hr(
     title: str = Form(...),
     message: str = Form(...),
@@ -527,26 +534,17 @@ async def notify_hr(
     try:
         success = send_dingtalk_notification(title=title, message=message)
         if success:
-            return JSONResponse(
-                content={"success": True, "message": "通知发送成功"}
-            )
+            return {"success": True, "message": "通知发送成功"}
         else:
-            return JSONResponse(
-                status_code=500,
-                content={"success": False, "error": "通知发送失败"}
-            )
+            return {"success": False, "error": "通知发送失败"}
     except Exception as exc:
         logger.exception("Failed to send DingTalk notification")
-        return JSONResponse(
-            status_code=500,
-            content={"success": False, "error": f"通知发送失败: {str(exc)}"}
-        )
+        return {"success": False, "error": f"通知发送失败: {str(exc)}"}
 
 
 @router.post("/fetch-online-resume", response_class=HTMLResponse)
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
 async def fetch_online_resume(
-    background_tasks: BackgroundTasks,
     name: str = Form(...),
     job_applied: str = Form(...),
     mode: str = Form(...),
@@ -582,28 +580,28 @@ async def fetch_online_resume(
 
     # save resume text to background
     if resume_text and len(resume_text) > 100:
-        candidate_id = _save_candidate_background(
-            background_tasks,
-            resume_text=resume_text,
-            chat_id=chat_id,
-            mode=mode,
-            name=name,
-            job_applied=job_applied,
-        )
-
+        if candidate_id: # only update resume_text if candidate_id is provided (initiated)
+            candidate_id = upsert_candidate(
+                resume_text=resume_text,
+                chat_id=chat_id,
+                conversation_id=conversation_id,
+                candidate_id=candidate_id,
+                mode=mode,
+                name=name,
+                job_applied=job_applied,
+            )
         return HTMLResponse(
             content=f'<textarea id="resume-textarea-online" readonly class="w-full h-64 p-4 bg-gray-50 border rounded-lg font-mono text-sm">{resume_text}</textarea>'
         )
     else:
         return HTMLResponse(
-            content='<div class="text-red-500 p-4">暂无在线简历，请先请求在线简历</div>',
+            # content='<div class="text-red-500 p-4">暂无在线简历，请先请求在线简历</div>',
+            content=f'<textarea id="resume-textarea-online" readonly class="w-full p-4 bg-gray-50 border rounded-lg text-red-500 text-sm">暂无在线简历，请先请求在线简历</textarea>'
         )
 
 
 @router.post("/fetch-full-resume", response_class=HTMLResponse)
 async def fetch_full_resume(
-    background_tasks: BackgroundTasks,
-    request: Request,
     chat_id: str = Form(...),
     mode: str = Form("chat"),
     job_id: str = Form(""),
@@ -624,8 +622,7 @@ async def fetch_full_resume(
     requested = result.get("requested")
     
     if full_resume_text and len(full_resume_text) > 100:
-        candidate_id = _save_candidate_background(
-            background_tasks,
+        candidate_id = upsert_candidate(
             full_resume=full_resume_text,
             chat_id=chat_id,
             mode=mode,
@@ -646,7 +643,6 @@ async def fetch_full_resume(
 
 @router.post("/pass", response_class=HTMLResponse)
 async def pass_candidate(
-    background_tasks: BackgroundTasks,
     chat_id: str = Form(...)
 ):
     """Mark candidate as PASS and move to next."""
@@ -654,8 +650,7 @@ async def pass_candidate(
     result = await chat_actions.discard_candidate_action(page, chat_id, stage="PASS")
     
     if result:
-        candidate_id = _save_candidate_background(
-            background_tasks,
+        candidate_id = upsert_candidate(
             chat_id=chat_id,
             stage="PASS",
         )
@@ -694,26 +689,4 @@ async def get_thread_history(
         "conversation_id": conversation_id
     })
 
-
-# ============================================================================
-# Helper functions
-# ============================================================================
-
-def _save_candidate_background(background_tasks: BackgroundTasks, **object: dict) -> None:
-    """Save candidate data in background task.
-    
-    Filters out empty/None values and calls upsert_candidate.
-    Logs errors but doesn't raise to avoid blocking the response.
-    """
-    candidate_id = upsert_candidate(**object)
-    logger.debug(f"Background saved candidate: {object}")
-    return candidate_id
-    # def _save_task():
-    #     try:
-    #         upsert_candidate(**object)
-    #         logger.debug(f"Background save completed for candidate: {object}")
-    #     except Exception as exc:
-    #         logger.error(f"Background save failed: {exc}", exc_info=True)
-    
-    # background_tasks.add_task(_save_task)
 
