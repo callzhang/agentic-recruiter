@@ -14,7 +14,7 @@ from fastapi import APIRouter, BackgroundTasks, Form, Query, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from tenacity import retry, stop_after_attempt, wait_exponential
-from src.candidate_store import get_candidates, get_candidate_id_by_dict, upsert_candidate
+from src.candidate_store import get_candidates, get_candidate_by_dict, upsert_candidate
 from src.jobs_store import get_all_jobs, get_job_by_id as get_job_by_id_from_store
 from src.global_logger import logger
 from src import chat_actions, assistant_actions, assistant_utils, recommendation_actions
@@ -93,7 +93,7 @@ async def list_candidates(
             candidates = await recommendation_actions.list_recommended_candidates_action(
                 page=page,
                 limit=limit,
-                job_title=job_applied,
+                job_applied=job_applied,
                 new_only=False,
                 filters=candidate_filters
             )
@@ -129,7 +129,7 @@ async def list_candidates(
                 limit=limit,
                 tab=tab_filter,
                 status=status_filter,
-                job_title=job_applied,
+                job_applied=job_applied,
                 unread_only=False  # new_only=False maps to unread_only=False
             )
         except Exception as e:
@@ -145,16 +145,14 @@ async def list_candidates(
     # Batch query candidates from cloud store
     identifiers, names = [], []
     for c in candidates:
-        ids = [c.get('chat_id'), c.get('candidate_id'), c.get('conversation_id')]
-        ids = [id for id in ids if id] or []
-        identifiers.extend(ids)
-        names.append(c.get('name')) if not ids else None # fallback to name + job_applied if no identifiers
-    job_applied = candidates[0].get("job_applied")
+        identifiers.extend([c.get('chat_id'), c.get('candidate_id'), c.get('conversation_id')])
+        names.append(c.get('name')) 
     # Check if candidate is saved to cloud using batch query results
     stored_candidates = get_candidates(identifiers=identifiers, names=names, job_applied=job_applied)
 
     # Render candidate cards
     html = ""
+    restored = 0
     for i, candidate in enumerate(candidates):
         candidate["mode"] = mode
         candidate["job_id"] = job_id
@@ -168,7 +166,7 @@ async def list_candidates(
         if stored_candidate:
             chat_id, chat_id2 = candidate.get("chat_id"), stored_candidate.get("chat_id")
             if chat_id and chat_id2 and chat_id != chat_id2:
-                logger.warning(f"chat_id mismatch: {chat_id} != {chat_id2}")
+                logger.warning(f"chat_id mismatch ({candidate['name']}): {chat_id} != {chat_id2}")
                 stored_candidate = {}
             candidate.update(stored_candidate) # last_message will be updated by saved candidate
             candidate["saved"] = True
@@ -176,6 +174,7 @@ async def list_candidates(
             candidate["score"] = stored_candidate.get("analysis", {}).get("overall", None)
             # update greeted status if the candidate is in chat, greet, or seek stage
             candidate['greeted'] = candidate.get('greeted', False)
+            restored += 1
 
         # Extract resume_text and full_resume from candidate
         resume_text = candidate.pop("resume_text", '')
@@ -188,7 +187,7 @@ async def list_candidates(
             "full_resume": full_resume,
             "selected": False
         })
-    
+    logger.info(f"Restored {restored}/{len(candidates)} candidates from cloud store")
     return HTMLResponse(content=html)
 
 
@@ -206,15 +205,8 @@ async def get_candidate_detail(request: Request):
     identifiers = [candidate.get('candidate_id'), candidate.get('chat_id'), candidate.get('conversation_id')]
     identifiers = [id for id in identifiers if id] or None
     # Try to find existing candidate
-    results = get_candidates(
-        identifiers=identifiers, 
-        names= [candidate.get('name')] if not identifiers else None, 
-        job_applied=candidate.get('job_applied') if not identifiers else None, 
-        limit=1
-    )
-    stored_candidate = results[0] if results else {}
-    stored_candidate = {k:v for k, v in stored_candidate.items() if v}
-    if stored_candidate.get('chat_id') and stored_candidate.get('chat_id'):
+    stored_candidate = get_candidate_by_dict(candidate)
+    if stored_candidate and stored_candidate.get('chat_id') and stored_candidate.get('chat_id'):
         if candidate.get('chat_id') == stored_candidate.get('chat_id'):
             candidate.update(stored_candidate)
         else:
@@ -300,8 +292,7 @@ async def init_chat(
     job_info = get_job_by_id(job_id)
     # check if existing candidate has been saved before by using semantic search
     if not chat_id and resume_text:
-        results = get_candidates(identifiers=[], names=[name], job_applied=job_applied, resume_text=resume_text, limit=1)
-        candidate = results[0] if results else {}
+        candidate = get_candidate_by_dict({"name": name, "job_applied": job_applied, "resume_text": resume_text})
         if candidate:
             logger.info(f"Found existing candidate: {candidate.get('candidate_id')} for name: {candidate.get('name')}")
             return {

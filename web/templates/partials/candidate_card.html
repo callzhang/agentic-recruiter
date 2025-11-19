@@ -1,6 +1,6 @@
 <!-- Candidate card for list view -->
 <div class="candidate-card p-4 border rounded-lg cursor-pointer bg-white hover:bg-blue-50 transition {% if candidate.viewed %}opacity-60{% endif %}"
-    data-candidate-id="{% if candidate.chat_id %}{{ candidate.chat_id }}{% else %}recommend_{{ candidate.index }}{% endif %}"
+    data-card-id="{{ candidate.candidate_id or candidate.chat_id or candidate.conversation_id }}"
     hx-get="/candidates/detail" hx-vals='{{ candidate | tojson }}' hx-target="#detail-pane"
     hx-include="#job-selector,#threshold-chat,#threshold-borderline,#threshold-seek"
     hx-on::click="console.log('Candidate clicked:', JSON.parse(this.dataset.candidate));">

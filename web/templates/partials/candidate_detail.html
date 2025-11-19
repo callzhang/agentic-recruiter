@@ -543,6 +543,7 @@ async function initializeNewChat() {
  * This function combines both updateCandidateData and updateCandidateCard
  */
 function updateCandidateData(record) {
+    record.saved = true
     const container = document.getElementById('candidate-context');
     
     // Get current data from hx-vals

@@ -85,9 +85,20 @@
     
     <!-- Version Update Modal -->
     <div x-data="{ 
-            get modal() { return Alpine.store('versionUpdateModal'); }
+            get modal() { 
+                const store = Alpine.store('versionUpdateModal');
+                return store || { 
+                    show: false, 
+                    title: '', 
+                    message: '', 
+                    currentCommit: null, 
+                    remoteCommit: null,
+                    dismiss: () => {},
+                    update: () => {}
+                };
+            }
          }" 
-         x-show="modal.show"
+         x-show="modal && modal.show"
          x-transition:enter="transition ease-out duration-300"
          x-transition:enter-start="opacity-0"
          x-transition:enter-end="opacity-100"
@@ -96,7 +107,7 @@
          x-transition:leave-end="opacity-0"
          class="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50"
          style="display: none;"
-         @keydown.escape.window="modal.dismiss()">
+         @keydown.escape.window="modal && modal.dismiss()">
         <div class="bg-white rounded-lg shadow-2xl max-w-md w-full mx-4"
              x-transition:enter="transition ease-out duration-300"
              x-transition:enter-start="opacity-0 transform scale-95"
@@ -104,27 +115,27 @@
              x-transition:leave="transition ease-in duration-200"
              x-transition:leave-start="opacity-100 transform scale-100"
              x-transition:leave-end="opacity-0 transform scale-95"
-             @click.away="modal.dismiss()">
+             @click.away="modal && modal.dismiss()">
             <div class="p-6">
                 <div class="flex items-center mb-4">
                     <div class="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center mr-3">
                         <span class="text-2xl">🔄</span>
                     </div>
-                    <h3 class="text-xl font-bold text-gray-800" x-text="modal.title"></h3>
+                    <h3 class="text-xl font-bold text-gray-800" x-text="modal.title || ''"></h3>
                 </div>
                 <div class="mb-6">
-                    <p class="text-gray-700 leading-relaxed mb-2" x-text="modal.message"></p>
-                    <div class="text-sm text-gray-600 space-y-1" x-show="modal.currentCommit || modal.remoteCommit">
-                        <p x-show="modal.currentCommit">当前版本: <code class="bg-gray-100 px-2 py-1 rounded" x-text="modal.currentCommit"></code></p>
-                        <p x-show="modal.remoteCommit">远程版本: <code class="bg-gray-100 px-2 py-1 rounded" x-text="modal.remoteCommit"></code></p>
+                    <p class="text-gray-700 leading-relaxed mb-2" x-text="modal.message || ''"></p>
+                    <div class="text-sm text-gray-600 space-y-1" x-show="modal && (modal.currentCommit || modal.remoteCommit)">
+                        <p x-show="modal && modal.currentCommit">当前版本: <code class="bg-gray-100 px-2 py-1 rounded" x-text="modal.currentCommit || ''"></code></p>
+                        <p x-show="modal && modal.remoteCommit">远程版本: <code class="bg-gray-100 px-2 py-1 rounded" x-text="modal.remoteCommit || ''"></code></p>
                     </div>
                 </div>
                 <div class="flex justify-end">
-                    <button @click="modal.dismiss()" 
+                    <button @click="modal && modal.dismiss()" 
                             class="px-6 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition font-medium mr-3">
                         稍后提醒
                     </button>
-                    <button @click="modal.update()" 
+                    <button @click="modal && modal.update()" 
                             class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-medium">
                         查看更新
                     </button>

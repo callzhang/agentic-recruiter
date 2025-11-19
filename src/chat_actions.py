@@ -224,19 +224,19 @@ async def discard_candidate_action(page: Page, chat_id: str) -> bool:
     raise ValueError("PASS失败: 未删除对话")
     
 
-async def list_conversations_action(page: Page, limit: int = 999, tab: str = '新招呼', status: str = '未读', job_title: str = '全部', unread_only=True) -> List[Dict[str, Any]]:
+async def list_conversations_action(page: Page, limit: int = 999, tab: str = '新招呼', status: str = '未读', job_applied: str = '全部', unread_only=True) -> List[Dict[str, Any]]:
     '''Get candidate list from chat page
     Args:
         page: Page - The Playwright Page instance representing the chat page.
         limit: int - The maximum number of chat items to return.
         tab: str - The chat tab to select (e.g., "新招呼", "沟通中").
         status: str - The chat status filter to apply.
-        job_title: str - The job title to select from the dropdown.
+        job_applied: str - The job applied to filter candidates.
         unread_only: bool - Whether to only return unread candidates.
     Returns:
         List[Dict[str, Any]]: A list of candidate items.
     '''
-    await _prepare_chat_page(page, tab, status, job_title)
+    await _prepare_chat_page(page, tab, status, job_applied)
     items = page.locator(CHAT_ITEM_SELECTORS)
     count = await items.count()
     messages: List[Dict[str, Any]] = []
@@ -245,7 +245,7 @@ async def list_conversations_action(page: Page, limit: int = 999, tab: str = '�
         try:
             data_id = await item.get_attribute("data-id")
             name = (await item.locator("span.geek-name").inner_text()).strip()
-            job_title = (await item.locator("span.source-job").inner_text()).strip()
+            # job_title = (await item.locator("span.source-job").inner_text()).strip() # using job_applied instead, meaning we stick to our own job_applied field instead of the web job title
             text = (await item.locator("span.push-text").inner_text()).strip()
             timestamp = (await item.locator("span.time").inner_text()).strip()
             unread = await item.locator("span.badge-count").count() > 0
@@ -257,7 +257,7 @@ async def list_conversations_action(page: Page, limit: int = 999, tab: str = '�
                 {
                     "chat_id": data_id,
                     "name": name,
-                    "job_applied": job_title,
+                    "job_applied": job_applied,
                     "last_message": text,
                     "timestamp": timestamp,
                     "viewed": not unread,

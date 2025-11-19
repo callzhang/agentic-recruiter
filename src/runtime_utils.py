@@ -169,11 +169,12 @@ def get_git_remote_commit(branch: Optional[str] = None, repo_path: Optional[Path
     return None
 
 
-def check_git_update_available(repo_path: Optional[Path] = None) -> Dict[str, Any]:
-    """Check if a new git version is available on remote.
+def check_git_update_available(repo_path: Optional[Path] = None, auto_merge: bool = True) -> Dict[str, Any]:
+    """Check if a new git version is available and optionally merge updates.
     
     Args:
         repo_path: Optional repository path, defaults to repo root
+        auto_merge: If True, attempt to merge updates automatically
         
     Returns:
         dict: Version check result with keys:
@@ -182,6 +183,8 @@ def check_git_update_available(repo_path: Optional[Path] = None) -> Dict[str, An
             - remote_commit: Remote git commit hash (short)
             - current_branch: Current git branch
             - repo_url: Repository URL (HTTPS format)
+            - merge_success: Boolean indicating if merge was successful (if attempted)
+            - merge_error: Error message if merge failed (if attempted)
             - message: Optional message about the update
     """
     repo_path = repo_path or get_repo_path()
@@ -191,8 +194,10 @@ def check_git_update_available(repo_path: Optional[Path] = None) -> Dict[str, An
         current_commit = get_git_commit(short=True, repo_path=repo_path)
         current_branch = get_git_branch(repo_path)
         
-        # Fetch latest from remote (non-blocking, ignore errors)
-        fetch_git_updates(branch=current_branch, repo_path=repo_path)
+        # Fetch latest from remote
+        fetch_success = fetch_git_updates(branch=current_branch, repo_path=repo_path)
+        if not fetch_success:
+            logger.warning("Failed to fetch git updates")
         
         # Get remote commit
         remote_commit = get_git_remote_commit(branch=current_branch, repo_path=repo_path, short=True)
@@ -219,13 +224,84 @@ def check_git_update_available(repo_path: Optional[Path] = None) -> Dict[str, An
         # Get repository URL
         repo_url = get_git_remote_url(repo_path=repo_path, convert_ssh_to_https=True)
         
+        merge_success = None
+        merge_error = None
+        message = None
+        
+        # Attempt to merge if update is available and auto_merge is enabled
+        if has_update and auto_merge:
+            try:
+                # Check if there are uncommitted changes
+                status_result = subprocess.run(
+                    ["git", "status", "--porcelain"],
+                    cwd=repo_path,
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+                has_uncommitted = bool(status_result.stdout.strip())
+                
+                if has_uncommitted:
+                    merge_error = "存在未提交的更改，无法自动合并。请手动运行 start.command 更新。"
+                    message = merge_error
+                else:
+                    # Try to merge
+                    merge_result = subprocess.run(
+                        ["git", "merge", f"origin/{current_branch}", "--no-edit"],
+                        cwd=repo_path,
+                        capture_output=True,
+                        text=True,
+                        timeout=30
+                    )
+                    
+                    if merge_result.returncode == 0:
+                        merge_success = True
+                        # Get new commit after merge
+                        new_commit = get_git_commit(short=True, repo_path=repo_path)
+                        message = f"✅ 代码已自动更新: {current_commit} → {new_commit}"
+                        
+                        # Send notification
+                        try:
+                            from .assistant_actions import send_dingtalk_notification
+                            send_dingtalk_notification(
+                                title="🔄 服务器自动更新成功",
+                                message=f"本地服务器代码已自动更新\n\n**更新前:** {current_commit}\n**更新后:** {new_commit}\n**分支:** {current_branch}",
+                                job_id=None
+                            )
+                        except Exception as notif_err:
+                            logger.warning(f"Failed to send update notification: {notif_err}")
+                    else:
+                        merge_success = False
+                        merge_error = merge_result.stderr.strip() or "合并失败，请手动运行 start.command 更新。"
+                        message = f"⚠️ 自动合并失败: {merge_error}"
+                        
+                        # Send warning notification
+                        try:
+                            from .assistant_actions import send_dingtalk_notification
+                            send_dingtalk_notification(
+                                title="⚠️ 代码更新需要手动处理",
+                                message=f"检测到新版本但自动合并失败\n\n**当前版本:** {current_commit}\n**远程版本:** {remote_commit}\n**错误:** {merge_error}\n\n请手动运行 `start.command` 更新代码。",
+                                job_id=None
+                            )
+                        except Exception as notif_err:
+                            logger.warning(f"Failed to send warning notification: {notif_err}")
+            except Exception as merge_exc:
+                merge_success = False
+                merge_error = str(merge_exc)
+                message = f"⚠️ 合并过程出错: {merge_error}。请手动运行 start.command 更新。"
+                logger.error(f"Merge attempt failed: {merge_exc}")
+        elif has_update:
+            message = f"新版本可用 (远程: {remote_commit})"
+        
         return {
             "has_update": has_update,
             "current_commit": current_commit,
             "remote_commit": remote_commit,
             "current_branch": current_branch,
             "repo_url": repo_url,
-            "message": f"新版本可用 (远程: {remote_commit})" if has_update else None
+            "merge_success": merge_success,
+            "merge_error": merge_error,
+            "message": message
         }
     except Exception as e:
         logger.warning(f"Version check failed: {e}")
@@ -235,6 +311,8 @@ def check_git_update_available(repo_path: Optional[Path] = None) -> Dict[str, An
             "remote_commit": None,
             "current_branch": None,
             "repo_url": None,
+            "merge_success": None,
+            "merge_error": None,
             "message": None
         }
 

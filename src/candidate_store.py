@@ -149,7 +149,7 @@ def create_collection(collection_name: Optional[str] = None) -> bool:
 # ------------------------------------------------------------------
 # Candidate Operations
 # ------------------------------------------------------------------
-def get_candidate_id_by_dict(kwargs: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def get_candidate_by_dict(kwargs: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Get a candidate by a candidate object"""
 
     candidate_id = kwargs.get("candidate_id")
@@ -159,24 +159,32 @@ def get_candidate_id_by_dict(kwargs: Dict[str, Any]) -> Optional[Dict[str, Any]]
     names = [name] if name else None
     job_applied = kwargs.get("job_applied")
     identifiers = [candidate_id, chat_id, conversation_id]
+    identifiers = [id for id in identifiers if id] or None
     resume_text = kwargs.get("resume_text")
+    fields = kwargs.get("fields", _readable_fields)
     
     results = get_candidates(
         identifiers=identifiers, 
         names=names, 
         job_applied=job_applied, 
-        resume_text=resume_text,
         limit=1, 
-        fields=['candidate_id']
+        fields=fields
     )
-    return results[0].get('candidate_id') if results else None
+
+    if identifiers and not results and resume_text:
+        results = search_candidates_by_resume(
+            resume_text=resume_text, 
+            filter_expr=f'job_applied == "{job_applied}"' if job_applied else None, 
+            fields=fields, 
+            limit=1
+        )
+    return results[0] if results else {}
 
 def get_candidates(
     identifiers: Optional[List[str]] = None,
     names: Optional[List[str]] = None,
     job_applied: Optional[str] = None,
-    resume_text: Optional[str] = None,
-    limit: Optional[int] = 100,
+    limit: Optional[int] = None,
     fields: Optional[List[str]] = _readable_fields,
 ) -> List[Dict[str, Any]]:
     """Query candidates by identifiers (chat_id/candidate_id/conversation_id) or by names/job_applied.
@@ -197,13 +205,12 @@ def get_candidates(
     identifiers = [id for id in identifiers if id] or None if identifiers else None
     names = [name.strip() for name in names if (name.strip())] or None if names else None
     job_applied = job_applied.strip() or None if job_applied else None
-    resume_text = resume_text.strip() or None if resume_text and len(resume_text) > 100 else None
     
     if identifiers:
         quoted_ids = [f"'{id}'" for id in identifiers]
         ids_str = ', '.join(quoted_ids)
         expr_1 = f"chat_id in [{ids_str}] or candidate_id in [{ids_str}] or conversation_id in [{ids_str}]"
-        query_limit = limit or len(identifiers)
+        query_limit = (limit or len(identifiers)) * 2
     else:
         expr_1 = None
         
@@ -229,13 +236,6 @@ def get_candidates(
             output_fields=fields,
             limit=query_limit,
             output_fields_order='updated_at DESC',
-        )
-    elif resume_text:
-        results = search_candidates_by_resume(
-            resume_text=resume_text, 
-            filter_expr=f'job_applied == "{job_applied}"' if job_applied else None, 
-            fields=fields, 
-            limit=limit
         )
     else:
         logger.error("No valid identifiers or resume_text provided, returning empty list")
@@ -267,8 +267,10 @@ def upsert_candidate(**kwargs) -> Optional[str]:
     # Prepare data
     chat_id = kwargs.get("chat_id")
     conversation_id = kwargs.get("conversation_id")
-    candidate_id = get_candidate_id_by_dict(kwargs)
-    if candidate_id != kwargs.get("candidate_id"):
+    stored_candidate = get_candidate_by_dict(kwargs)
+    candidate_id = stored_candidate.get('candidate_id') if stored_candidate else None
+    if candidate_id and candidate_id != kwargs.get("candidate_id"):
+        logger.warning(f"candidate_id mismatch: {kwargs.get('candidate_id')} -> {candidate_id}")
         kwargs['candidate_id'] = candidate_id
     
     # fixing fields types
@@ -325,7 +327,7 @@ def upsert_candidate(**kwargs) -> Optional[str]:
             # and resume_vector is missing. Try to find the actual record.
             logger.warning("Upsert failed with missing resume_vector, attempting to find existing record...")
             # Try to find existing record by chat_id or conversation_id
-            existing_candidate_id = get_candidate_id_by_dict(kwargs)
+            existing_candidate_id = get_candidate_by_dict(kwargs).get('candidate_id')
             if existing_candidate_id:
                 logger.info(f"Found existing record with candidate_id: {existing_candidate_id}")
                 # Update kwargs with correct candidate_id and resume_vector

@@ -91,7 +91,7 @@ async def _prepare_recommendation_page(page: Page, job_title: str = None, *, wai
     return frame
 
 
-async def list_recommended_candidates_action(page: Page, *, limit: int = 999, job_title: str, new_only: bool = True, filters: Dict[str, Any] = None) -> List[Dict[str, Any]]:
+async def list_recommended_candidates_action(page: Page, *, limit: int = 999, job_applied: str, new_only: bool = True, filters: Dict[str, Any] = None) -> List[Dict[str, Any]]:
     """
     List recommended candidates from the Boss直聘推荐页面.
 
@@ -120,7 +120,7 @@ async def list_recommended_candidates_action(page: Page, *, limit: int = 999, jo
     Usage:
         Call this after logging in and loading the Boss直聘推荐页面. Use returned candidate indices for downstream actions (e.g., resume view or greeting).
     """
-    frame = await _prepare_recommendation_page(page, job_title=job_title)
+    frame = await _prepare_recommendation_page(page, job_title=job_applied)
     # apply filters if provided
     if filters:
         await apply_filters(frame, filters)
@@ -154,7 +154,7 @@ async def list_recommended_candidates_action(page: Page, *, limit: int = 999, jo
                 "index": index,  # Position in the current list
                 # "chat_id": None,  # Recommend candidates don't have a chat_id yet
                 "name": name,
-                "job_applied": job_title,  # Standardized field name
+                "job_applied": job_applied,  # Standardized field name
                 "last_message": text,
                 "viewed": viewed,
                 "greeted": greeted,

@@ -422,7 +422,7 @@ function candidateTabs() {
         switchTab(tab) {
             this.activeTab = tab;
             // Reset selected candidate
-            window.selectedCandidateId = null;
+            window.selectedCardId = null;
             // Clear list when switching tabs
             const list = document.getElementById('candidate-list');
             if (list) {
@@ -476,7 +476,7 @@ function candidateTabs() {
             // Get limit from input
             const limitInput = document.getElementById('limit-input');
             const limit = limitInput?.value || '50';
-            
+
             const params = new URLSearchParams({
                 mode: mode,
                 chat_type: chat_type,
@@ -511,18 +511,6 @@ function candidateTabs() {
                 }
             });
             
-            // Also check for error divs that might not have those classes
-            // Look for divs that contain error text but aren't candidate cards
-            candidateList.querySelectorAll('div').forEach(div => {
-                if (!div.closest('.candidate-card') && 
-                    (div.textContent.includes('失败') || 
-                     div.textContent.includes('错误') || 
-                     div.textContent.includes('请求失败') ||
-                     div.classList.contains('text-red-500'))) {
-                    div.remove();
-                }
-            });
-            
             // Use a custom handler to detect errors and handle swap accordingly
             fetch(url)
                 .then(async (response) => {
@@ -540,52 +528,14 @@ function candidateTabs() {
                     }
                     
                     // Success: replace the entire list with new candidate cards
-                    // Clear existing content
-                    candidateList.innerHTML = '';
-                    
-                    // Parse the incoming HTML to extract candidate cards
-                    const tempDiv = document.createElement('div');
-                    tempDiv.innerHTML = html;
-                    const newCards = tempDiv.querySelectorAll('.candidate-card');
-                    
-                    console.log(`Parsed ${newCards.length} candidate cards from response`);
-                    
-                    let skippedCount = 0;
-                    
-                    // Convert NodeList to Array and append all cards
-                    const cardsArray = Array.from(newCards);
-                    
-                    cardsArray.forEach(newCard => {
-                        let candidate_id = newCard.getAttribute('data-candidate-id');
-                        
-                        // If no data-candidate-id, try to generate a fallback identifier using name
-                        if (!candidate_id || candidate_id.trim() === '') {
-                            const nameElement = newCard.querySelector('h3');
-                            const name = nameElement ? nameElement.textContent.trim() : '';
-                            
-                            if (name) {
-                                // Use name as temporary identifier for unsaved candidates
-                                candidate_id = `temp_${name}`.replace(/\s+/g, '_');
-                                newCard.setAttribute('data-candidate-id', candidate_id);
-                                console.log(`Generated temporary ID for unsaved candidate: ${candidate_id}`);
-                            } else {
-                                // Still no identifier, skip this card
-                                console.warn('Skipping card without name:', newCard);
-                                skippedCount++;
-                                return;
-                            }
-                        }
-                        
-                        // Clone and append the card
-                        const clonedCard = newCard.cloneNode(true);
-                        candidateList.appendChild(clonedCard);
-                    });
-                    
-                    const loadedCount = cardsArray.length - skippedCount;
-                    console.log(`Loaded ${loadedCount} candidate cards (${skippedCount} skipped)`);
+                    // Use the HTML response directly
+                    candidateList.innerHTML = html;
                     
                     // Tell HTMX to process the new content
                     htmx.process(candidateList);
+                    
+                    const loadedCount = candidateList.querySelectorAll('.candidate-card').length;
+                    console.log(`Loaded ${loadedCount} candidate cards`);
                     
                     this.loading = false;
                     
@@ -593,10 +543,7 @@ function candidateTabs() {
                     // Use requestAnimationFrame to ensure DOM is updated before counting
                     const self = this;
                     requestAnimationFrame(() => {
-                        const candidateCards = candidateList.querySelectorAll('.candidate-card');
-                        const count = candidateCards.length;
-                        console.log(`Final count: ${count} candidate cards in the list`);
-                        
+                        const count = candidateList.querySelectorAll('.candidate-card').length;
                         // Show/hide batch analyze button
                         const batchBtn = document.getElementById('batch-analyze-btn');
                         if (batchBtn) {
@@ -776,7 +723,7 @@ document.body.addEventListener('showToast', function(evt) {
 // Candidate Selection Management
 // ============================================================================
 
-window.selectedCandidateId = null;
+window.selectedCardId = null;
 
 // Intercept candidate card clicks to prevent duplicate requests
 document.body.addEventListener('htmx:beforeRequest', function(event) {
@@ -785,10 +732,10 @@ document.body.addEventListener('htmx:beforeRequest', function(event) {
         return;  // Not a candidate card, allow request normally
     }
     
-    const candidate_id = event.detail.elt.getAttribute('data-candidate-id');
+    const card_id = event.detail.elt.getAttribute('data-card-id');
     
     // If clicking the same candidate, prevent redundant fetch
-    if (window.selectedCandidateId === candidate_id) {
+    if (window.selectedCardId === card_id) {
         console.log('Same candidate already selected, skipping fetch');
         event.preventDefault();  // This cancels the HTMX request
         
@@ -815,8 +762,8 @@ document.body.addEventListener('htmx:beforeRequest', function(event) {
     event.detail.elt.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
     
     // Update selected ID
-    window.selectedCandidateId = candidate_id;
-    console.log('Selected candidate:', candidate_id);
+    window.selectedCardId = card_id;
+    console.log('Selected candidate:', card_id);
     
     // Allow HTMX to proceed
 });
@@ -1003,11 +950,11 @@ window.processAllCandidates = async function processAllCandidates() {
                 detailPane.addEventListener('htmx:afterSwap', onSwap, { once: true });
                 detailPane.addEventListener('htmx:responseError', onError, { once: true });
                 
-                // Reset selectedCandidateId to force HTMX request even if card is already selected
+                // Reset selectedCardId to force HTMX request even if card is already selected
                 // This prevents timeout when batch processing starts with the first card already selected
-                const cardCandidateId = card.getAttribute('data-candidate-id');
-                if (window.selectedCandidateId === cardCandidateId) {
-                    window.selectedCandidateId = null;
+                const cardId = card.getAttribute('data-card-id');
+                if (window.selectedCardId === cardId) {
+                    window.selectedCardId = null;
                 }
                 
                 // Scroll card into view before triggering click
@@ -1249,157 +1196,151 @@ document.addEventListener('candidate:update', function(event) {
 });
 
 // ============================================================================
-// Service Status Check
+// Runtime Check (Service Status + Version Update)
 // ============================================================================
 
 /**
- * Periodically check service status and update the status indicator
+ * Combined runtime check: service status and version updates
+ * Runs every 30 seconds
  */
-function initServiceStatusCheck() {
+function initRuntimeCheck() {
     const statusDot = document.getElementById('status-dot');
     const statusText = document.getElementById('status-text');
     
-    if (!statusDot || !statusText) {
-        return; // Status indicator not found
-    }
+    let runtimeCheckInterval = null;
+    let lastVersionCheck = 0;
+    const VERSION_CHECK_INTERVAL = 300000; // Check version every 5 minutes (300s)
     
-    let statusCheckInterval = null;
-    
-    async function checkServiceStatus() {
-        try {
-            // Create abort controller for timeout
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
-            
-            const response = await fetch('/status', {
-                method: 'GET',
-                headers: { 'Accept': 'application/json' },
-                signal: controller.signal
-            });
-            
-            clearTimeout(timeoutId);
-            
-            if (response.ok) {
-                const data = await response.json();
-                // Service is running
-                statusDot.className = 'w-2 h-2 bg-green-500 rounded-full animate-pulse';
-                statusText.textContent = '服务运行中';
-                statusText.className = 'text-sm text-gray-600';
-            } else {
-                // Service returned error
-                statusDot.className = 'w-2 h-2 bg-yellow-500 rounded-full animate-pulse';
-                statusText.textContent = '服务异常';
-                statusText.className = 'text-sm text-yellow-600';
+    async function runtimeCheck() {
+        // Always check service status
+        if (statusDot && statusText) {
+            try {
+                // Create abort controller for timeout
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+                
+                const response = await fetch('/status', {
+                    method: 'GET',
+                    headers: { 'Accept': 'application/json' },
+                    signal: controller.signal
+                });
+                
+                clearTimeout(timeoutId);
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    // Service is running
+                    statusDot.className = 'w-2 h-2 bg-green-500 rounded-full animate-pulse';
+                    statusText.textContent = '服务运行中';
+                    statusText.className = 'text-sm text-gray-600';
+                } else {
+                    // Service returned error
+                    statusDot.className = 'w-2 h-2 bg-yellow-500 rounded-full animate-pulse';
+                    statusText.textContent = '服务异常';
+                    statusText.className = 'text-sm text-yellow-600';
+                }
+            } catch (error) {
+                // Service is down or unreachable (network error, timeout, etc.)
+                if (error.name === 'AbortError') {
+                    statusDot.className = 'w-2 h-2 bg-yellow-500 rounded-full animate-pulse';
+                    statusText.textContent = '服务响应超时';
+                    statusText.className = 'text-sm text-yellow-600';
+                } else {
+                    statusDot.className = 'w-2 h-2 bg-red-500 rounded-full';
+                    statusText.textContent = '服务离线';
+                    statusText.className = 'text-sm text-red-600';
+                }
             }
-        } catch (error) {
-            // Service is down or unreachable (network error, timeout, etc.)
-            if (error.name === 'AbortError') {
-                statusDot.className = 'w-2 h-2 bg-yellow-500 rounded-full animate-pulse';
-                statusText.textContent = '服务响应超时';
-                statusText.className = 'text-sm text-yellow-600';
-            } else {
-                statusDot.className = 'w-2 h-2 bg-red-500 rounded-full';
-                statusText.textContent = '服务离线';
-                statusText.className = 'text-sm text-red-600';
+        }
+        
+        // Check version update less frequently (every 5 minutes)
+        const now = Date.now();
+        if (now - lastVersionCheck >= VERSION_CHECK_INTERVAL) {
+            lastVersionCheck = now;
+            
+            try {
+                // Create abort controller for timeout
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+                
+                const response = await fetch('/version/check', {
+                    method: 'GET',
+                    headers: { 'Accept': 'application/json' },
+                    signal: controller.signal
+                });
+                
+                clearTimeout(timeoutId);
+                
+                if (!response.ok) {
+                    return; // Silently fail
+                }
+                
+                const data = await response.json();
+                
+                // If merge was successful, show success message (don't show modal, just log)
+                if (data.merge_success === true) {
+                    console.log('✅ Code updated successfully:', data.message);
+                    // Clear dismissed version so user sees the success
+                    if (data.remote_commit) {
+                        localStorage.removeItem('dismissedVersion');
+                    }
+                    return; // Don't show modal for successful auto-updates
+                }
+                
+                // If merge failed or update available, show modal
+                if (data.has_update && data.remote_commit) {
+                    // Check if this version was already dismissed
+                    const dismissedVersion = localStorage.getItem('dismissedVersion');
+                    if (dismissedVersion === data.remote_commit) {
+                        return; // User already dismissed this version
+                    }
+                    
+                    // Show modal
+                    if (window.Alpine && Alpine.store('versionUpdateModal')) {
+                        const modal = Alpine.store('versionUpdateModal');
+                        
+                        // Set title and message based on merge status
+                        if (data.merge_success === false) {
+                            modal.title = '⚠️ 自动更新失败';
+                            modal.message = data.message || `检测到新版本但自动合并失败。\n\n错误: ${data.merge_error || '未知错误'}\n\n请手动运行 start.command 更新代码。`;
+                        } else {
+                            modal.title = '新版本可用';
+                            modal.message = data.message || '检测到新的 Git 版本可用，建议更新以获取最新功能。';
+                        }
+                        
+                        modal.currentCommit = data.current_commit;
+                        modal.remoteCommit = data.remote_commit;
+                        modal.currentBranch = data.current_branch;
+                        modal.repoUrl = data.repo_url;
+                        modal.show = true;
+                    }
+                }
+            } catch (error) {
+                // Silently fail - don't show errors for version checks
+                console.debug('Version check failed:', error);
             }
         }
     }
     
     // Check immediately on page load
-    checkServiceStatus();
+    runtimeCheck();
     
     // Then check every 30 seconds
-    statusCheckInterval = setInterval(checkServiceStatus, 30000);
+    runtimeCheckInterval = setInterval(runtimeCheck, 30000);
     
     // Clean up on page unload
     window.addEventListener('beforeunload', () => {
-        if (statusCheckInterval) {
-            clearInterval(statusCheckInterval);
+        if (runtimeCheckInterval) {
+            clearInterval(runtimeCheckInterval);
         }
     });
 }
 
-// Initialize service status check when DOM is ready
+// Initialize runtime check when DOM is ready
 if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', initServiceStatusCheck);
+    document.addEventListener('DOMContentLoaded', initRuntimeCheck);
 } else {
-    initServiceStatusCheck();
-}
-
-// ============================================================================
-// Version Update Check
-// ============================================================================
-
-/**
- * Periodically check for new git versions and show modal if available
- */
-function initVersionUpdateCheck() {
-    let versionCheckInterval = null;
-    
-    async function checkVersionUpdate() {
-        try {
-            // Create abort controller for timeout
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
-            
-            const response = await fetch('/version/check', {
-                method: 'GET',
-                headers: { 'Accept': 'application/json' },
-                signal: controller.signal
-            });
-            
-            clearTimeout(timeoutId);
-            
-            if (!response.ok) {
-                return; // Silently fail
-            }
-            
-            const data = await response.json();
-            
-            if (data.has_update && data.remote_commit) {
-                // Check if this version was already dismissed
-                const dismissedVersion = localStorage.getItem('dismissedVersion');
-                if (dismissedVersion === data.remote_commit) {
-                    return; // User already dismissed this version
-                }
-                
-                // Show modal
-                if (window.Alpine && Alpine.store('versionUpdateModal')) {
-                    const modal = Alpine.store('versionUpdateModal');
-                    modal.title = '新版本可用';
-                    modal.message = data.message || '检测到新的 Git 版本可用，建议更新以获取最新功能。';
-                    modal.currentCommit = data.current_commit;
-                    modal.remoteCommit = data.remote_commit;
-                    modal.currentBranch = data.current_branch;
-                    modal.repoUrl = data.repo_url;
-                    modal.show = true;
-                }
-            }
-        } catch (error) {
-            // Silently fail - don't show errors for version checks
-            console.debug('Version check failed:', error);
-        }
-    }
-    
-    // Check immediately on page load (after a short delay to let page load)
-    setTimeout(checkVersionUpdate, 3000);
-    
-    // Then check every 5 minutes
-    versionCheckInterval = setInterval(checkVersionUpdate, 300000);
-    
-    // Clean up on page unload
-    window.addEventListener('beforeunload', () => {
-        if (versionCheckInterval) {
-            clearInterval(versionCheckInterval);
-        }
-    });
-}
-
-// Initialize version update check when DOM is ready
-if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', initVersionUpdateCheck);
-} else {
-    initVersionUpdateCheck();
+    initRuntimeCheck();
 }
 
 // ============================================================================

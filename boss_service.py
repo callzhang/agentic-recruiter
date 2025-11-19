@@ -421,7 +421,7 @@ class BossServiceAsync:
 
         @self.app.get("/version/check")
         async def check_version():
-            """Check if a new git version is available.
+            """Check if a new git version is available and attempt to merge automatically.
             
             Returns:
                 dict: Version check result with keys:
@@ -430,7 +430,9 @@ class BossServiceAsync:
                     - remote_commit: Remote git commit hash (short)
                     - current_branch: Current git branch
                     - repo_url: Repository URL (HTTPS format)
-                    - message: Optional message about the update
+                    - merge_success: Boolean indicating if merge was successful (if attempted)
+                    - merge_error: Error message if merge failed (if attempted)
+                    - message: Optional message about the update/merge status
             """
             from src.runtime_utils import check_git_update_available
             return check_git_update_available()
