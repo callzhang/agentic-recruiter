@@ -196,7 +196,7 @@ async function process_candidate() {
                 
                 // For chat mode, try to get full resume and re-analyze
                 if (mode !== 'recommend') {
-                    debugger;
+                    // debugger;
                     let full_resume_text = document.getElementById('resume-textarea-full')?.value?.trim() || '';
                     if (full_resume_text.includes('⏳')) {
                         await fetchFullResume();

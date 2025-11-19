@@ -1127,10 +1127,6 @@ function applyCardUpdate(card, updates, identifiers) {
                     stageEmoji = '⭐';
                     stageClasses = 'bg-emerald-100 text-emerald-700';
                     break;
-                // case 'GREET':
-                //     stageEmoji = '👋';
-                //     stageClasses = 'bg-green-100 text-green-700';
-                //     break;
                 case 'PASS':
                     stageEmoji = '❌';
                     stageClasses = 'bg-red-100 text-red-700';

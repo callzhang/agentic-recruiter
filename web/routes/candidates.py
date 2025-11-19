@@ -143,10 +143,12 @@ async def list_candidates(
         return HTMLResponse(content='<div class="text-center text-gray-500 py-12">暂无候选人</div>')
     
     # Batch query candidates from cloud store
-    identifiers = [c["chat_id"] for c in candidates if c.get("chat_id")]
-    identifiers += [c["candidate_id"] for c in candidates if c.get("candidate_id")]
-    identifiers += [c["conversation_id"] for c in candidates if c.get("conversation_id")]
-    names: list[str] = [c["name"] for c in candidates if c.get("name")]
+    identifiers, names = [], []
+    for c in candidates:
+        ids = [c.get('chat_id'), c.get('candidate_id'), c.get('conversation_id')]
+        ids = [id for id in ids if id] or []
+        identifiers.extend(ids)
+        names.append(c.get('name')) if ids else None # fallback to name + job_applied if no identifiers
     job_applied = candidates[0].get("job_applied")
     # Check if candidate is saved to cloud using batch query results
     stored_candidates = get_candidates(identifiers=identifiers, names=names, job_applied=job_applied)
@@ -175,16 +177,6 @@ async def list_candidates(
             # update greeted status if the candidate is in chat, greet, or seek stage
             candidate['greeted'] = candidate.get('greeted', False)
 
-            # generated message is the last assistant message from the history
-            # if not stored_candidate.get('generated_message'):
-            #     history = stored_candidate.get('metadata', {}).get('history', []) or []
-            #     stored_last_message = stored_candidate.get('last_message')
-            #     web_last_message = candidate.get('last_message')
-            #     last_assistant_message = next((msg.get('content') for msg in history[::-1] if 'assistant' in [msg.get('role'), msg.get('type')]), '') #TODO: 'type' is for lagacy code compatibility
-            #     generated_message = stored_last_message if stored_last_message != web_last_message else last_assistant_message
-            #     candidate["generated_message"] = generated_message
-
-
         # Extract resume_text and full_resume from candidate
         resume_text = candidate.pop("resume_text", '')
         full_resume = candidate.pop("full_resume", '')
@@ -211,15 +203,22 @@ async def get_candidate_detail(request: Request):
     candidate = dict(request.query_params)
     str2bool = lambda v: {'true': True, 'false': False}.get(v, v)
     candidate = {k:str2bool(v) for k, v in candidate.items() if v}
+    identifiers = [candidate.get('candidate_id'), candidate.get('chat_id'), candidate.get('conversation_id')]
+    identifiers = [id for id in identifiers if id] or None
     # Try to find existing candidate
     results = get_candidates(
-        identifiers=[candidate.get('candidate_id'), candidate.get('chat_id'), candidate.get('conversation_id')], 
-        names=[candidate.get('name')], 
-        job_applied=candidate.get('job_applied'), 
+        identifiers=identifiers, 
+        names= [candidate.get('name')] if not identifiers else None, 
+        job_applied=candidate.get('job_applied') if not identifiers else None, 
         limit=1
     )
     stored_candidate = results[0] if results else {}
     stored_candidate = {k:v for k, v in stored_candidate.items() if v}
+    if stored_candidate.get('chat_id') and stored_candidate.get('chat_id'):
+        if candidate.get('chat_id') == stored_candidate.get('chat_id'):
+            candidate['chat_id'] = stored_candidate.get('chat_id')
+        else:
+            logger.warning(f"chat_id mismatch: {candidate.get('chat_id')} != {stored_candidate.get('chat_id')}")
     candidate.update(stored_candidate)
     candidate['score'] = stored_candidate.get("analysis", {}).get("overall")
 
