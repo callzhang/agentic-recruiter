@@ -201,48 +201,6 @@ class BossServiceAsync:
             await candidate.goto(boss_zhipin_config["chat_url"], wait_until="domcontentloaded", timeout=20000)
         return candidate
 
-    async def _inject_navigation_guard(self, page: Page) -> None:
-        """
-        Optional: Inject JavaScript to prevent manual link clicks from navigating.
-        This provides an additional layer on top of Chrome's --app mode.
-        
-        Note: This is currently NOT automatically called. Enable it by calling this
-        method after page loads if you want to completely block manual navigation.
-        The --app mode in start_service.py already provides good isolation.
-        """
-        boss_zhipin_config = get_boss_zhipin_config()
-        allowed_origin = boss_zhipin_config["base_url"]
-        navigation_guard_script = f"""
-        (function() {{
-            const allowedOrigin = '{allowed_origin}';
-            
-            // Prevent link clicks that navigate outside BASE_URL
-            document.addEventListener('click', function(event) {{
-                let target = event.target;
-                while (target && target.tagName !== 'A') {{
-                    target = target.parentElement;
-                }}
-                if (target && target.tagName === 'A') {{
-                    const href = target.getAttribute('href');
-                    if (href && !href.startsWith(allowedOrigin) && !href.startsWith('/') && !href.startsWith('#')) {{
-                        event.preventDefault();
-                        event.stopPropagation();
-                        console.log('[Navigation Guard] Blocked navigation to:', href);
-                    }}
-                }}
-            }}, true);
-            
-            // Log when navigation is attempted
-            window.addEventListener('beforeunload', function(event) {{
-                console.log('[Navigation Guard] Page unload detected');
-            }});
-            
-            console.log('[Navigation Guard] Installed - only {allowed_origin} navigation allowed');
-        }})();
-        """
-        await page.evaluate(navigation_guard_script)
-        logger.debug("Navigation guard injected for page: %s", page.url)
-
     async def save_login_state(self) -> None:
         if not self.context:
             return
@@ -460,6 +418,22 @@ class BossServiceAsync:
                 "new_message_count": stats.get("new_message_count", 0),
                 "new_greet_count": stats.get("new_greet_count", 0),
             }
+
+        @self.app.get("/version/check")
+        async def check_version():
+            """Check if a new git version is available.
+            
+            Returns:
+                dict: Version check result with keys:
+                    - has_update: Boolean indicating if update is available
+                    - current_commit: Current git commit hash (short)
+                    - remote_commit: Remote git commit hash (short)
+                    - current_branch: Current git branch
+                    - repo_url: Repository URL (HTTPS format)
+                    - message: Optional message about the update
+            """
+            from src.runtime_utils import check_git_update_available
+            return check_git_update_available()
 
         @self.app.post("/login")
         async def login():

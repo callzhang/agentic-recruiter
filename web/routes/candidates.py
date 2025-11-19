@@ -148,7 +148,7 @@ async def list_candidates(
         ids = [c.get('chat_id'), c.get('candidate_id'), c.get('conversation_id')]
         ids = [id for id in ids if id] or []
         identifiers.extend(ids)
-        names.append(c.get('name')) if ids else None # fallback to name + job_applied if no identifiers
+        names.append(c.get('name')) if not ids else None # fallback to name + job_applied if no identifiers
     job_applied = candidates[0].get("job_applied")
     # Check if candidate is saved to cloud using batch query results
     stored_candidates = get_candidates(identifiers=identifiers, names=names, job_applied=job_applied)
@@ -216,10 +216,11 @@ async def get_candidate_detail(request: Request):
     stored_candidate = {k:v for k, v in stored_candidate.items() if v}
     if stored_candidate.get('chat_id') and stored_candidate.get('chat_id'):
         if candidate.get('chat_id') == stored_candidate.get('chat_id'):
-            candidate['chat_id'] = stored_candidate.get('chat_id')
+            candidate.update(stored_candidate)
         else:
             logger.warning(f"chat_id mismatch: {candidate.get('chat_id')} != {stored_candidate.get('chat_id')}")
-    candidate.update(stored_candidate)
+    else:
+        candidate.update(stored_candidate)
     candidate['score'] = stored_candidate.get("analysis", {}).get("overall")
 
     return templates.TemplateResponse("partials/candidate_detail.html", {

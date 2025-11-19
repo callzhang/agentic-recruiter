@@ -209,6 +209,36 @@ document.addEventListener('alpine:init', () => {
         }
     });
     
+    // Version update modal store
+    Alpine.store('versionUpdateModal', {
+        show: false,
+        title: '新版本可用',
+        message: '',
+        currentCommit: null,
+        remoteCommit: null,
+        currentBranch: null,
+        repoUrl: null,
+        
+        dismiss() {
+            // Store dismissed version in localStorage
+            if (this.remoteCommit) {
+                localStorage.setItem('dismissedVersion', this.remoteCommit);
+            }
+            this.show = false;
+        },
+        
+        update() {
+            // Open repository URL in new tab
+            if (this.repoUrl) {
+                window.open(this.repoUrl, '_blank');
+            } else {
+                // Fallback: show message
+                showToast('请手动运行 git pull 更新代码', 'info');
+            }
+            this.dismiss();
+        }
+    });
+    
     // Load state on init
     Alpine.store('app').loadFromStorage();
 });
@@ -938,6 +968,8 @@ window.processAllCandidates = async function processAllCandidates() {
                     clearTimeout(timeout);
                     document.removeEventListener('candidate:processing-complete', onComplete);
                     document.removeEventListener('candidate:processing-error', onError);
+                    // Stop batch processing on processing error
+                    window.stopBatchProcessing = true;
                     reject(new Error(event.detail.error || 'Processing failed'));
                 };
                 
@@ -994,7 +1026,13 @@ window.processAllCandidates = async function processAllCandidates() {
             failed++;
             console.error(`Failed to process candidate ${i + 1}:`, error);
             showToast(`❌ ${name} 处理失败: ${error.message}`, 'error');
-            // Continue to next candidate
+            
+            // Stop batch processing if processing error occurred
+            if (window.stopBatchProcessing) {
+                showToast(`批量处理已停止 (${processed}/${total} 完成, ${failed} 失败)`, 'warning');
+                break;
+            }
+            // Otherwise continue to next candidate
         }
     }
     
@@ -1209,6 +1247,160 @@ document.addEventListener('candidate:update', function(event) {
         });
     }
 });
+
+// ============================================================================
+// Service Status Check
+// ============================================================================
+
+/**
+ * Periodically check service status and update the status indicator
+ */
+function initServiceStatusCheck() {
+    const statusDot = document.getElementById('status-dot');
+    const statusText = document.getElementById('status-text');
+    
+    if (!statusDot || !statusText) {
+        return; // Status indicator not found
+    }
+    
+    let statusCheckInterval = null;
+    
+    async function checkServiceStatus() {
+        try {
+            // Create abort controller for timeout
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
+            
+            const response = await fetch('/status', {
+                method: 'GET',
+                headers: { 'Accept': 'application/json' },
+                signal: controller.signal
+            });
+            
+            clearTimeout(timeoutId);
+            
+            if (response.ok) {
+                const data = await response.json();
+                // Service is running
+                statusDot.className = 'w-2 h-2 bg-green-500 rounded-full animate-pulse';
+                statusText.textContent = '服务运行中';
+                statusText.className = 'text-sm text-gray-600';
+            } else {
+                // Service returned error
+                statusDot.className = 'w-2 h-2 bg-yellow-500 rounded-full animate-pulse';
+                statusText.textContent = '服务异常';
+                statusText.className = 'text-sm text-yellow-600';
+            }
+        } catch (error) {
+            // Service is down or unreachable (network error, timeout, etc.)
+            if (error.name === 'AbortError') {
+                statusDot.className = 'w-2 h-2 bg-yellow-500 rounded-full animate-pulse';
+                statusText.textContent = '服务响应超时';
+                statusText.className = 'text-sm text-yellow-600';
+            } else {
+                statusDot.className = 'w-2 h-2 bg-red-500 rounded-full';
+                statusText.textContent = '服务离线';
+                statusText.className = 'text-sm text-red-600';
+            }
+        }
+    }
+    
+    // Check immediately on page load
+    checkServiceStatus();
+    
+    // Then check every 30 seconds
+    statusCheckInterval = setInterval(checkServiceStatus, 30000);
+    
+    // Clean up on page unload
+    window.addEventListener('beforeunload', () => {
+        if (statusCheckInterval) {
+            clearInterval(statusCheckInterval);
+        }
+    });
+}
+
+// Initialize service status check when DOM is ready
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initServiceStatusCheck);
+} else {
+    initServiceStatusCheck();
+}
+
+// ============================================================================
+// Version Update Check
+// ============================================================================
+
+/**
+ * Periodically check for new git versions and show modal if available
+ */
+function initVersionUpdateCheck() {
+    let versionCheckInterval = null;
+    
+    async function checkVersionUpdate() {
+        try {
+            // Create abort controller for timeout
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+            
+            const response = await fetch('/version/check', {
+                method: 'GET',
+                headers: { 'Accept': 'application/json' },
+                signal: controller.signal
+            });
+            
+            clearTimeout(timeoutId);
+            
+            if (!response.ok) {
+                return; // Silently fail
+            }
+            
+            const data = await response.json();
+            
+            if (data.has_update && data.remote_commit) {
+                // Check if this version was already dismissed
+                const dismissedVersion = localStorage.getItem('dismissedVersion');
+                if (dismissedVersion === data.remote_commit) {
+                    return; // User already dismissed this version
+                }
+                
+                // Show modal
+                if (window.Alpine && Alpine.store('versionUpdateModal')) {
+                    const modal = Alpine.store('versionUpdateModal');
+                    modal.title = '新版本可用';
+                    modal.message = data.message || '检测到新的 Git 版本可用，建议更新以获取最新功能。';
+                    modal.currentCommit = data.current_commit;
+                    modal.remoteCommit = data.remote_commit;
+                    modal.currentBranch = data.current_branch;
+                    modal.repoUrl = data.repo_url;
+                    modal.show = true;
+                }
+            }
+        } catch (error) {
+            // Silently fail - don't show errors for version checks
+            console.debug('Version check failed:', error);
+        }
+    }
+    
+    // Check immediately on page load (after a short delay to let page load)
+    setTimeout(checkVersionUpdate, 3000);
+    
+    // Then check every 5 minutes
+    versionCheckInterval = setInterval(checkVersionUpdate, 300000);
+    
+    // Clean up on page unload
+    window.addEventListener('beforeunload', () => {
+        if (versionCheckInterval) {
+            clearInterval(versionCheckInterval);
+        }
+    });
+}
+
+// Initialize version update check when DOM is ready
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initVersionUpdateCheck);
+} else {
+    initVersionUpdateCheck();
+}
 
 // ============================================================================
 // Note: All candidate-specific functions moved to candidate_detail.html
