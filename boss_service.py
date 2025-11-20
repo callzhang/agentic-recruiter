@@ -17,7 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from playwright.async_api import Browser, BrowserContext, Page, Playwright, TimeoutError as PlaywrightTimeoutError, async_playwright
 
 from src import assistant_actions
-from src.candidate_store import get_candidates, get_candidate_count, search_candidates_by_resume, upsert_candidate
+from src.candidate_store import get_candidates, get_candidate_count, search_candidates_by_resume
 from src.config import get_boss_zhipin_config, get_browser_config, get_service_config, get_sentry_config
 from src.global_logger import logger
 import src.chat_actions as chat_actions
@@ -993,6 +993,7 @@ class BossServiceAsync:
             return {}
 
         @self.app.middleware("http")
+        @self.app.middleware("https")
         async def ensure_startup(request: Request, call_next):
             await self.startup_complete.wait()
             return await call_next(request)

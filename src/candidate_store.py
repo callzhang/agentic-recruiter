@@ -1,6 +1,7 @@
 """Zilliz/Milvus-backed QA and candidate interaction store integration."""
 from functools import lru_cache
 import json
+import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 from pymilvus import MilvusClient, DataType, FieldSchema
@@ -24,7 +25,7 @@ def get_collection_schema() -> list[FieldSchema]:
     This serves as both documentation and a reference for field definitions.
     """
     fields: list[FieldSchema] = [
-        FieldSchema(name="candidate_id", dtype=DataType.VARCHAR, max_length=64, is_primary=True, auto_id=True),
+        FieldSchema(name="candidate_id", dtype=DataType.VARCHAR, max_length=64, is_primary=True),
         FieldSchema(name="resume_vector", dtype=DataType.FLOAT_VECTOR, dim=_zilliz_config["embedding_dim"]),
         FieldSchema(name="chat_id", dtype=DataType.VARCHAR, max_length=100, nullable=True),
         FieldSchema(name="name", dtype=DataType.VARCHAR, max_length=200, nullable=True),
@@ -127,7 +128,7 @@ def create_collection(collection_name: Optional[str] = None) -> bool:
             primary_field_name="candidate_id",
             vector_field_name="resume_vector",
             id_type="string",
-            auto_id=True,
+            auto_id=False,
             max_length=64,
             metric_type="IP",
             schema=get_collection_schema(),
@@ -171,7 +172,7 @@ def get_candidate_by_dict(kwargs: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         fields=fields
     )
 
-    if identifiers and not results and resume_text:
+    if not results and resume_text:
         results = search_candidates_by_resume(
             resume_text=resume_text, 
             filter_expr=f'job_applied == "{job_applied}"' if job_applied else None, 
@@ -250,9 +251,9 @@ def get_candidates(
     return candidates[:limit]
         
 
-truncate_field = lambda field, length: field.encode('utf-8')[:length].decode('utf-8', errors='ignore')
+truncate_field = lambda string, length: string.encode('utf-8')[:length].decode('utf-8', errors='ignore').strip()
 
-def upsert_candidate(**kwargs) -> Optional[str]:
+def upsert_candidate(**candidate) -> Optional[str]:
     """Insert or update candidate information.
     
     Automatically generates resume_vector embedding if not provided and resume_text is available.
@@ -264,81 +265,59 @@ def upsert_candidate(**kwargs) -> Optional[str]:
     Returns:
         str: candidate_id if successful, None otherwise
     """
-    # Prepare data
-    chat_id = kwargs.get("chat_id")
-    conversation_id = kwargs.get("conversation_id")
-    stored_candidate = get_candidate_by_dict(kwargs)
-    candidate_id = stored_candidate.get('candidate_id') if stored_candidate else None
-    if candidate_id and candidate_id != kwargs.get("candidate_id"):
-        logger.warning(f"candidate_id mismatch: {kwargs.get('candidate_id')} -> {candidate_id}")
-        kwargs['candidate_id'] = candidate_id
+    # prevent kwargs only has `candidate_id` field
+    if not candidate or (len(candidate) == 1 and 'candidate_id' in candidate):
+        logger.warning(f"upsert: candidate_id provided but no updates: {candidate}")
+        return candidate.get("candidate_id")
     
-    # fixing fields types
-    for k, v in kwargs.items():
-        if not (v or v == 0) or not k in _all_fields:
-            continue
+    # Get candidate_id from kwargs if provided
+    candidate_id = candidate.get("candidate_id")
+    stored_candidate = None
+    
+    # Only check for existing candidate if candidate_id is not provided
+    # If candidate_id is provided, we use it directly without checking
+    if not candidate_id:
+        stored_candidate = get_candidate_by_dict(candidate)
+        candidate_id = stored_candidate.get('candidate_id') if stored_candidate else None
+        candidate['candidate_id'] = candidate_id
+    
+    # fixing fields types and filtering only valid fields
+    candidate['updated_at'] = datetime.now().isoformat()
+    candidate = {k: v for k, v in candidate.items() if k in _all_fields and (v or v == 0)}
+    for k, v in candidate.items():
         field = next((f for f in get_collection_schema() if f.name == k), None)
         if field.dtype == DataType.VARCHAR:
-            kwargs[k] = truncate_field(v, field.max_length)
+            candidate[k] = truncate_field(str(v), field.max_length)
         elif field.dtype == DataType.BOOL:
-            kwargs[k] = True if v==1 or v.lower() in ['true', '1'] else False
+            candidate[k] = True if v==1 or v.lower() in ['true', '1'] else False
+        elif field.dtype == DataType.JSON and isinstance(v, str):
+            candidate[k] = json.loads(v)
     
-    # Parse JSON fields if strings
-    analysis = kwargs.get("analysis")
-    if analysis and isinstance(analysis, str):
-        kwargs['analysis'] = json.loads(analysis)
-    metadata = kwargs.get("metadata")
-    if metadata and isinstance(metadata, str):
-        kwargs['metadata'] = json.loads(metadata)
-    
-    kwargs['updated_at'] = datetime.now().isoformat()
-    
-    # Filter to only valid fields
-    kwargs = {k: v.strip() if isinstance(v, str) else v for k, v in kwargs.items() if(k in _all_fields and (v or v == 0))}
     
     # Generate embedding if needed
-    resume_text = kwargs.get("resume_text")
-    resume_vector = kwargs.get("resume_vector")
-    
-    # For updates with candidate_id, let it fail if invalid and recover
+    resume_text = candidate.get("resume_text")
+    resume_vector = candidate.get("resume_vector")
     if not resume_vector and resume_text:
         # Generate embedding from resume_text
-        kwargs["resume_vector"] = get_embedding(resume_text)
+        candidate["resume_vector"] = get_embedding(resume_text)
     
-    # Insert if no candidate_id
-    if not candidate_id:
-        logger.debug(f'upsert_candidate: no candidate_id, inserting new candidate: {kwargs.get("name")}');
-        kwargs["resume_vector"] = [0.0] * _zilliz_config["embedding_dim"] if not resume_vector else resume_vector
-        results = _client.insert(collection_name=_collection_name, data=kwargs)
-        return results['ids'][0]
-
-    # Update if candidate_id exists
-    try:
-        result = _client.upsert(
+    # Determine insert vs update:
+    if candidate_id:
+        _client.upsert(
             collection_name=_collection_name,
-            data=[kwargs],
-            partial_update=bool(candidate_id),  # Partial update if candidate_id exists
+            data=[candidate],
+            partial_update=True,  # Partial update for existing records
         )
-        return result['ids'][0]
-    except MilvusException as exc:
-        error_code, error_message = exc.code, exc.message
-        if error_code == 1100 and "resume_vector" in error_message.lower():
-            # This happens when partial_update=True but candidate_id is invalid
-            # and resume_vector is missing. Try to find the actual record.
-            logger.warning("Upsert failed with missing resume_vector, attempting to find existing record...")
-            # Try to find existing record by chat_id or conversation_id
-            existing_candidate_id = get_candidate_by_dict(kwargs).get('candidate_id')
-            if existing_candidate_id:
-                logger.info(f"Found existing record with candidate_id: {existing_candidate_id}")
-                # Update kwargs with correct candidate_id and resume_vector
-                kwargs["candidate_id"] = existing_candidate_id
-                result = upsert_candidate(**kwargs)
-                # Return the existing candidate_id we found (not the result which might be a new ID)
-                return result
-            else:
-                logger.error(f"No existing record found with: {kwargs}")
-        logger.exception("Failed to upsert candidate: %s", exc)
-        raise exc
+        return candidate_id
+    else:
+        # Generate a unique candidate_id using UUID
+        candidate_id = str(uuid.uuid4())
+        candidate['candidate_id'] = candidate_id
+        logger.debug(f'upsert_candidate: generated candidate_id {candidate_id} for new candidate: {candidate.get("name")}');
+        if not candidate.get("resume_vector"): # generate embedding if not provided
+            candidate["resume_vector"] = [0.0] * _zilliz_config["embedding_dim"]
+        _client.insert(collection_name=_collection_name, data=[candidate])
+        return candidate_id
 
 
 def search_candidates_by_resume(

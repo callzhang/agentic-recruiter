@@ -1,5 +1,4 @@
 """Assistant actions for recruitment automation with AI and storage."""
-import logging
 import json
 import time
 import hmac
@@ -10,7 +9,7 @@ import requests
 from functools import lru_cache
 from typing import Any, Dict, List, Optional
 from .candidate_store import upsert_candidate
-from .config import get_openai_config, get_sentry_config, get_dingtalk_config
+from .config import get_dingtalk_config
 from .global_logger import logger
 from .assistant_utils import _openai_client
 from pydantic import BaseModel, Field
@@ -136,7 +135,7 @@ def init_chat(
     )
 
     # create candidate record
-    success = upsert_candidate(
+    candidate_id = upsert_candidate(
         chat_id=chat_id,
         name=name,
         job_applied=job_info["position"],
@@ -145,7 +144,7 @@ def init_chat(
         conversation_id=conversation.id,
         metadata={'history': chat_history},
     )
-    if not success:
+    if not candidate_id:
         raise ValueError("Failed to create candidate record")
     
     return conversation.id

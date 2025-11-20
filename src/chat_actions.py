@@ -1,6 +1,5 @@
 """Common high-level chat actions used by automation flows (async version)."""
 
-import asyncio
 import re
 from datetime import date
 from typing import Any, Dict, List, Optional
@@ -496,7 +495,7 @@ async def check_full_resume_available(page: Page, chat_id: str):
 async def view_full_resume_action(page: Page, chat_id: str) -> Dict[str, Any]:
     """View candidate's full offline resume. Returns dict with 'text' and 'pages'. Raises ValueError on failure."""
     await _prepare_chat_page(page)
-    dialog = await _go_to_chat_dialog(page, chat_id)
+    await _go_to_chat_dialog(page, chat_id)
     available = await check_full_resume_available(page, chat_id)
     if not available:
         # raise ValueError("暂无离线简历，请先请求简历")
@@ -555,13 +554,6 @@ async def ask_contact_action(page: Page, chat_id: str) -> bool:
         raise ValueError("未找到换电话或换微信按钮")
 
     return clicked_phone and clicked_wechat
-
-async def notify_hr_action(page: Page, chat_id: str) -> bool:
-    """Placeholder for triggering HR notification workflow.
-
-    # TODO: 实现 HR 通知功能（电话/微信已获取的场景）
-    """
-    raise NotImplementedError("TODO: implement HR notification workflow")
 
 
 __all__ = [name for name in globals() if name.endswith("_action") or name.startswith("get_chat")]

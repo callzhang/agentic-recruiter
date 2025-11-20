@@ -11,6 +11,7 @@ Usage:
 
 import sys
 import argparse
+import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -102,6 +103,10 @@ def rename_collection(client: MilvusClient, zilliz_config: dict, old_name: str, 
         # Get schema from existing collection
         schema = old_col.schema
         
+        # Check if the collection has auto_id enabled
+        primary_field = next((f for f in schema.fields if f.is_primary), None)
+        has_auto_id = primary_field and getattr(primary_field, 'auto_id', False)
+        
         # Create new collection with same schema
         new_col = Collection(name=new_name, schema=schema)
         
@@ -111,8 +116,14 @@ def rename_collection(client: MilvusClient, zilliz_config: dict, old_name: str, 
         offset = 0
         total_copied = 0
         
-        # Get valid field names from schema
+        # Get valid field names from schema (exclude primary key if auto_id)
         valid_field_names = {field.name for field in schema.fields}
+        if has_auto_id and primary_field:
+            # Remove primary key from data since it's auto-generated
+            valid_field_names.discard(primary_field.name)
+            logger.debug(f"Excluding auto-generated primary field: {primary_field.name}")
+        
+        logger.debug(f"Will include {len(valid_field_names)} fields: {valid_field_names}")
         
         while True:
             results = client.query(
@@ -126,7 +137,7 @@ def rename_collection(client: MilvusClient, zilliz_config: dict, old_name: str, 
             if not results:
                 break
             
-            # Filter data to only include fields in schema (exclude internal Milvus fields)
+            # Filter data to only include fields in schema (exclude internal Milvus fields and auto_id fields)
             filtered_results = []
             for record in results:
                 filtered_record = {
@@ -221,6 +232,12 @@ def transform_record(record: dict, schema_fields: list, collection_type: str) ->
         # Initialize notified field if not present
         if "notified" not in new_record or new_record["notified"] is None:
             new_record["notified"] = False
+        
+        # Generate candidate_id if not present (since auto_id is now False)
+        # Preserve existing candidate_id if it exists, otherwise generate a new UUID
+        if "candidate_id" not in new_record or not new_record.get("candidate_id"):
+            new_record["candidate_id"] = str(uuid.uuid4())
+            logger.debug(f"Generated new candidate_id: {new_record['candidate_id']}")
             
     elif collection_type == 'jobs':
         # Initialize notification field if not present
@@ -245,10 +262,6 @@ def transform_record(record: dict, schema_fields: list, collection_type: str) ->
                 new_record[field.name] = 0.0
             else:
                 new_record[field.name] = None
-    
-    # Remove auto-generated ID fields (they'll be regenerated)
-    if collection_type == 'candidates' and 'candidate_id' in new_record:
-        del new_record['candidate_id']
     
     return new_record
 
@@ -322,13 +335,32 @@ def migrate_collection(collection_type: str, new_collection_name: str = None):
         # Create new collection schema
         logger.info(f"Creating new collection: {new_collection}")
         logger.debug(f"Schema fields: {[f.name for f in schema_fields]}")
+        
+        # Create CollectionSchema from fields
         schema = CollectionSchema(
             fields=schema_fields,
             description=description
         )
         
-        # Create new collection
-        new_col = Collection(name=new_collection, schema=schema)
+        # Create new collection with auto_id=False for candidates (since we're generating IDs manually)
+        if collection_type == 'candidates':
+            # Create collection using MilvusClient to set auto_id=False
+            client.create_collection(
+                collection_name=new_collection,
+                dimension=zilliz_config["embedding_dim"],
+                primary_field_name="candidate_id",
+                vector_field_name="resume_vector",
+                id_type="string",
+                auto_id=False,
+                max_length=64,
+                metric_type="IP",
+                schema=schema,
+            )
+            # Get the collection object for further operations
+            new_col = Collection(new_collection)
+        else:
+            # For jobs, use the standard Collection creation
+            new_col = Collection(name=new_collection, schema=schema)
         
         # Create indexes
         logger.info("Creating indexes...")
@@ -428,25 +460,29 @@ def migrate_collection(collection_type: str, new_collection_name: str = None):
             old_backup_name = f"{old_collection}_{timestamp}"
             final_name = old_collection  # The original name
             
-            # Step 1: Rename old collection to NAME_timestamp
-            logger.info(f"Renaming {old_collection} to {old_backup_name}...")
-            if rename_collection(client, zilliz_config, old_collection, old_backup_name):
-                logger.info(f"✅ Renamed {old_collection} to {old_backup_name}")
+            # Step 1: Rename old collection to NAME_timestamp (backup)
+            # Skip if it fails - the new collection is already ready
+            logger.info(f"Backing up old collection {old_collection} to {old_backup_name}...")
+            backup_success = rename_collection(client, zilliz_config, old_collection, old_backup_name)
+            if backup_success:
+                logger.info(f"✅ Backed up {old_collection} to {old_backup_name}")
             else:
-                logger.error(f"❌ Failed to rename {old_collection} to {old_backup_name}")
-                return False
+                logger.warning(f"⚠️ Failed to backup {old_collection}, but new collection is ready. You can manually drop the old collection later.")
             
             # Step 2: Rename new collection (NAME_v2) to NAME
             logger.info(f"Renaming {new_collection} to {final_name}...")
             if rename_collection(client, zilliz_config, new_collection, final_name):
                 logger.info(f"✅ Renamed {new_collection} to {final_name}")
                 logger.info(f"✅ Migration complete! Collection is now at {final_name}")
-                logger.info(f"   Old collection backed up as {old_backup_name}")
+                if backup_success:
+                    logger.info(f"   Old collection backed up as {old_backup_name}")
+                else:
+                    logger.info(f"   Old collection {old_collection} still exists - you may want to drop it manually")
+                return True
             else:
                 logger.error(f"❌ Failed to rename {new_collection} to {final_name}")
+                logger.warning(f"⚠️ New collection is available at {new_collection} - you may need to update config or rename manually")
                 return False
-            
-            return True
         else:
             logger.warning(f"⚠️ Record count mismatch: expected {total_migrated}, got {new_count}")
             return False

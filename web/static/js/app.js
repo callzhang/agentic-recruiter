@@ -422,7 +422,6 @@ function candidateTabs() {
         switchTab(tab) {
             this.activeTab = tab;
             // Reset selected candidate
-            window.selectedCardId = null;
             // Clear list when switching tabs
             const list = document.getElementById('candidate-list');
             if (list) {
@@ -723,29 +722,11 @@ document.body.addEventListener('showToast', function(evt) {
 // Candidate Selection Management
 // ============================================================================
 
-window.selectedCardId = null;
-
-// Intercept candidate card clicks to prevent duplicate requests
+// Visual state management for candidate cards
 document.body.addEventListener('htmx:beforeRequest', function(event) {
     // Check if this is a candidate card click
     if (!event.detail.elt.classList.contains('candidate-card')) {
         return;  // Not a candidate card, allow request normally
-    }
-    
-    const card_id = event.detail.elt.getAttribute('data-card-id');
-    
-    // If clicking the same candidate, prevent redundant fetch
-    if (window.selectedCardId === card_id) {
-        console.log('Same candidate already selected, skipping fetch');
-        event.preventDefault();  // This cancels the HTMX request
-        
-        // Hide loading indicator (since afterRequest won't fire for cancelled requests)
-        const loadingIndicator = document.getElementById('global-loading');
-        if (loadingIndicator) {
-            loadingIndicator.classList.remove('htmx-request');
-        }
-        
-        return;
     }
     
     // Remove selected state from all cards
@@ -760,12 +741,6 @@ document.body.addEventListener('htmx:beforeRequest', function(event) {
     
     // Scroll card into view in the left panel
     event.detail.elt.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
-    
-    // Update selected ID
-    window.selectedCardId = card_id;
-    console.log('Selected candidate:', card_id);
-    
-    // Allow HTMX to proceed
 });
 
 // ============================================================================
@@ -853,7 +828,24 @@ window.processAllCandidates = async function processAllCandidates() {
         return;
     }
     
+    // Find the currently selected card (has blue selection classes)
+    // If found, start from next; otherwise start from beginning
+    let startIndex = 0;
+    const selectedCard = Array.from(cards).find(card => 
+        card.classList.contains('bg-blue-50') || 
+        card.classList.contains('border-blue-500')
+    );
+    if (selectedCard) {
+        const selectedIndex = Array.from(cards).indexOf(selectedCard);
+        startIndex = selectedIndex + 1; // Start from next card
+        if (startIndex >= cards.length) {
+            showToast('当前已是最后一个候选人，将从第一个开始', 'info');
+            startIndex = 0;
+        }
+    }
+    
     const total = cards.length;
+    const remaining = total - startIndex;
     let processed = 0;
     let failed = 0;
     
@@ -874,9 +866,13 @@ window.processAllCandidates = async function processAllCandidates() {
         batchBtn.classList.add('bg-red-600', 'hover:bg-red-700');
     }
     
-    showToast(`开始批量处理 ${total} 个候选人`, 'info');
+    if (startIndex > 0) {
+        showToast(`开始批量处理 ${remaining} 个候选人 (从第 ${startIndex + 1} 个开始)`, 'info');
+    } else {
+        showToast(`开始批量处理 ${total} 个候选人`, 'info');
+    }
     
-    for (let i = 0; i < cards.length; i++) {
+    for (let i = startIndex; i < cards.length; i++) {
         // Check if user requested stop
         if (window.stopBatchProcessing) {
             showToast(`批量处理已停止 (${processed}/${total} 完成)`, 'warning');
@@ -886,8 +882,9 @@ window.processAllCandidates = async function processAllCandidates() {
         const card = cards[i];
         const cardData = JSON.parse(card.getAttribute('hx-vals'));
         const name = cardData.name || `候选人 ${i + 1}`;
+        const currentPosition = i + 1;
         
-        showToast(`正在处理候选人 ${i + 1}/${total}: ${name}`, 'info');
+        showToast(`正在处理候选人 ${currentPosition}/${total}: ${name}`, 'info');
         
         try {
             const detailPane = document.getElementById('detail-pane');
@@ -950,13 +947,6 @@ window.processAllCandidates = async function processAllCandidates() {
                 detailPane.addEventListener('htmx:afterSwap', onSwap, { once: true });
                 detailPane.addEventListener('htmx:responseError', onError, { once: true });
                 
-                // Reset selectedCardId to force HTMX request even if card is already selected
-                // This prevents timeout when batch processing starts with the first card already selected
-                const cardId = card.getAttribute('data-card-id');
-                if (window.selectedCardId === cardId) {
-                    window.selectedCardId = null;
-                }
-                
                 // Scroll card into view before triggering click
                 card.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
                 
@@ -990,7 +980,7 @@ window.processAllCandidates = async function processAllCandidates() {
     window.batchProcessingActive = false;
     window.stopBatchProcessing = false;
     
-    // Reset button
+    // Reset buttons
     if (batchBtn) {
         batchBtn.disabled = false;
         batchBtn.textContent = '全部分析';
@@ -1048,21 +1038,18 @@ document.body.addEventListener('htmx:afterRequest', (event) => {
 /**
  * Check if a card matches the given identifiers
  */
-function cardMatches(cardData, identifiers) {
-    const { chat_id, conversation_id, candidate_id, name, job_applied } = identifiers;
-    
-    // Match by multiple identifiers (check truthy values, not just existence):
-    // 1. chat_id match (both must be truthy and equal)
-    // 2. conversation_id match (both must be truthy and equal)
-    // 3. candidate_id match (both must be truthy and equal)
-    // 4. Fallback: name + job_applied match (both must be truthy and equal)
-    const chatMatch = chat_id && cardData.chat_id && cardData.chat_id === chat_id;
-    const conversationMatch = conversation_id && cardData.conversation_id && cardData.conversation_id === conversation_id;
-    const candidateMatch = candidate_id && cardData.candidate_id && cardData.candidate_id === candidate_id;
-    const nameMatch = name && job_applied && cardData.name && cardData.job_applied && 
-                     cardData.name === name && cardData.job_applied === job_applied;
-    
-    return chatMatch || conversationMatch || candidateMatch || nameMatch;
+function idMatched(cardData, identifiers) {
+    // Return true if any key from identifiers matches in cardData (both values must be truthy and equal)
+    for (const [k, v] of Object.entries(identifiers)) {
+        if (
+            v !== undefined && v !== null && v !== "" &&
+            cardData[k] !== undefined && cardData[k] !== null && cardData[k] !== "" &&
+            cardData[k] === v
+        ) {
+            return true;
+        }
+    }
+    return false;
 }
 
 /**
@@ -1179,16 +1166,14 @@ document.addEventListener('candidate:update', function(event) {
     candidateCards.forEach(card => {
         const cardData = JSON.parse(card.getAttribute('hx-vals') || '{}');
         
-        if (cardMatches(cardData, identifiers)) {
+        if (idMatched(cardData, identifiers)) {
             applyCardUpdate(card, updates, identifiers);
             found = true;
         }
     });
     
     if (!found) {
-        const identifier = identifiers.chat_id || identifiers.conversation_id || identifiers.candidate_id;
         console.warn('candidate:update: could not find matching card', {
-            identifier,
             identifiers,
             totalCards: candidateCards.length
         });

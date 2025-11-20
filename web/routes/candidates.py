@@ -68,10 +68,7 @@ async def list_candidates(
     limit: int = Query(50, description="Limit the number of candidates to return (default: 999)"),
 ):
     """Get candidate fetched from browser, compare with saved candidates in cloud store, and merge the data when matched
-    - last_message will be the candidate's greeting for the first time
-    - generated_message will be derived from the saved_candidate.metadata.history; 
-    - when the function generate_message() is called, llm will generate a new message and append to the chat_history from DOM (even the message is not sent), and then save to metadata.history, so next time the /detail endpoint will return the generated message
-    
+
     Supports four modes:
     - recommend: Get recommended candidates from 推荐牛人 page
     - greet: Get new greeting candidates (新招呼, 未读)
@@ -214,7 +211,6 @@ async def get_candidate_detail(request: Request):
     else:
         candidate.update(stored_candidate)
     candidate['score'] = stored_candidate.get("analysis", {}).get("overall")
-
     return templates.TemplateResponse("partials/candidate_detail.html", {
         "request": request,
         "analysis": candidate.pop("analysis", {}),
@@ -294,13 +290,12 @@ async def init_chat(
     if not chat_id and resume_text:
         candidate = get_candidate_by_dict({"name": name, "job_applied": job_applied, "resume_text": resume_text})
         if candidate:
-            logger.info(f"Found existing candidate: {candidate.get('candidate_id')} for name: {candidate.get('name')}")
-            return {
-                "candidate_id": candidate.get('candidate_id'), 
-                "chat_id": candidate.get('chat_id'), 
-                "conversation_id": candidate.get('conversation_id'), 
-                "success": True,
-            }
+            logger.info(f"Found existing candidate when initializing chat: {candidate.get('candidate_id')} for name: {candidate.get('name')}")
+            current = {'chat_id': chat_id, 'job_applied': job_applied, 'resume_text': resume_text}
+            updates = {k:v for k, v in candidate.items() if current.get(k) and v != current.get(k)}
+            if updates:
+                upsert_candidate(candidate_id=candidate.get('candidate_id'), **updates)
+            return candidate
     
     if mode == "recommend":
         history = [{'role': 'user', 'content': last_message}]
@@ -320,7 +315,6 @@ async def init_chat(
     
     return {
         "conversation_id": conversation_id,
-        "success": True
     }
 
 
@@ -329,6 +323,7 @@ async def analyze_candidate(
     request: Request,
     mode: str = Form(...),
     chat_id: Optional[str] = Form(None),
+    candidate_id: Optional[str] = Form(None),
     conversation_id: str = Form(...),
     job_applied: str = Form(...),
     resume_text: str = Form(None),
@@ -355,43 +350,47 @@ async def analyze_candidate(
     analysis_result["resume_type"] = resume_type
     
     # Save analysis in background
-    candidate_id = upsert_candidate(
+    upsert_candidate(
         analysis=analysis_result,
+        candidate_id=candidate_id,
         chat_id=chat_id,
         mode=mode,
         conversation_id=conversation_id,
         job_applied=job_applied,
         name=name,
     )
-    
+    return await _render_analysis_result(request, analysis_result)
+
+@router.post("/render-analysis-result")
+async def render_analysis_result(request: Request) -> HTMLResponse:
+    """Render analysis result HTML."""
+    form = await request.form()
+    analysis = json.loads(form.get("analysis", '{}'))
+    return await _render_analysis_result(request, analysis)
+
+async def _render_analysis_result(request: Request, analysis: dict) -> HTMLResponse:
+    """Internal helper to render analysis result HTML."""
     return templates.TemplateResponse("partials/analysis_result.html", {
         "request": request,
-        "analysis": analysis_result,
+        "analysis": analysis,
     })
-
 
 @router.post("/save")
 async def save_candidate_to_cloud(request: Request):
     """Save candidate record to Zilliz cloud using all form data."""
     # Parse form data
-    form_data = await request.form()
-    kwargs = dict(form_data)
-    # Only require job_applied and at least one ID
-    assert 'job_applied' in kwargs, "job_applied is required"
-
+    kwargs = await request.json()
+    assert kwargs, "kwargs is empty"
     # update candidate passes all relevant kwargs
     candidate_id = upsert_candidate(**kwargs)
-    return {
-        "candidate_id": candidate_id,
-        "success": True
-    }
+    return candidate_id
 
 
 @router.post("/generate-message", response_class=HTMLResponse)
 async def generate_message(
     mode: str = Form(...),
+    candidate_id: str = Form(...),
     chat_id: Optional[str] = Form(None),
-    index: Optional[int] = Form(None),
     conversation_id: str = Form(...),
     purpose: str = Form(...)
 ):
@@ -435,7 +434,8 @@ async def generate_message(
         
         # append the new message to the chat_history from DOM
         new_message = {"role": "assistant", "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "content": message}
-        candidate_id = upsert_candidate(
+        upsert_candidate(
+            candidate_id=candidate_id,
             last_message=message,
             chat_id=chat_id,
             mode=mode,
@@ -531,10 +531,8 @@ async def notify_hr(
         JSONResponse: Success status
     """
     try:
-        # Check if candidate has already been notified
-        from src.candidate_store import get_candidates, upsert_candidate
-        candidates = get_candidates(identifiers=[chat_id, conversation_id], names=[name], job_applied=job_applied, limit=1)
-        candidate = candidates[0] if candidates else {}
+        # Double check if candidate has already been notified
+        candidate = get_candidate_by_dict({"chat_id": chat_id, "conversation_id": conversation_id, "name": name, "job_applied": job_applied})
         
         # Skip if already notified
         if candidate.get("notified"):
@@ -545,9 +543,7 @@ async def notify_hr(
         
         if success:
             # Update candidate's notified field after successful notification
-            if candidate:
-                candidate["notified"] = True
-                upsert_candidate(**candidate)
+            upsert_candidate(candidate_id=candidate.get('candidate_id'), notified=True)
             return {"success": True, "message": "通知发送成功"}
         else:
             return {"success": False, "error": "通知发送失败"}
@@ -594,8 +590,8 @@ async def fetch_online_resume(
 
     # save resume text to background
     if resume_text and len(resume_text) > 100:
-        if candidate_id: # only update resume_text if candidate_id is provided (initiated)
-            candidate_id = upsert_candidate(
+        if candidate_id: # only update resume_text if candidate_id is provided (initiated), otherwise wait for init-chat to create candidate_id
+            upsert_candidate(
                 resume_text=resume_text,
                 chat_id=chat_id,
                 conversation_id=conversation_id,
@@ -616,6 +612,7 @@ async def fetch_online_resume(
 
 @router.post("/fetch-full-resume", response_class=HTMLResponse)
 async def fetch_full_resume(
+    candidate_id: str = Form(...),
     chat_id: str = Form(...),
     mode: str = Form("chat"),
     job_id: str = Form(""),
@@ -636,12 +633,12 @@ async def fetch_full_resume(
     requested = result.get("requested")
     
     if full_resume_text and len(full_resume_text) > 100:
-        candidate_id = upsert_candidate(
+        upsert_candidate(
+            candidate_id=candidate_id,
             full_resume=full_resume_text,
             chat_id=chat_id,
-            mode=mode,
+            mode=mode
         )
-        
         return HTMLResponse(
             content=f'<textarea id="resume-textarea-full" readonly class="w-full h-64 p-4 bg-gray-50 border rounded-lg font-mono text-sm">{full_resume_text}</textarea>'
         )
@@ -657,14 +654,16 @@ async def fetch_full_resume(
 
 @router.post("/pass", response_class=HTMLResponse)
 async def pass_candidate(
-    chat_id: str = Form(...)
+    chat_id: str = Form(...),
+    candidate_id: str = Form(...),
 ):
     """Mark candidate as PASS and move to next."""
     page = await boss_service.service._ensure_browser_session()
     result = await chat_actions.discard_candidate_action(page, chat_id, stage="PASS")
     
     if result:
-        candidate_id = upsert_candidate(
+        upsert_candidate(
+            candidate_id=candidate_id,
             chat_id=chat_id,
             stage="PASS",
         )
@@ -685,22 +684,22 @@ async def pass_candidate(
 
 
 
-@router.get("/thread-history/{conversation_id}", response_class=HTMLResponse)
-async def get_thread_history(
-    request: Request,
-    conversation_id: str
-):
-    """Get conversation history HTML.
+# @router.get("/thread-history/{conversation_id}", response_class=HTMLResponse)
+# async def get_thread_history(
+#     request: Request,
+#     conversation_id: str
+# ):
+#     """Get conversation history HTML.
     
-    Args:
-        conversation_id: OpenAI conversation ID
-    """
-    messages_data = assistant_utils.get_conversation_messages(conversation_id)
+#     Args:
+#         conversation_id: OpenAI conversation ID
+#     """
+#     messages_data = assistant_utils.get_conversation_messages(conversation_id)
     
-    return templates.TemplateResponse("partials/thread_history.html", {
-        "request": request,
-        "messages": messages_data.get("messages", []),
-        "conversation_id": conversation_id
-    })
+#     return templates.TemplateResponse("partials/thread_history.html", {
+#         "request": request,
+#         "messages": messages_data.get("messages", []),
+#         "conversation_id": conversation_id
+#     })
 
 

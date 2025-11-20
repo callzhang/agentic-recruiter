@@ -6,9 +6,7 @@ fallbacks, etc.) behaves the same when running with the async Playwright API.
 """
 
 import asyncio
-import json
 import re
-import time
 from textwrap import dedent
 from typing import Any, Dict, List, Optional
 
@@ -18,7 +16,6 @@ from playwright.async_api import (
     Page,
     Request,
     Route,
-    TimeoutError as PlaywrightTimeoutError,
 )
 
 from .global_logger import logger
@@ -392,32 +389,32 @@ async def _setup_wasm_route(context: BrowserContext) -> None:
         logger.debug("---->拦截 %s，使用本地 patched 版本 %s", filename, local_path)
         await route.abort(error_code="timedout")
         return
-        if not local_path:
-            # Fallback: try to find the highest versioned patch for the same base version
-            import re
-            m = re.match(r"(wasm_canvas-\d+\.\d+\.\d+)-(\d+)\.js", filename)
-            if m:
-                base, ver = m.group(1), int(m.group(2))
-                # Find all matching patches with same base and lower or equal version
-                candidates = [
-                    (int(patched.name.split('-')[-1].split('_')[0]), patched)
-                    for patched in patched_map.values()
-                    if patched.name.startswith(base) and "_patched.js" in patched.name
-                ]
-                if candidates:
-                    # Pick the highest version <= requested
-                    best = max((v, p) for v, p in candidates if v <= ver)
-                    logger.debug("未找到 %s，回退到本地 patched 版本 %s", filename, best[1])
-                    local_path = best[1]
-                    # await route.fulfill(path=str(best[1]), content_type="application/javascript; charset=utf-8")
-                else:
-                    logger.warning("未找到 %s，跳过路由拦截", filename)
-                    #TODO: add dingtalk notification
-                    await route.continue_()
-                    return
+        # if not local_path:
+        #     # Fallback: try to find the highest versioned patch for the same base version
+        #     import re
+        #     m = re.match(r"(wasm_canvas-\d+\.\d+\.\d+)-(\d+)\.js", filename)
+        #     if m:
+        #         base, ver = m.group(1), int(m.group(2))
+        #         # Find all matching patches with same base and lower or equal version
+        #         candidates = [
+        #             (int(patched.name.split('-')[-1].split('_')[0]), patched)
+        #             for patched in patched_map.values()
+        #             if patched.name.startswith(base) and "_patched.js" in patched.name
+        #         ]
+        #         if candidates:
+        #             # Pick the highest version <= requested
+        #             best = max((v, p) for v, p in candidates if v <= ver)
+        #             logger.debug("未找到 %s，回退到本地 patched 版本 %s", filename, best[1])
+        #             local_path = best[1]
+        #             # await route.fulfill(path=str(best[1]), content_type="application/javascript; charset=utf-8")
+        #         else:
+        #             logger.warning("未找到 %s，跳过路由拦截", filename)
+        #             #TODO: add dingtalk notification
+        #             await route.continue_()
+        #             return
 
-        logger.debug("---->拦截 %s，使用本地 patched 版本 %s", filename, local_path)
-        await route.fulfill(path=str(local_path), content_type="application/javascript; charset=utf-8")
+        # logger.debug("---->拦截 %s，使用本地 patched 版本 %s", filename, local_path)
+        # await route.fulfill(path=str(local_path), content_type="application/javascript; charset=utf-8")
         
     try:
         await context.unroute(glob_pattern)
@@ -1018,8 +1015,6 @@ async def _install_canvas_text_hooks(frame: Frame, logger=None) -> bool:
 
 
 async def _rebuild_text_from_logs(frame: Frame, logger=None) -> Optional[Dict[str, Any]]:
-    if frame is None:
-        return None
     try:
         await frame.wait_for_selector("canvas#resume", timeout=5000)
     except Exception:
@@ -1034,8 +1029,6 @@ async def _rebuild_text_from_logs(frame: Frame, logger=None) -> Optional[Dict[st
 
 
 async def _install_clipboard_hooks(frame: Frame, logger=None) -> bool:
-    if frame is None:
-        return False
     try:
         code = (
             "(function(){\n"
@@ -1079,8 +1072,6 @@ async def _install_clipboard_hooks(frame: Frame, logger=None) -> bool:
 
 
 async def _read_clipboard_logs(frame: Frame, logger=None) -> Optional[str]:
-    if frame is None:
-        return None
     try:
         data = await frame.evaluate(
             "(function(){ try { return (window.__clipboardWrites||[]).slice(); } catch(e){ return []; } })()"
@@ -1104,8 +1095,6 @@ async def _read_clipboard_logs(frame: Frame, logger=None) -> Optional[str]:
 
 
 async def _try_trigger_copy_buttons(frame: Frame, logger=None) -> None:
-    if frame is None:
-        return
     selectors = [
         "button:has-text('复制')",
         "a:has-text('复制')",
@@ -1268,15 +1257,129 @@ async def extract_pdf_viewer_text(frame: Frame) -> Dict[str, Any]:
             html = await page.inner_html()
             text = extract_text_from_pdfjs_html(html)
             text_list.append(text)
-        text = "\n".join(text_list)
-        DOM_text = clean_resume_text(text)
-        assert len(DOM_text) > 100, "PDF文本长度小于100"
-        # return {"pages": [], "text": cleaned_text}
+        bs_text = "\n".join(text_list)
+        bs_text = clean_resume_text(bs_text)
     except Exception as e:
-        logger.error(f"提取PDF文本失败: {e}\n {DOM_text}")
-        # return {"pages": [], "text": DOM_text}
+        logger.error(f"提取PDF文本失败: {e}\n {bs_text}")
 
     # use evaluate to extract text
+    js_text = await extract_text_from_js(frame)
+
+    # fallback to inner_text
+    DOM_text = await frame.evaluate("() => document.body ? document.body.innerText || '' : ''")
+    DOM_text = clean_resume_text(DOM_text)
+    if len(DOM_text) < 100:
+        logger.error(f"fallback to inner_text文本长度小于100: {DOM_text}")
+    
+    # Calculate average total length for normalization
+    avg_total_length = len(bs_text) + len(js_text) + len(DOM_text) / 3
+    
+    # Select best text version using simple rating function
+    candidates = [
+        ("bs_text", bs_text, rate_text(bs_text, avg_total_length)),
+        ("js_text", js_text, rate_text(js_text, avg_total_length)),
+        ("DOM_text", DOM_text, rate_text(DOM_text, avg_total_length)),
+    ]
+    # Sort by rating (higher is better)
+    candidates.sort(key=lambda x: x[2], reverse=True)
+    best_name, best_text, best_rating = candidates[0]
+    logger.debug(f"Selected {best_name} as best text (rating: {best_rating:.3f}, length: {len(best_text)}/{avg_total_length})")
+    
+    return {"pages": [], "text": best_text}
+
+    
+def rate_text(text: str, avg_total_length: int) -> float:
+    """Rate text quality. Higher is better."""
+    if not text or len(text) < 100:
+        return 0.0
+    lines = text.split('\n')
+    non_empty_lines = [line.strip() for line in lines if line.strip()]
+    # Calculate average line length
+    avg_line_length = sum(len(line) for line in non_empty_lines) / len(non_empty_lines)
+    # Factor 1: average_line_length / total_lines (higher = less garbled)
+    factor1 = avg_line_length / len(non_empty_lines) if len(non_empty_lines) else 0.0
+    # Factor 2: total_length / avg_total_length (higher = more content)
+    factor2 = len(text) / avg_total_length
+    # Multiply factors so both need to be good (garbled text will have low factor1)
+    rating = factor1 * factor2
+    return rating
+
+
+def clean_resume_text(text: str) -> str:
+    """Clean resume text by removing control characters, BOSS tokens, and normalizing formatting.
+    This function:
+    - Removes null bytes and control characters (PRESERVES newlines and tabs)
+    - Removes BOSS-style hashed tokens (e.g., "07ab71446862f8541Xx629-5F1RQxY6-VfmXWOGkl_7RPhFl3g~~")
+    - Preserves ALL newlines (single and double newlines are kept)
+    - Normalizes unicode
+    - Cleans up excessive spaces (but preserves newlines)
+    """
+    import unicodedata
+    if not text:
+        return ""
+    # Remove null bytes and control characters
+    # IMPORTANT: Preserve \n (0x0A) and \t (0x09) - exclude them from removal
+    # Remove: \x01-\x08, \x0B-\x0C, \x0E-\x1F, \x7F
+    text = text.replace('\x00', '')
+    text = re.sub(r'[\x01-\x08\x0B\x0C\x0E-\x1F\x7F]', '', text)
+    # Remove BOSS-style hashed tokens like f6a4b4051154ea161XJ_2tS-GFFTwYu4VvOcWOGkl_7RPhFl3g~~
+    text = re.sub(r'[A-Za-z0-9_-]{10,}~~', '', text)
+    # Normalize unicode (NFKC: compatibility decomposition + canonical composition)
+    text = unicodedata.normalize('NFKC', text)
+    # Handle empty lines with only whitespace - preserve the newline structure
+    text = re.sub(r'\n\s+\n', '\n\n', text)
+    # Collapse excessive newlines (4+) to triple newline, but keep 1-3 newlines as-is
+    text = re.sub(r'\n{4,}', '\n\n\n', text)
+    # Clean up excessive spaces within lines (2+ spaces to single space)
+    # CRITICAL: Use negative lookahead to ensure we don't touch anything near newlines
+    text = re.sub(r'[ \t]{2,}(?!\n)', ' ', text)
+    # Remove trailing spaces/tabs from lines (but keep the newlines themselves)
+    text = re.sub(r'[ \t]+\n', '\n', text)
+    return text.strip()
+
+from bs4 import BeautifulSoup
+
+def extract_text_from_pdfjs_html(html: str) -> str:
+    soup = BeautifulSoup(html, "html.parser")
+
+    # Try standard textLayer spans first
+    spans = soup.select(".textLayer span")
+    if not spans:
+        # fallback: PDF.js markedContent structure
+        spans = soup.select("span.markedContent span[role='presentation']")
+
+    items = []
+    for s in spans:
+        style = s.get("style", "")
+        m_top = re.search(r"top:\s*([\d.]+)px", style)
+        m_left = re.search(r"left:\s*([\d.]+)px", style)
+        text = s.get_text(strip=True)
+        if m_top and m_left and text:
+            items.append((float(m_top.group(1)), float(m_left.group(1)), text))
+
+    if not items:
+        # fallback to simple innerText for debugging
+        return soup.get_text(separator="", strip=True)
+
+    # Sort by vertical then horizontal position
+    items.sort(key=lambda x: (round(x[0], 1), x[1]))
+    lines = []
+    buffer, current_y = [], None
+    for y, x, t in items:
+        if current_y is None or abs(y - current_y) > 5:
+            if buffer:
+                lines.append("".join(buffer))
+            buffer = [t]
+            current_y = y
+        else:
+            buffer.append(t)
+    if buffer:
+        lines.append("".join(buffer))
+    return "\n".join(lines)
+
+
+async def extract_text_from_js(frame: Frame) -> Optional[str]:
+    js_text = ""
     try:
         pages: Any = await frame.evaluate(
             dedent(
@@ -1356,184 +1459,17 @@ async def extract_pdf_viewer_text(frame: Frame) -> Dict[str, Any]:
                 """
             )
         )
+        
+        for page_data in pages:
+            for line in page_data.get("lines", ''):
+                js_text += line + "\n"
+
+        js_text = clean_resume_text(js_text)
+        if len(js_text) < 100:
+            logger.error(f"evaluate frame文本长度小于100: {js_text}")
     except Exception as e:
         logger.error(f"evaluate frame文本失败: {e}")
-        pages = {}
-
-    if isinstance(pages, dict):
-        if "__error" in pages:
-            pages = []
-        else:
-            pages = [pages]
-
-    js_text = ""
-    for page_data in pages:
-        for line in page_data.get("lines", ''):
-            js_text += line + "\n"
-
-    js_text = clean_resume_text(js_text)
-    if len(js_text) < 100:
-        logger.error(f"evaluate frame文本长度小于100: {js_text}")
-
-    # fallback to inner_text
-    pages = []
-    fallback = await frame.evaluate("() => document.body ? document.body.innerText || '' : ''")
-    fallback = clean_resume_text(fallback)
-    if len(fallback) < 100:
-        logger.error(f"fallback to inner_text文本长度小于100: {fallback}")
-
-    # Select best text version using simple rating function
-    candidates = [
-        ("DOM_text", DOM_text),
-        ("js_text", js_text),
-        ("fallback", fallback)
-    ]
-    
-    # Filter out empty or too short candidates
-    candidates = [(name, text) for name, text in candidates if text and len(text) >= 100]
-    
-    if not candidates:
-        return {"pages": [], "text": fallback if fallback else ""}
-    
-    # Calculate average total length for normalization
-    avg_total_length = sum(len(text) for _, text in candidates) / len(candidates) if candidates else 1
-    
-    def rate_text(name: str, text: str) -> float:
-        """Rate text quality. Higher is better.
-        
-        Rating based on:
-        - avg_line_length / total_length (higher = less garbled, more content per line)
-        - total_length / avg_total_length (higher = more content)
-        
-        We multiply them to ensure both factors are important.
-        """
-        if not text:
-            return 0.0
-        
-        lines = text.split('\n')
-        non_empty_lines = [line.strip() for line in lines if line.strip()]
-        
-        if not non_empty_lines:
-            return 0.0
-        
-        # Calculate average line length
-        avg_line_length = sum(len(line) for line in non_empty_lines) / len(non_empty_lines)
-        
-        # Factor 1: average_line_length / total_length (higher = less garbled)
-        # Scale by 1000 to make it comparable to factor2
-        factor1 = (avg_line_length / len(text)) * 1000 if text else 0.0
-        
-        # Factor 2: total_length / avg_total_length (higher = more content)
-        factor2 = len(text) / avg_total_length if avg_total_length > 0 else 1.0
-        
-        # Multiply factors so both need to be good (garbled text will have low factor1)
-        rating = factor1 * factor2
-        
-        return rating
-    
-    # Sort by rating (higher is better)
-    candidates.sort(key=lambda x: rate_text(x[0], x[1]), reverse=True)
-    
-    best_name, best_text = candidates[0]
-    best_rating = rate_text(best_name, best_text)
-    lines = best_text.split('\n')
-    non_empty = [line.strip() for line in lines if line.strip()]
-    avg_line_len = sum(len(line) for line in non_empty) / len(non_empty) if non_empty else 0
-    logger.debug(f"Selected {best_name} as best text (rating: {best_rating:.3f}, "
-                 f"avg_line_len: {avg_line_len:.1f}, length: {len(best_text)})")
-    
-    return {"pages": [], "text": best_text}
-
-
-
-def clean_resume_text(text: str) -> str:
-    """Clean resume text by removing control characters, BOSS tokens, and normalizing formatting.
-    
-    This function:
-    - Removes null bytes and control characters (PRESERVES newlines and tabs)
-    - Removes BOSS-style hashed tokens (e.g., "07ab71446862f8541Xx629-5F1RQxY6-VfmXWOGkl_7RPhFl3g~~")
-    - Preserves ALL newlines (single and double newlines are kept)
-    - Normalizes unicode
-    - Cleans up excessive spaces (but preserves newlines)
-    """
-    import unicodedata
-    
-    if not text:
-        return ""
-    
-    # Remove null bytes and control characters
-    # IMPORTANT: Preserve \n (0x0A) and \t (0x09) - exclude them from removal
-    # Remove: \x01-\x08, \x0B-\x0C, \x0E-\x1F, \x7F
-    text = text.replace('\x00', '')
-    text = re.sub(r'[\x01-\x08\x0B\x0C\x0E-\x1F\x7F]', '', text)
-    
-    # Remove BOSS-style hashed tokens like f6a4b4051154ea161XJ_2tS-GFFTwYu4VvOcWOGkl_7RPhFl3g~~
-    # Pattern matches: alphanumeric/underscore/hyphen sequences of 10+ chars ending with ~~
-    text = re.sub(r'[A-Za-z0-9_-]{10,}~~', '', text)
-    
-    # Normalize unicode (NFKC: compatibility decomposition + canonical composition)
-    # This should preserve newlines
-    text = unicodedata.normalize('NFKC', text)
-    
-    # Handle empty lines with only whitespace - preserve the newline structure
-    # Replace newline+whitespace+newline with double newline (paragraph break)
-    text = re.sub(r'\n\s+\n', '\n\n', text)
-    
-    # Collapse excessive newlines (4+) to triple newline, but keep 1-3 newlines as-is
-    # This preserves single newlines (line breaks) and double newlines (paragraph breaks)
-    text = re.sub(r'\n{4,}', '\n\n\n', text)
-    
-    # Clean up excessive spaces within lines (2+ spaces to single space)
-    # CRITICAL: Use negative lookahead to ensure we don't touch anything near newlines
-    # This regex only matches spaces that are NOT immediately followed by a newline
-    text = re.sub(r'[ \t]{2,}(?!\n)', ' ', text)
-    
-    # Remove trailing spaces/tabs from lines (but keep the newlines themselves)
-    # This only removes spaces/tabs that come immediately before a newline
-    text = re.sub(r'[ \t]+\n', '\n', text)
-    
-    # Final strip only removes leading/trailing whitespace, preserves internal newlines
-    return text.strip()
-
-from bs4 import BeautifulSoup
-
-def extract_text_from_pdfjs_html(html: str) -> str:
-    soup = BeautifulSoup(html, "html.parser")
-
-    # Try standard textLayer spans first
-    spans = soup.select(".textLayer span")
-    if not spans:
-        # fallback: PDF.js markedContent structure
-        spans = soup.select("span.markedContent span[role='presentation']")
-
-    items = []
-    for s in spans:
-        style = s.get("style", "")
-        m_top = re.search(r"top:\s*([\d.]+)px", style)
-        m_left = re.search(r"left:\s*([\d.]+)px", style)
-        text = s.get_text(strip=True)
-        if m_top and m_left and text:
-            items.append((float(m_top.group(1)), float(m_left.group(1)), text))
-
-    if not items:
-        # fallback to simple innerText for debugging
-        return soup.get_text(separator="", strip=True)
-
-    # Sort by vertical then horizontal position
-    items.sort(key=lambda x: (round(x[0], 1), x[1]))
-    lines = []
-    buffer, current_y = [], None
-    for y, x, t in items:
-        if current_y is None or abs(y - current_y) > 5:
-            if buffer:
-                lines.append("".join(buffer))
-            buffer = [t]
-            current_y = y
-        else:
-            buffer.append(t)
-    if buffer:
-        lines.append("".join(buffer))
-    return "\n".join(lines)
+    return js_text
 
 
 __all__ = [

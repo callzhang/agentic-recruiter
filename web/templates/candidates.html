@@ -98,13 +98,13 @@
         <!-- Candidate list (left sidebar) -->
         <div class="lg:col-span-4">
             <div class="bg-white rounded-lg shadow-lg h-[1000px] overflow-y-auto">
-                <!-- Batch analyze button (hidden initially) -->
+                <!-- Batch analyze buttons (hidden initially) -->
                 <div class="p-4 pb-0">
                     <div class="relative">
                         <button 
                             id="batch-analyze-btn"
                             onclick="if (typeof processAllCandidates === 'function') { processAllCandidates(); } else { showToast('请先选择一个候选人以加载批处理功能', 'warning'); }"
-                            class="hidden w-full px-4 py-2 mb-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2">
+                            class="hidden w-full px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2">
                             <span>全部分析</span>
                             <span 
                                 class="info-icon cursor-help text-white/80 hover:text-white"

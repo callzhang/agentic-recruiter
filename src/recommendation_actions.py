@@ -1,15 +1,13 @@
 """Async recommendation page actions for Boss Zhipin automation."""
 
-import asyncio
 import time
 from typing import Any, Dict, List
 
-from playwright.async_api import Frame, Locator, Page
+from playwright.async_api import Frame, Page
 
 from src.config import get_boss_zhipin_config
 from .global_logger import get_logger
 from .resume_capture_async import (
-    _create_error_result,
     _get_resume_handle,
     _install_parent_message_listener,
     _process_resume_entry,
@@ -287,7 +285,6 @@ async def discard_recommend_candidate_action(page: Page, index: int, reason: str
         return True
     else:
         raise ValueError("未找到不合适原因")
-    return False
 
 
 async def apply_filters(frame: Frame, filters: Dict[str, Any]) -> bool:

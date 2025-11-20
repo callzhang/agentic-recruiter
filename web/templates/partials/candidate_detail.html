@@ -233,7 +233,7 @@ async function process_candidate() {
         }
         
         // Update stage and card
-        updateCandidateData({
+        await updateCandidateData({
             stage: newStage,
             viewed: true,
             score: current_score
@@ -271,9 +271,8 @@ async function process_candidate() {
  * Send DingTalk notification when candidate score exceeds borderline threshold
  */
 async function sendDingNotification(analysis, candidateName, jobApplied) {
-    try {
-        // Format analysis result in markdown
-        const markdownMessage = `**候选人**: ${candidateName}
+    // Format analysis result in markdown (client-side formatting)
+    const markdownMessage = `**候选人**: ${candidateName}
 **岗位**: ${jobApplied}
 
 **评分结果**:
@@ -288,47 +287,30 @@ ${analysis.summary || '暂无'}
 **跟进建议**:
 ${analysis.followup_tips || '暂无'}`;
 
-        // Get candidate data to check notified field
-        const candidateData = getCandidateData();
-        const notified = candidateData.notified;
-        
-        // Skip if already notified
-        if (notified) {
-            console.log('Candidate already notified, skipping notification');
-            return;
-        }
-        
-        const title = `候选人 ${candidateName} 通过初步筛选`;
-        
-        // Create FormData manually from candidateData object
-        const formData = new FormData();
-        formData.append('title', title);
-        formData.append('message', markdownMessage);
-        
-        // Append candidate fields that the endpoint expects
-        if (candidateData.job_id) formData.append('job_id', candidateData.job_id);
-        if (candidateData.chat_id) formData.append('chat_id', candidateData.chat_id);
-        if (candidateData.conversation_id) formData.append('conversation_id', candidateData.conversation_id);
-        if (candidateData.name) formData.append('name', candidateData.name);
-        if (candidateData.job_applied) formData.append('job_applied', candidateData.job_applied);
-        
-        const response = await fetch('/candidates/notify', {
-            method: 'POST',
-            body: formData
-        });
-        
-        const result = await response.json();
-        if (result.success) {
-            console.log('DingTalk notification sent successfully');
-            // Update local candidate data to reflect notified status
-            updateCandidateData({ notified: true });
-        } else {
-            console.error('Failed to send DingTalk notification:', result.error);
-        }
-    } catch (error) {
-        console.error('Error sending DingTalk notification:', error);
-        // Don't throw - notification failure shouldn't block processing
+    // Get candidate data for server-side notification
+    const candidate = getCandidateData();
+    const notified = candidate.notified;
+    
+    // Skip if already notified
+    if (notified) {
+        showToast('候选人已通知过，跳过通知', 'info');
+        return;
     }
+    
+    const title = `候选人 ${candidateName} 通过初步筛选`;
+    
+    // Create FormData with formatted message and candidate identifiers
+    candidate.title = title;
+    candidate.message = markdownMessage;
+    
+    
+    // Send to server for notification (server handles notified check and sending)
+    const response = await fetch('/candidates/notify', {
+        method: 'POST',
+        body: JSON.stringify(candidate)
+    });
+    
+    await window.handleApiResponse(response);
 }
 
 async function fetchOnlineResume() {
@@ -388,15 +370,13 @@ function switchResumeTab(tab) {
 async function generateMessage() {
     showToast('生成消息...', 'info');
     const values = getCandidateData();
-    values.purpose = 'CHAT_ACTION';
-
     const result = await htmxAjaxPromise('POST', '/candidates/generate-message', {
         target: '#message-content',
         swap: 'innerHTML',
-        values: values
+        values: {...values, purpose: 'CHAT_ACTION'}
     });
     console.log('Generated message:', result);
-    updateCandidateData({generated_message: result});
+    await updateCandidateData({generated_message: result});
 }
 
 async function greetAndSendMessage() {
@@ -424,7 +404,7 @@ async function greetAndSendMessage() {
         showToast('消息发送成功！', 'success');
         // Update to CHAT stage (not GREET, as GREET is not in STAGES)
         const currentStage = getCandidateData('stage');
-        updateCandidateData({
+        await updateCandidateData({
             stage: currentStage || 'CHAT',
             greeted: true
         });
@@ -466,7 +446,7 @@ async function startAnalysis() {
     // Extract analysis from data attribute
     const analysis_container = document.querySelector('#analysis-content #analysis-result-container');
     const analysis = analysis_container ? JSON.parse(analysis_container.getAttribute('data-analysis')) : null;
-    updateCandidateData({score: analysis?.overall});
+    await updateCandidateData({score: analysis?.overall});
 }
 
 async function requestContact() {
@@ -485,9 +465,7 @@ async function requestContact() {
     // Endpoint expects JSON body with embed=True format
     const response = await fetch('/chat/contact/request', {
         method: 'POST',
-        headers: {
-            'Content-Type': 'application/json'
-        },
+        headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({ chat_id: chat_id })
     });
     const data = await window.handleApiResponse(response);
@@ -495,7 +473,7 @@ async function requestContact() {
     
     // Update to CONTACT stage if contact was successfully obtained
     if (data && data.success !== false) {
-        updateCandidateData({stage: 'CONTACT'});
+        await updateCandidateData({stage: 'CONTACT'});
     }
 }
 
@@ -504,7 +482,7 @@ async function requestContact() {
  */
 async function initializeNewChat() {
     showToast('初始化对话线程...', 'info');
-    const candidate = getCandidateData();
+    let candidate = getCandidateData();
     //always use online resume at first time (full resume is not available at first time)
     const resume_text = document.getElementById('resume-textarea-online')?.value;
     if (!resume_text) {
@@ -524,13 +502,10 @@ async function initializeNewChat() {
         method: 'POST',
         body: formData
     });
-    const data = await window.handleApiResponse(response);
-    console.log('Chat initialized:', data);
-    updateCandidateData({
-        ...data,
-        saved: true
-    });
-    return data;
+    candidate = await window.handleApiResponse(response);
+    console.log('Chat initialized:', candidate);
+    await updateCandidateData(candidate);
+    return candidate.candidate_id;
 }
 
 
@@ -542,55 +517,73 @@ async function initializeNewChat() {
  * Update candidate data in the form and broadcast update to card
  * This function combines both updateCandidateData and updateCandidateCard
  */
-function updateCandidateData(record) {
+async function updateCandidateData(record) {
     record.saved = true
-    const container = document.getElementById('candidate-context');
-    
+    // update the resume, analysis and generated_message fields
+    if (record.resume_text) {
+        document.getElementById('resume-textarea-online').value = record.resume_text;
+    }
+    if (record.full_resume) {
+        document.getElementById('resume-textarea-full').value = record.full_resume;
+    }
+    if (record.analysis) {
+        // Await the HTMX ajax call using htmxAjaxPromise
+        await htmxAjaxPromise('POST', '/candidates/render-analysis-result', {
+            swap: 'innerHTML',
+            values: { analysis: JSON.stringify(record.analysis) },
+            target: '#analysis-content',
+        });
+    }
+    if (record.generated_message) {
+        document.getElementById('message-content').value = record.generated_message;
+    }
+
     // Get current data from hx-vals
     const currentData = getCandidateData();
-    
-    // Merge updates
-    const mergedData = { ...currentData, ...record };
-    
-    // Update hx-vals attribute with merged data
-    container.setAttribute('hx-vals', JSON.stringify(mergedData));
-    
-    // Broadcast update to card (filter out null/undefined, keep false values)
+    // get the updated fields
     const updates = Object.fromEntries(
         Object.entries(record).filter(([k, v]) => v!== currentData[k] && v !== null && v !== undefined && v !== '')
     );
-    
-    if (Object.keys(updates).length > 0) {
-        console.log('updateCandidateData:', updates);
-        // Get identifiers from the updated data for matching
-        const chat_id = mergedData.chat_id;
-        const conversation_id = mergedData.conversation_id;
-        const candidate_id = mergedData.candidate_id;
-        const name = mergedData.name;
-        const job_applied = mergedData.job_applied;
-        
-        // Broadcast the update event
-        const event = new CustomEvent('candidate:update', {
-            detail: {
-                identifiers: {
-                    chat_id,
-                    conversation_id,
-                    candidate_id,
-                    name,
-                    job_applied
-                },
-                updates
-            }
-        });
-        document.dispatchEvent(event);
-    }else{
+    // if no updates, return
+    if (Object.keys(updates).length === 0) {
         return;
     }
-    // update to cloud - use values from hx-vals
-    htmx.ajax('POST', '/candidates/save', {
-        values: mergedData,
-        swap: 'none',
+    
+    // Merge updates
+    const mergedData = { ...currentData, ...updates };
+    
+    // Update hx-vals attribute with merged data
+    const container = document.getElementById('candidate-context');
+    container.setAttribute('hx-vals', JSON.stringify(mergedData));
+    
+    // Get identifiers from the updated data for matching
+    identifiers = {
+        chat_id: mergedData.chat_id,
+        conversation_id: mergedData.conversation_id,
+        candidate_id: mergedData.candidate_id,
+        name: mergedData.name,
+        job_applied: mergedData.job_applied,
+        index: mergedData.index
+    };
+    
+    // Broadcast the update event to candidate cards
+    const event = new CustomEvent('candidate:update', {
+        detail: {
+            identifiers: identifiers,
+            updates: updates,
+        }
     });
+    document.dispatchEvent(event);
+
+    // update to cloud 
+    if (Object.keys(updates).length > 0) {
+        debugger;
+        response = await fetch('/candidates/save', {
+            method: 'POST',
+            body: JSON.stringify({...identifiers, ...updates}),
+        });
+        await window.handleApiResponse(response);
+    }
 }
 
 function getCandidateData(key) {
@@ -620,11 +613,11 @@ function getThresholdValues() {
 /**
  * Wrap htmx.ajax to return a Promise that resolves when swap completes
  */
- function htmxAjaxPromise(method, url, options) {
+function htmxAjaxPromise(method, url, options) {
     return new Promise((resolve, reject) => {
         const target = document.querySelector(options.target);
         if (!target) {
-            reject(new Error(`Target element not found: ${options.target}`));
+            reject(new Error(`Target should be provided to use htmxAjaxPromise: ${options} or use fetch instead`));
             return;
         }
         
