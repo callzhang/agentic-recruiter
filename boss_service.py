@@ -1009,10 +1009,11 @@ app.mount("/static", StaticFiles(directory="web/static"), name="static")
 templates = Jinja2Templates(directory="web/templates")
 
 # Include web UI routers
-from web.routes import candidates, automation, jobs
+from web.routes import candidates, automation, jobs, search
 from web.routes import jobs_public
 
 app.include_router(candidates.router, prefix="/candidates", tags=["web-candidates"])
+app.include_router(search.router, prefix="/search", tags=["web-search"])
 app.include_router(automation.router, prefix="/automation", tags=["web-automation"])
 app.include_router(jobs.router, prefix="/jobs", tags=["web-jobs"])
 app.include_router(jobs_public.router, prefix="/jobs", tags=["web-jobs-public"])

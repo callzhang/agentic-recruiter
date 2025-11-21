@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+
+{% block title %}数据查询 - BOSS招聘助手{% endblock %}
+
+{% block content %}
+
+<div class="space-y-6">
+    <!-- Page header -->
+    <div class="bg-white rounded-lg shadow p-6">
+        <h1 class="text-3xl font-bold text-gray-800 mb-6">🔍 数据查询</h1>
+        
+        <!-- Search form -->
+        <form id="search-form" class="space-y-4" 
+              hx-get="/search/query"
+              hx-target="#candidate-result"
+              hx-indicator="#search-loading">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <!-- Candidate name input -->
+                <div>
+                    <label for="candidate-name" class="block text-sm font-medium text-gray-700 mb-2">
+                        候选人姓名
+                    </label>
+                    <input 
+                        type="text" 
+                        id="candidate-name" 
+                        name="name"
+                        required
+                        placeholder="请输入候选人姓名"
+                        class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    />
+                </div>
+                
+                <!-- Job position dropdown -->
+                <div>
+                    <label for="job-applied" class="block text-sm font-medium text-gray-700 mb-2">
+                        岗位
+                    </label>
+                    <select 
+                        id="job-applied" 
+                        name="job_applied"
+                        required
+                        class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    >
+                        <option value="">请选择岗位</option>
+                        {% for position in job_positions %}
+                        <option value="{{ position }}">{{ position }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </div>
+            
+            <!-- Search button -->
+            <div class="flex justify-end">
+                <button 
+                    type="submit"
+                    class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-medium flex items-center space-x-2"
+                >
+                    <span>🔍</span>
+                    <span>查询</span>
+                </button>
+            </div>
+        </form>
+    </div>
+    
+    <!-- Loading indicator -->
+    <div id="search-loading" class="htmx-indicator fixed top-20 right-4 z-50 bg-blue-600 text-white px-6 py-3 rounded-lg shadow-lg flex items-center space-x-3">
+        <svg class="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+        </svg>
+        <span class="font-medium">查询中...</span>
+    </div>
+    
+    <!-- Result area -->
+    <div id="candidate-result" class="min-h-[400px]">
+        <div class="bg-white rounded-lg shadow p-12 text-center text-gray-500">
+            <p class="text-lg">👆 请输入候选人姓名和岗位进行查询</p>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+

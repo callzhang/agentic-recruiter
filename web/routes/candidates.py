@@ -390,10 +390,9 @@ async def generate_message(
     candidate_id: str = Form(...),
     chat_id: Optional[str] = Form(None),
     conversation_id: str = Form(...),
-    purpose: str = Form(...)
+    purpose: str = Form(...),
 ):
-    """Generate message for candidate."""
-
+    """Generate message for candidate. Requires conversation_id to be initialized first."""
 
     # ROLE_MAPPING = {'candidate': 'user', 'recruiter': 'assistant', 'system': 'developer'}
 
@@ -409,16 +408,20 @@ async def generate_message(
         new_messages = [default_user_message]
     else:
         # get chat history from browser
-        assert chat_id is not None, "chat_id is required for chat mode"
-        chat_history = await chat_actions.get_chat_history_action(page, chat_id)
-        for msg in chat_history[::-1]:
-            role = msg.get("role")
-            content = f'{msg.get("timestamp")}: {msg.get("content")}'
-            if role == "assistant":
-                last_assistant_message = content
-                break
-            else:
-                new_messages.insert(0, {"content": content, "role": role})
+        if chat_id:
+            chat_history = await chat_actions.get_chat_history_action(page, chat_id)
+            for msg in chat_history[::-1]:
+                role = msg.get("role")
+                content = f'{msg.get("timestamp")}: {msg.get("content")}'
+                if role == "assistant":
+                    last_assistant_message = content
+                    break
+                else:
+                    new_messages.insert(0, {"content": content, "role": role})
+        else:
+            # No chat_id, use default message
+            chat_history = [default_user_message]
+            new_messages = [default_user_message]
     
     # generate message if the last message is not from recruiter
     if new_messages:
