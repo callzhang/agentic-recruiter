@@ -6,7 +6,7 @@
     - "full_resume": data.pop("full_resume"),
     - "candidate": data,
 -->
-<div class="space-y-6">
+<div id="candidate-detail-root" class="space-y-6" data-view-mode="{{ view_mode or 'interactive' }}">
     <!-- Header -->
     <div class="flex justify-between items-start">
         <div>
@@ -134,10 +134,17 @@
         </div>
     </div>
 
+    {% if candidate.updated_at %}
+    {% set display_time = candidate.updated_at.replace('T', ' ')[:19] %}
+    <p class="text-sm text-gray-500 mt-1">更新时间: {{ display_time }}</p>
+    {% endif %}
 </div>
 
 <!-- Centralized Candidate Analysis & Workflow Logic -->
 <script>
+const detailRoot = document.getElementById('candidate-detail-root');
+const candidateDetailViewMode = detailRoot?.dataset?.viewMode || 'interactive';
+window.__candidate_detail_view_mode = candidateDetailViewMode;
 
 async function process_candidate() {
     const getIdentifiers = () => {
@@ -638,36 +645,36 @@ function htmxAjaxPromise(method, url, options) {
     });
 }
 
-// Trigger workflow when this partial is loaded via HTMX
-// Since this script runs when HTMX swaps content, we can call it directly
-// Use requestAnimationFrame to ensure DOM is ready
-requestAnimationFrame(() => {
-    // Set initial tab state - show online tab if resume_text exists, otherwise show full tab
-    const fullTextarea = document.getElementById('resume-textarea-full');
-    
-    if (fullTextarea?.value?.trim().length > 100) {
-        switchResumeTab('full');
-    } else {
-        // Default to online tab
-        switchResumeTab('online');
-    }
-    
-    // Wrap process_candidate in error handling to ensure cards are re-enabled
-    // Use a more robust error handler that always re-enables cards
-    (async () => {
-        try {
-            await process_candidate();
-        } catch (error) {
-            console.error('Unhandled error in process_candidate:', error);
-            showToast(`处理候选人时出错: ${error.message || error}`, 'error');
-        } finally {
-            // Always re-enable cards, even if process_candidate's finally didn't run
-            // This is a safety net in case of unhandled promise rejections or other edge cases
-            enableAllCards();
+// Trigger workflow when this partial is loaded via HTMX (interactive view)
+if (candidateDetailViewMode !== 'readonly') {
+    // Since this script runs when HTMX swaps content, we can call it directly
+    // Use requestAnimationFrame to ensure DOM is ready
+    requestAnimationFrame(() => {
+        // Set initial tab state - show online tab if resume_text exists, otherwise show full tab
+        const fullTextarea = document.getElementById('resume-textarea-full');
+        
+        if (fullTextarea?.value?.trim().length > 100) {
+            switchResumeTab('full');
+        } else {
+            // Default to online tab
+            switchResumeTab('online');
         }
-    })();
-});
-
-</script>
+        
+        // Wrap process_candidate in error handling to ensure cards are re-enabled
+        // Use a more robust error handler that always re-enables cards
+        (async () => {
+            try {
+                await process_candidate();
+            } catch (error) {
+                console.error('Unhandled error in process_candidate:', error);
+                showToast(`处理候选人时出错: ${error.message || error}`, 'error');
+            } finally {
+                // Always re-enable cards, even if process_candidate's finally didn't run
+                // This is a safety net in case of unhandled promise rejections or other edge cases
+                enableAllCards();
+            }
+        })();
+    });
+}
 
 </script>

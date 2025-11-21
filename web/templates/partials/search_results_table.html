@@ -1,0 +1,121 @@
+{% if candidates %}
+<div class="bg-white rounded-lg shadow">
+    <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3 p-4 border-b">
+        <div class="text-gray-700 font-medium">
+            共找到 <span class="text-blue-600">{{ result_count }}</span> 名候选人
+        </div>
+        <p class="text-sm text-gray-500">点击任意行可在右侧查看候选人详情</p>
+    </div>
+    <div class="overflow-x-auto">
+        <table class="w-full divide-y divide-gray-200 text-sm" style="table-layout: auto;">
+            <colgroup>
+                <col style="min-width: 40px; width: 10%;">
+                <col style="min-width: 100px; width: 25%;">
+                <col style="min-width: 40px; width: 10%;">
+                <col style="min-width: 80px; width: 20%;">
+                <col style="min-width: 40px; width: 10%;">
+                <col style="min-width: 40px; width: 10%;">
+                <col style="min-width: 40px; width: 10%;">
+            </colgroup>
+            <thead class="bg-gray-50">
+                <tr>
+                    {% set columns = [
+                        {'field': 'name', 'label': '姓名'},
+                        {'field': 'job_applied', 'label': '岗位'},
+                        {'field': 'score', 'label': '得分'},
+                        {'field': 'stage', 'label': '阶段'},
+                        {'field': 'notified', 'label': '通知'},
+                        {'field': 'resume_text', 'label': '在线简历'},
+                        {'field': 'full_resume', 'label': '完整简历'}
+                    ] %}
+                    {% for column in columns %}
+                    <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        {% if column.field in ['resume_text', 'full_resume'] %}
+                            <span>{{ column.label }}</span>
+                        {% else %}
+                            <button type="button" class="flex items-center gap-1 text-gray-700 hover:text-blue-600 focus:outline-none" data-sort="{{ column.field }}">
+                                <span>{{ column.label }}</span>
+                                {% if sort_by == column.field %}
+                                    <span class="text-xs">{{ '↑' if sort_dir == 'asc' else '↓' }}</span>
+                                {% endif %}
+                            </button>
+                        {% endif %}
+                    </th>
+                    {% endfor %}
+                </tr>
+            </thead>
+            <tbody class="bg-white divide-y divide-gray-200">
+                {% for candidate in candidates %}
+                {% set updated_at_display = candidate.updated_at.replace('T', ' ')[:16] if candidate.updated_at else '未知' %}
+                <tr class="cursor-pointer hover:bg-blue-50 transition"
+                    title="更新时间: {{ updated_at_display }}"
+                    hx-get="/search/detail/{{ candidate.candidate_id }}"
+                    hx-target="#candidate-detail-panel"
+                    hx-vals='{"view_mode": "readonly"}'
+                    hx-indicator="#candidate-loading">
+                    <td class="px-4 py-3 font-medium text-gray-900">
+                        {{ candidate.name or '未知' }}
+                    </td>
+                    <td class="px-4 py-3 text-gray-700">
+                        {{ candidate.job_applied or '—' }}
+                    </td>
+                    <td class="px-4 py-3">
+                        {% if candidate.score is not none %}
+                        <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-semibold bg-blue-50 text-blue-700">
+                            {{ '%.1f' | format(candidate.score) }}
+                        </span>
+                        {% else %}
+                        <span class="text-gray-400">—</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-4 py-3">
+                        {% if candidate.stage %}
+                            {% set stage = candidate.stage %}
+                            {% set stage_colors = {
+                                'PASS': 'bg-gray-100 text-gray-600',
+                                'GREET': 'bg-green-100 text-green-700',
+                                'CHAT': 'bg-blue-100 text-blue-700',
+                                'SEEK': 'bg-yellow-100 text-yellow-700',
+                                'CONTACT': 'bg-purple-100 text-purple-700'
+                            } %}
+                            <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-semibold {{ stage_colors.get(stage, 'bg-gray-100 text-gray-600') }}">
+                                {{ stage }}
+                            </span>
+                        {% else %}
+                            <span class="text-gray-400">—</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-4 py-3 text-center">
+                        {% if candidate.notified %}
+                            <span class="text-lg">✅</span>
+                        {% else %}
+                            <span class="text-lg">❌</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-4 py-3 text-center">
+                        {% if candidate.resume_text and candidate.resume_text.strip() %}
+                            <span class="text-lg">✅</span>
+                        {% else %}
+                            <span class="text-lg">❌</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-4 py-3 text-center">
+                        {% if candidate.full_resume and candidate.full_resume.strip() %}
+                            <span class="text-lg">✅</span>
+                        {% else %}
+                            <span class="text-lg">❌</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% else %}
+<div class="bg-white rounded-lg shadow p-12 text-center text-gray-500">
+    <p class="text-lg">未找到符合条件的候选人</p>
+    <p class="text-sm mt-2">尝试放宽筛选条件或调整语义搜索关键词</p>
+</div>
+{% endif %}
+

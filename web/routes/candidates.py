@@ -14,7 +14,7 @@ from fastapi import APIRouter, BackgroundTasks, Form, Query, Request, Response, 
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from tenacity import retry, stop_after_attempt, wait_exponential
-from src.candidate_store import get_candidates, get_candidate_by_dict, upsert_candidate
+from src.candidate_store import search_candidates_advanced, get_candidate_by_dict, upsert_candidate
 from src.jobs_store import get_all_jobs, get_job_by_id as get_job_by_id_from_store
 from src.global_logger import logger
 from src import chat_actions, assistant_actions, assistant_utils, recommendation_actions
@@ -140,12 +140,27 @@ async def list_candidates(
         return HTMLResponse(content='<div class="text-center text-gray-500 py-12">暂无候选人</div>')
     
     # Batch query candidates from cloud store
-    identifiers, names = [], []
+    candidate_ids: list[str] = []
+    chat_ids: list[str] = []
+    conversation_ids: list[str] = []
+    names: list[str] = []
     for c in candidates:
-        identifiers.extend([c.get('chat_id'), c.get('candidate_id'), c.get('conversation_id')])
-        names.append(c.get('name')) 
-    # Check if candidate is saved to cloud using batch query results
-    stored_candidates = get_candidates(identifiers=identifiers, names=names, job_applied=job_applied)
+        if c.get("candidate_id"):
+            candidate_ids.append(c["candidate_id"])
+        if c.get("chat_id"):
+            chat_ids.append(c["chat_id"])
+        if c.get("conversation_id"):
+            conversation_ids.append(c["conversation_id"])
+        if c.get("name"):
+            names.append(c["name"])
+    stored_candidates = search_candidates_advanced(
+        candidate_ids=list({cid for cid in candidate_ids}),
+        chat_ids=list({cid for cid in chat_ids}),
+        conversation_ids=list({cid for cid in conversation_ids}),
+        names=list({n for n in names}),
+        job_applied=job_applied,
+        limit=len(candidates) * 2,
+    )
 
     # Render candidate cards
     html = ""
@@ -217,6 +232,7 @@ async def get_candidate_detail(request: Request):
         "resume_text": candidate.pop("resume_text", ''),
         "full_resume": candidate.pop("full_resume", ''),
         "candidate": candidate,
+        "view_mode": "interactive",
     })
 
 

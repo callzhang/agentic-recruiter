@@ -9,7 +9,7 @@ from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 import boss_service
 from src import assistant_actions, chat_actions, recommendation_actions
-from src.candidate_store import get_candidate_count, get_candidates
+from src.candidate_store import get_candidate_count
 
 
 def make_dummy_page() -> Any:
@@ -357,8 +357,27 @@ def test_assistant_generate_message_endpoint(client: TestClient, monkeypatch: py
 
 
 def test_candidate_lookup_endpoint(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_search_candidates_advanced(**kwargs: Any) -> List[Dict[str, Any]]:
+        chat_ids = kwargs.get("chat_ids") or []
+        candidate_ids = kwargs.get("candidate_ids") or []
+        conversation_ids = kwargs.get("conversation_ids") or []
+        identifier = None
+        if chat_ids:
+            identifier = chat_ids[0]
+        elif candidate_ids:
+            identifier = candidate_ids[0]
+        elif conversation_ids:
+            identifier = conversation_ids[0]
+        if identifier:
+            return [{"chat_id": identifier, "name": "Alice"}]
+        return []
+
+    monkeypatch.setattr(
+        "src.candidate_store.search_candidates_advanced",
+        fake_search_candidates_advanced,
+    )
+
     response = client.get("/candidate/chat-42")
-    monkeypatch.setattr(get_candidates, "get_candidates", lambda identifiers=None, names=None, job_applied=None, limit=None, fields=None: [{"chat_id": identifiers[0] if identifiers else None, "name": "Alice"}] if identifiers else [])
     assert response.status_code == 200
     assert response.json() == {"chat_id": "chat-42", "name": "Alice"}
 

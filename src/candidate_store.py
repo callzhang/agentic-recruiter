@@ -158,20 +158,19 @@ def get_candidate_by_dict(kwargs: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     chat_id = kwargs.get("chat_id")
     conversation_id = kwargs.get("conversation_id")
     name = kwargs.get("name")
-    names = [name] if name else None
     job_applied = kwargs.get("job_applied")
-    identifiers = [candidate_id, chat_id, conversation_id]
-    identifiers = [id for id in identifiers if id] or None
     resume_text = kwargs.get("resume_text")
     fields = kwargs.get("fields", _readable_fields)
     last_message = kwargs.get("last_message", '')
     
-    results = get_candidates(
-        identifiers=identifiers, 
-        names=names, 
-        job_applied=job_applied, 
-        limit=1, 
-        fields=fields
+    results = search_candidates_advanced(
+        candidate_ids=[candidate_id] if candidate_id else None,
+        chat_ids=[chat_id] if chat_id else None,
+        conversation_ids=[conversation_id] if conversation_id else None,
+        names=[name] if name else None,
+        job_applied=job_applied,
+        limit=1,
+        fields=fields,
     )
     stored_candidate = results[0] if results else {}
     # stored_last_message = stored_candidate.get("last_message", '')
@@ -190,73 +189,100 @@ def get_candidate_by_dict(kwargs: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         stored_candidate = results[0] if results else {}
     return stored_candidate
 
-def get_candidates(
-    identifiers: Optional[List[str]] = None,
-    names: Optional[List[str]] = None,
+def search_candidates_advanced(
+    candidate_ids: Optional[List[str]] = [],
+    chat_ids: Optional[List[str]] = [],
+    conversation_ids: Optional[List[str]] = [],
+    names: Optional[List[str]] = [],
     job_applied: Optional[str] = None,
-    limit: Optional[int] = None,
-    fields: Optional[List[str]] = _readable_fields,
+    stage: Optional[str] = None,
+    notified: Optional[bool] = None,
+    updated_from: Optional[str] = None,
+    updated_to: Optional[str] = None,
+    resume_contains: Optional[str] = None,
+    semantic_query: Optional[str] = None,
+    min_score: Optional[float] = None,
+    limit: int = 100,
+    sort_by: str = "updated_at",
+    sort_direction: str = "desc",
+    fields: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
-    """Query candidates by identifiers (chat_id/candidate_id/conversation_id) or by names/job_applied.
-    
-    Args:
-        identifiers: List of chat_id, candidate_id, or conversation_id values
-        names: List of candidate names (requires job_applied)
-        job_applied: Single job_applied value (required with names)
-        resume_text: Single resume_text value (required with names)
-        limit: Maximum number of results to return
-        fields: Fields to return (defaults to _readable_fields)
-        
-    Returns:
-        List[Dict[str, Any]]: List of candidate records
-    """
-    
-    # Remove None from identifiers, names, and job_applied
-    identifiers = [id for id in identifiers if id] or None if identifiers else None
-    names = [name.strip() for name in names if (name.strip())] or None if names else None
-    job_applied = job_applied.strip() or None if job_applied else None
-    
-    if identifiers:
-        quoted_ids = [f"'{id}'" for id in identifiers]
-        ids_str = ', '.join(quoted_ids)
-        expr_1 = f"chat_id in [{ids_str}] or candidate_id in [{ids_str}] or conversation_id in [{ids_str}]"
-        query_limit = (limit or len(identifiers)) * 2
-    else:
-        expr_1 = None
-        
-    if names and job_applied:
-        quoted_names = [f"'{n}'" for n in names]
-        names_str = ', '.join(quoted_names)
-        expr_2 = f"name in [{names_str}] and job_applied == '{job_applied}'"
-        query_limit = (limit or len(names)) * 2
-    else:
-        expr_2 = None
+    """Advanced candidate search supporting multiple filters, identifiers and semantic queries."""
 
-    if expr_1 and expr_2:
-        filter_expr = f'({expr_1}) or ({expr_2})'
-    else:
-        filter_expr = expr_1 or expr_2
-    
-    
-    # Execute query
-    if filter_expr:
-        results = _client.query(
-            collection_name=_collection_name,
-            filter=filter_expr,
-            output_fields=fields,
-            limit=query_limit,
-            output_fields_order='updated_at DESC',
-        )
-    else:
-        logger.error("No valid identifiers or resume_text provided, returning empty list")
+    _quote = lambda value: f"'{value.strip()}'" if value else ''
+    _build_in_clause = lambda field, values: f"{field} in [{', '.join(_quote(v) for v in values if v and v.strip())}]" if values else None
+
+    fields = fields or _readable_fields
+
+    clauses = []
+    clauses.append(_build_in_clause("candidate_id", candidate_ids))
+    clauses.append(_build_in_clause("chat_id", chat_ids))
+    clauses.append(_build_in_clause("conversation_id", conversation_ids))
+    clauses.append(_build_in_clause("name", names))
+
+    if job_applied:
+        clauses.append(f"job_applied == {_quote(job_applied)}")
+    if stage:
+        clauses.append(f"stage == {_quote(stage.upper())}")
+    if isinstance(notified, bool):
+        clauses.append(f"notified == {notified}")
+    if updated_from:
+        clauses.append(f"updated_at >= {_quote(updated_from)}")
+    if updated_to:
+        clauses.append(f"updated_at <= {_quote(updated_to)}")
+    if resume_contains:
+        # Use Milvus like operator to search in both resume_text and full_resume
+        # Note: like is case-sensitive in Milvus
+        keyword = resume_contains.strip().replace("'", "\\'")
+        clauses.append(f"(resume_text like '%{keyword}%') or (full_resume like '%{keyword}%')")
+    if min_score is not None:
+        # Use bracket notation to filter JSON field: analysis["overall"] >= min_score
+        clauses.append(f'analysis["overall"] >= {min_score}')
+
+    filter_expr = " and ".join([c for c in clauses if c]) if clauses else 'candidate_id != ""'
+
+    sortable_fields = {
+        "updated_at",
+        "name",
+        "job_applied",
+        "stage",
+        "notified",
+        "candidate_id",
+        "chat_id",
+        "conversation_id",
+    }
+    sort_by_normalized = sort_by if sort_by in sortable_fields else "updated_at"
+    sort_dir = "DESC" if sort_direction.lower() != "asc" else "ASC"
+    order_clause = f"{sort_by_normalized} {sort_dir}"
+
+    try:
+        if semantic_query:
+            results = search_candidates_by_resume(
+                resume_text=semantic_query,
+                filter_expr=filter_expr,
+                fields=fields,
+                limit=limit or None,
+                similarity_threshold=0.5,
+            )
+        else:
+            results = _client.query(
+                collection_name=_collection_name,
+                filter=filter_expr,
+                output_fields=fields,
+                limit=limit or 100,
+                output_fields_order=order_clause,
+            )
+    except Exception as exc:
+        logger.exception("Failed advanced candidate search: %s", exc)
         return []
 
-    # Remove empty fields
-    candidates = [{k: v for k, v in result.items() if v or v == 0} for result in results]
+    candidates = [{k: v for k, v in result.items() if v or v == 0} for result in results or []]
+    for candidate in candidates:
+        candidate["score"] = candidate.get("analysis", {}).get("overall")
 
-    # Sort by updated_at in descending order (most recent first)
-    candidates.sort(key=lambda x: x.get("updated_at", ""), reverse=True)
-    # Apply the original limit after sorting
+    reverse = sort_direction.lower() != "asc"
+    candidates.sort(key=lambda c: c.get(sort_by_normalized) or "", reverse=reverse)
+
     return candidates[:limit]
         
 
@@ -377,7 +403,7 @@ __all__ = [
     "get_collection_schema",
     "get_embedding",
     "create_collection",
-    "get_candidates",
+    "search_candidates_advanced",
     "upsert_candidate",
     "search_candidates_by_resume",
     "get_candidate_count",

@@ -7,53 +7,183 @@
 <div class="space-y-6">
     <!-- Page header -->
     <div class="bg-white rounded-lg shadow p-6">
-        <h1 class="text-3xl font-bold text-gray-800 mb-6">🔍 数据查询</h1>
+        <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
+            <div>
+                <h1 class="text-3xl font-bold text-gray-800">🔍 数据查询</h1>
+                <p class="text-gray-500 mt-1">通过多条件筛选快速定位候选人，点击列表查看详情</p>
+            </div>
+        </div>
         
         <!-- Search form -->
-        <form id="search-form" class="space-y-4" 
+        <form id="search-form" class="space-y-6" 
               hx-get="/search/query"
-              hx-target="#candidate-result"
-              hx-indicator="#search-loading">
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <!-- Candidate name input -->
+              hx-target="#search-results"
+              hx-indicator="#search-loading"
+              hx-trigger="submit">
+            <input type="hidden" name="sort_by" id="sort-by-input" value="updated_at">
+            <input type="hidden" name="sort_dir" id="sort-dir-input" value="desc">
+            
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
                 <div>
-                    <label for="candidate-name" class="block text-sm font-medium text-gray-700 mb-2">
+                    <label for="candidate-name" class="block text-sm font-medium text-gray-700 mb-1">
                         候选人姓名
                     </label>
                     <input 
                         type="text" 
                         id="candidate-name" 
                         name="name"
-                        required
-                        placeholder="请输入候选人姓名"
+                        placeholder="支持精确匹配"
                         class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                     />
                 </div>
                 
-                <!-- Job position dropdown -->
                 <div>
-                    <label for="job-applied" class="block text-sm font-medium text-gray-700 mb-2">
+                    <label for="job-applied" class="block text-sm font-medium text-gray-700 mb-1">
                         岗位
                     </label>
                     <select 
                         id="job-applied" 
                         name="job_applied"
-                        required
                         class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                     >
-                        <option value="">请选择岗位</option>
+                        <option value="">全部岗位</option>
                         {% for position in job_positions %}
                         <option value="{{ position }}">{{ position }}</option>
                         {% endfor %}
                     </select>
                 </div>
+                
+                <div>
+                    <label for="stage" class="block text-sm font-medium text-gray-700 mb-1">
+                        阶段
+                    </label>
+                    <select 
+                        id="stage" 
+                        name="stage"
+                        class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    >
+                        <option value="">全部阶段</option>
+                        {% for stage in stage_options %}
+                        <option value="{{ stage }}">{{ stage }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
             </div>
             
-            <!-- Search button -->
-            <div class="flex justify-end">
+            <div class="grid grid-cols-1 lg:grid-cols-5 gap-4">
+                <div>
+                    <label for="score-min" class="block text-sm font-medium text-gray-700 mb-1">
+                        最低匹配度
+                    </label>
+                    <input 
+                        type="number" 
+                        id="score-min" 
+                        name="score_min"
+                        min="0"
+                        max="10"
+                        step="0.1"
+                        placeholder="例如 7.5"
+                        class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    />
+                </div>
+                
+                <div>
+                    <label for="notified" class="block text-sm font-medium text-gray-700 mb-1">
+                        DingTalk 通知
+                    </label>
+                    <select 
+                        id="notified" 
+                        name="notified"
+                        class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    >
+                        <option value="">全部状态</option>
+                        <option value="true">已通知</option>
+                        <option value="false">未通知</option>
+                    </select>
+                </div>
+                
+                <div>
+                    <label for="date-from" class="block text-sm font-medium text-gray-700 mb-1">
+                        更新日期（起）
+                    </label>
+                    <input 
+                        type="date" 
+                        id="date-from" 
+                        name="date_from"
+                        class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    />
+                </div>
+                
+                <div>
+                    <label for="date-to" class="block text-sm font-medium text-gray-700 mb-1">
+                        更新日期（止）
+                    </label>
+                    <input 
+                        type="date" 
+                        id="date-to" 
+                        name="date_to"
+                        class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    />
+                </div>
+                
+                <div>
+                    <label for="limit" class="block text-sm font-medium text-gray-700 mb-1">
+                        结果数量
+                    </label>
+                    <input 
+                        type="number" 
+                        id="limit" 
+                        name="limit"
+                        min="1"
+                        max="500"
+                        value="100"
+                        placeholder="100"
+                        class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    />
+                </div>
+            </div>
+            
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <div>
+                    <label for="resume-contains" class="block text-sm font-medium text-gray-700 mb-1">
+                        简历关键词
+                    </label>
+                    <input 
+                        type="text" 
+                        id="resume-contains" 
+                        name="resume_contains"
+                        placeholder="在在线/完整简历中搜索..."
+                        class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    />
+                </div>
+                
+                <div>
+                    <label for="semantic-query" class="block text-sm font-medium text-gray-700 mb-1">
+                        语义搜索
+                    </label>
+                    <input 
+                        type="text" 
+                        id="semantic-query" 
+                        name="semantic_query"
+                        placeholder="输入自然语言描述，例如“近期 NLP 算法工程师”"
+                        class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    />
+                    <p class="text-xs text-gray-500 mt-1">与其他筛选条件同时生效，结果将按语义相关度排序再过滤</p>
+                </div>
+            </div>
+            
+            <div class="flex flex-col md:flex-row gap-3 md:justify-end pt-2">
+                <button 
+                    type="button"
+                    onclick="resetSearchFilters()"
+                    class="px-5 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition font-medium flex items-center gap-2"
+                >
+                    <span>♻️</span>
+                    <span>重置条件</span>
+                </button>
                 <button 
                     type="submit"
-                    class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-medium flex items-center space-x-2"
+                    class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-medium flex items-center gap-2"
                 >
                     <span>🔍</span>
                     <span>查询</span>
@@ -62,7 +192,7 @@
         </form>
     </div>
     
-    <!-- Loading indicator -->
+    <!-- Loading indicators -->
     <div id="search-loading" class="htmx-indicator fixed top-20 right-4 z-50 bg-blue-600 text-white px-6 py-3 rounded-lg shadow-lg flex items-center space-x-3">
         <svg class="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
             <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
@@ -70,14 +200,199 @@
         </svg>
         <span class="font-medium">查询中...</span>
     </div>
+    <div id="candidate-loading" class="htmx-indicator fixed top-40 right-4 z-50 bg-indigo-600 text-white px-6 py-3 rounded-lg shadow-lg flex items-center space-x-3">
+        <svg class="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+        </svg>
+        <span class="font-medium">加载候选人详情...</span>
+    </div>
     
     <!-- Result area -->
-    <div id="candidate-result" class="min-h-[400px]">
-        <div class="bg-white rounded-lg shadow p-12 text-center text-gray-500">
-            <p class="text-lg">👆 请输入候选人姓名和岗位进行查询</p>
+    <div class="flex flex-col xl:flex-row gap-6">
+        <div class="xl:w-[40%] xl:min-w-[400px] space-y-4">
+            <div id="search-results" class="min-h-[200px]">
+                <div class="bg-white rounded-lg shadow p-12 text-center text-gray-500">
+                    <p class="text-lg">👆 设置筛选条件后点击"查询"即可加载候选人列表</p>
+                </div>
+            </div>
+        </div>
+        <div class="xl:w-[60%] xl:min-w-[600px]">
+            <div id="candidate-detail-panel" class="bg-white rounded-lg shadow p-8 text-center text-gray-500 min-h-[200px]">
+                <p class="text-lg">👈 点击左侧表格中的候选人查看详情</p>
+            </div>
         </div>
     </div>
 </div>
+
+<script>
+const STORAGE_KEY = 'search_query_conditions';
+
+// Save form values to localStorage
+function saveFormState() {
+    const form = document.getElementById('search-form');
+    if (!form) return;
+    
+    const formData = new FormData(form);
+    const state = {};
+    for (const [key, value] of formData.entries()) {
+        if (value) {
+            state[key] = value;
+        }
+    }
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+}
+
+// Restore form values from localStorage or URL parameters
+function restoreFormState() {
+    const form = document.getElementById('search-form');
+    if (!form) return;
+    
+    // First, try to get values from URL parameters
+    const urlParams = new URLSearchParams(window.location.search);
+    let state = {};
+    
+    // Check if URL has query parameters
+    const hasUrlParams = Array.from(urlParams.keys()).length > 0;
+    
+    if (hasUrlParams) {
+        // Restore from URL parameters
+        for (const [key, value] of urlParams.entries()) {
+            state[key] = value;
+        }
+        // Save URL params to localStorage
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    } else {
+        // Restore from localStorage
+        const saved = localStorage.getItem(STORAGE_KEY);
+        if (saved) {
+            try {
+                state = JSON.parse(saved);
+            } catch (e) {
+                console.error('Failed to parse saved form state:', e);
+            }
+        }
+    }
+    
+    // Apply saved values to form
+    for (const [key, value] of Object.entries(state)) {
+        const field = form.querySelector(`[name="${key}"]`);
+        if (field) {
+            if (field.type === 'checkbox' || field.type === 'radio') {
+                field.checked = field.value === value;
+            } else {
+                field.value = value;
+            }
+        }
+    }
+}
+
+// Update URL with form values
+function updateUrl() {
+    const form = document.getElementById('search-form');
+    if (!form) return;
+    
+    const formData = new FormData(form);
+    const params = new URLSearchParams();
+    
+    for (const [key, value] of formData.entries()) {
+        if (value) {
+            params.set(key, value);
+        }
+    }
+    
+    const newUrl = window.location.pathname + (params.toString() ? '?' + params.toString() : '');
+    window.history.replaceState({}, '', newUrl);
+}
+
+function resetSearchFilters() {
+    const form = document.getElementById('search-form');
+    if (!form) return;
+    form.reset();
+    document.getElementById('sort-by-input').value = 'updated_at';
+    document.getElementById('sort-dir-input').value = 'desc';
+    document.getElementById('limit').value = '100';
+    
+    // Clear saved state
+    localStorage.removeItem(STORAGE_KEY);
+    
+    // Clear URL parameters
+    window.history.replaceState({}, '', window.location.pathname);
+    
+    htmx.trigger(form, 'submit');
+}
+
+// Initialize: restore form state on page load
+document.addEventListener('DOMContentLoaded', function() {
+    restoreFormState();
+    
+    // Save form state when form is submitted
+    const form = document.getElementById('search-form');
+    if (form) {
+        form.addEventListener('submit', function() {
+            saveFormState();
+            updateUrl();
+        });
+        
+        // Also save on input changes (debounced)
+        let saveTimeout;
+        form.addEventListener('input', function() {
+            clearTimeout(saveTimeout);
+            saveTimeout = setTimeout(() => {
+                saveFormState();
+                updateUrl();
+            }, 500);
+        });
+        
+        form.addEventListener('change', function() {
+            saveFormState();
+            updateUrl();
+        });
+        
+        // Auto-submit if URL has query parameters
+        const urlParams = new URLSearchParams(window.location.search);
+        if (urlParams.toString()) {
+            // Small delay to ensure form is fully rendered
+            setTimeout(() => {
+                htmx.trigger(form, 'submit');
+            }, 100);
+        }
+    }
+    
+    // Listen to HTMX events to save state
+    document.body.addEventListener('htmx:beforeRequest', function(event) {
+        const form = document.getElementById('search-form');
+        if (form && event.detail.elt === form) {
+            saveFormState();
+            updateUrl();
+        }
+    });
+});
+
+document.addEventListener('click', function (event) {
+    const button = event.target.closest('[data-sort]');
+    if (!button) {
+        return;
+    }
+    const field = button.getAttribute('data-sort');
+    const sortByInput = document.getElementById('sort-by-input');
+    const sortDirInput = document.getElementById('sort-dir-input');
+    if (!sortByInput || !sortDirInput) {
+        return;
+    }
+    if (sortByInput.value === field) {
+        sortDirInput.value = sortDirInput.value === 'asc' ? 'desc' : 'asc';
+    } else {
+        sortByInput.value = field;
+        sortDirInput.value = field === 'updated_at' ? 'desc' : 'asc';
+    }
+    
+    // Save state before triggering submit
+    saveFormState();
+    updateUrl();
+    htmx.trigger(document.getElementById('search-form'), 'submit');
+});
+</script>
 
 {% endblock %}
 

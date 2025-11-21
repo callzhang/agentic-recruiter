@@ -17,7 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from playwright.async_api import Browser, BrowserContext, Page, Playwright, TimeoutError as PlaywrightTimeoutError, async_playwright
 
 from src import assistant_actions
-from src.candidate_store import get_candidates, get_candidate_count, search_candidates_by_resume
+from src.candidate_store import search_candidates_advanced, get_candidate_count, search_candidates_by_resume
 from src.config import get_boss_zhipin_config, get_browser_config, get_service_config, get_sentry_config
 from src.global_logger import logger
 import src.chat_actions as chat_actions
@@ -750,7 +750,11 @@ class BossServiceAsync:
                 chat_id: Unique identifier for the chat/candidate
                 fields: Optional list of fields to return (default: all fields)
             """
-            results = get_candidates(identifiers=[chat_id], limit=1, fields=fields)
+            results = search_candidates_advanced(
+                chat_ids=[chat_id],
+                limit=1,
+                fields=fields,
+            )
             return results[0] if results else None
         
         @self.app.post("/store/candidate/get-by-resume")

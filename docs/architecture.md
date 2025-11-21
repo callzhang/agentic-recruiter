@@ -270,6 +270,14 @@ UI 操作 → FastAPI 端点 → Playwright 执行
 - `POST /recommend/candidate/{index}/greet` - 打招呼
 
 #### 候选人管理
+
+#### 数据查询
+- **路由**: `/search` (web/routes/search.py)
+- **功能**: 通过候选人姓名和岗位查询候选人详情
+- **用途**: 团队协作，方便其他同事查看候选人信息
+- **特点**: 只读模式，不执行自动化操作
+
+#### 自动化工作流
 - `GET /store/candidate/{chat_id}` - 获取候选人信息
 - `POST /store/candidate/get-by-resume` - 通过简历检查候选人
 
