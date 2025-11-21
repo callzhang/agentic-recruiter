@@ -682,7 +682,14 @@ document.body.addEventListener('htmx:afterRequest', function(event) {
 });
 
 // Global HTMX error handler to catch swap errors
+// Global HTMX error handler to catch swap errors
+// Only handle errors that weren't already handled by local listeners (e.g., in processAllCandidates)
 document.body.addEventListener('htmx:responseError', function(evt) {
+    // Skip if event propagation was stopped (already handled by local listener)
+    if (evt.cancelBubble) {
+        return;
+    }
+    
     const loadingIndicator = document.getElementById('global-loading');
     if (loadingIndicator) {
         loadingIndicator.classList.remove('htmx-request');
@@ -941,6 +948,8 @@ window.processAllCandidates = async function processAllCandidates() {
                     clearTimeout(timeout);
                     detailPane.removeEventListener('htmx:afterSwap', onSwap);
                     detailPane.removeEventListener('htmx:responseError', onError);
+                    // Stop event propagation to prevent global handler from catching it
+                    evt.stopPropagation();
                     reject(new Error(evt.detail.error || 'HTMX request failed'));
                 };
                 
@@ -1056,14 +1065,16 @@ function idMatched(cardData, identifiers) {
  * Update a candidate card with the given updates
  */
 function applyCardUpdate(card, updates, identifiers) {
-    const cardData = JSON.parse(card.getAttribute('hx-vals') || '{}');
+    // Parse hx-vals which has structure: {"candidate": {...}}
+    const hxValsData = JSON.parse(card.getAttribute('hx-vals') || '{"candidate": {}}');
+    const cardData = hxValsData.candidate || {};
     
-    // Update the card's data attributes
+    // Update the card's candidate data
     Object.assign(cardData, updates);
     Object.assign(cardData, identifiers);
     
-    // Apply updates to candidateData
-    card.setAttribute('hx-vals', JSON.stringify(cardData));
+    // Apply updates - maintain the {"candidate": {...}} structure
+    card.setAttribute('hx-vals', JSON.stringify({ candidate: cardData }));
     
     // Update viewed state (opacity of entire card)
     if ('viewed' in updates) {
@@ -1122,25 +1133,41 @@ function applyCardUpdate(card, updates, identifiers) {
         // If stageBadge doesn't exist, silently skip the update
     }
     
-    // Update tags (greeted and saved only - viewed is handled by card opacity)
+    // Update tags (greeted, saved, and notified - viewed is handled by card opacity)
     const tagsContainer = card.querySelector('#candidate-tags');
     // Update greeted tag
     if ('greeted' in updates) {
         const greetedTag = tagsContainer.querySelector('[data-tag="greeted"]');
-        if (updates.greeted) {
-            greetedTag.classList.remove('hidden');
-        } else {
-            greetedTag.classList.add('hidden');
+        if (greetedTag) {
+            if (updates.greeted) {
+                greetedTag.classList.remove('hidden');
+            } else {
+                greetedTag.classList.add('hidden');
+            }
         }
     }
     
     // Update saved tag
     if ('saved' in updates) {
         const savedTag = tagsContainer.querySelector('[data-tag="saved"]');
-        if (updates.saved) {
-            savedTag.classList.remove('hidden');
-        } else {
-            savedTag.classList.add('hidden');
+        if (savedTag) {
+            if (updates.saved) {
+                savedTag.classList.remove('hidden');
+            } else {
+                savedTag.classList.add('hidden');
+            }
+        }
+    }
+    
+    // Update notified tag
+    if ('notified' in updates) {
+        const notifiedTag = tagsContainer.querySelector('[data-tag="notified"]');
+        if (notifiedTag) {
+            if (updates.notified) {
+                notifiedTag.classList.remove('hidden');
+            } else {
+                notifiedTag.classList.add('hidden');
+            }
         }
     }
     
@@ -1161,21 +1188,36 @@ function applyCardUpdate(card, updates, identifiers) {
 document.addEventListener('candidate:update', function(event) {
     const { identifiers, updates } = event.detail;
     const candidateCards = document.querySelectorAll('.candidate-card');
-    let found = false;
     
-    candidateCards.forEach(card => {
-        const cardData = JSON.parse(card.getAttribute('hx-vals') || '{}');
-        
-        if (idMatched(cardData, identifiers)) {
-            applyCardUpdate(card, updates, identifiers);
-            found = true;
-        }
-    });
+    // If index is provided, use it to directly locate the card (most efficient)
+    const index = parseInt(identifiers.index);
+    const card = candidateCards[index];
+    const hxValsData = JSON.parse(card.getAttribute('hx-vals') || '{"candidate": {}}');
+    const cardData = hxValsData.candidate || {};
     
-    if (!found) {
-        console.warn('candidate:update: could not find matching card', {
+    // Additional validation: check candidate_id, chat_id, and name if both have them
+    let isValid = true;
+    // Check candidate_id if both have it
+    if (identifiers.candidate_id && cardData.candidate_id) {
+        isValid = isValid && (cardData.candidate_id === identifiers.candidate_id);
+    }
+    // Check chat_id if both have it
+    if (identifiers.chat_id && cardData.chat_id) {
+        isValid = isValid && (cardData.chat_id === identifiers.chat_id);
+    }
+    // Check name if both have it
+    if (identifiers.name && cardData.name) {
+        isValid = isValid && (cardData.name === identifiers.name);
+    }
+    
+    if (isValid) {
+        applyCardUpdate(card, updates, identifiers);
+        return;
+    } else {
+        console.warn('candidate:update: index matched but identifiers validation failed', {
             identifiers,
-            totalCards: candidateCards.length
+            cardData,
+            index
         });
     }
 });

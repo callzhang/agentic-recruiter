@@ -23,7 +23,7 @@ CHAT_MENU_SELECTOR = "dl.menu-chat"
 CHAT_ITEM_SELECTORS = "div.geek-item"
 CONVERSATION_SELECTOR = "div.conversation-message"
 MESSAGE_INPUT_SELECTOR = "#boss-chat-editor-input"
-RESUME_BUTTON_SELECTOR = "a.resume-btn-file"
+RESUME_BUTTON_SELECTOR = "a.resume-btn-file, div.resume-btn-file"
 RESUME_IFRAME_SELECTOR = "iframe.attachment-box"
 PDF_VIEWER_SELECTOR = "div.pdfViewer"
 
@@ -283,7 +283,7 @@ async def get_chat_history_action(page: Page, chat_id: str) -> List[Dict[str, An
 
     for index in range(count):
         message = messages.nth(index)
-        await message.scroll_into_view_if_needed(timeout=500)
+        # await message.scroll_into_view_if_needed(timeout=500)
         msg_type = None
         message_str = None
         status = None
@@ -400,15 +400,10 @@ async def request_full_resume_action(page: Page, chat_id: str) -> bool:
     # 求简历
     btn = page.locator("span.operate-btn:has-text('求简历')").first
     await btn.wait_for(state="visible", timeout=3000)
-    is_disabled = await btn.evaluate(
-        "el => el.classList.contains('disabled') || el.disabled || el.getAttribute('disabled') !== null"
-    )
-    if is_disabled:
-        return True  # Already requested (button disabled)
     
-    await btn.click()
     t0 = time.time()
-    while time.time() - t0 < 10:
+    while "disabled" not in await btn.get_attribute("class"):
+        await btn.click(timeout=1000)
         # 境外提醒
         confirm_continue = page.locator("div.btn-sure-v2:has-text('继续交换')")
         if await confirm_continue.count() > 0:
@@ -426,20 +421,14 @@ async def request_full_resume_action(page: Page, chat_id: str) -> bool:
                 logger.info("简历请求已发送")
             except:
                 pass
-        else:
-            await page.keyboard.press("Enter")
-
-        # Verify success
-        success_indicator = page.locator("div.item-system >> span:has-text('简历请求已发送')")
-        if await success_indicator.count() >= 0:
-            return True
-        await page.wait_for_timeout(500)
+        if time.time() - t0 > 10:
+            return False
     else:
         logger.error("简历请求未发送或超时")
+        await page.wait_for_timeout(500)
+        return True
     
-    return False
-    
-#TODO: fix this
+
 async def accept_full_resume_action(page: Page, chat_id: str) -> bool:
     """Accept candidate's resume. Returns True on success, raises ValueError if accept button not found."""
     await _prepare_chat_page(page)
@@ -508,7 +497,7 @@ async def view_full_resume_action(page: Page, chat_id: str) -> Dict[str, Any]:
     resume_button = page.locator(RESUME_BUTTON_SELECTOR).first
     await resume_button.click()
     
-    iframe_handle = await page.wait_for_selector(RESUME_IFRAME_SELECTOR, timeout=8000)
+    iframe_handle = await page.wait_for_selector(RESUME_IFRAME_SELECTOR, timeout=20000)
     frame = await iframe_handle.content_frame()
     if not frame:
         await close_overlay_dialogs(page)
@@ -527,7 +516,7 @@ async def view_full_resume_action(page: Page, chat_id: str) -> Dict[str, Any]:
     }
 
 
-async def ask_contact_action(page: Page, chat_id: str) -> bool:
+async def request_contact_action(page: Page, chat_id: str) -> bool:
     """Ask candidate for contact information in chat page. Returns True on success, raises ValueError on failure."""
     await _prepare_chat_page(page)
     dialog = await _go_to_chat_dialog(page, chat_id)
@@ -537,23 +526,34 @@ async def ask_contact_action(page: Page, chat_id: str) -> bool:
     clicked_phone, clicked_wechat = False, False
     ask_phone_button = page.locator("span.operate-btn:has-text('换电话')").first
     if await ask_phone_button.count() > 0:
-        if 'disabled' in await ask_phone_button.get_attribute("class") or await ask_phone_button.evaluate("el => el.disabled"):
-            clicked_phone = True
-        else:
+        t0 = time.time()
+        while 'disabled' not in await ask_phone_button.get_attribute("class"):
             await ask_phone_button.click(timeout=2000)
+            try:
+                await ask_phone_button.locator("xpath=parent::div").locator("span.boss-btn-primary:has-text('确定')").click(timeout=2000)
+            except:
+                pass
+            await page.wait_for_timeout(500)
+            if time.time() - t0 > 5:
+                break
+        else:
             clicked_phone = True
     ask_wechat_button = page.locator("span.operate-btn:has-text('换微信')").first
     if await ask_wechat_button.count() > 0:
-        if 'disabled' in await ask_wechat_button.get_attribute("class") or await ask_wechat_button.evaluate("el => el.disabled"):
-            clicked_wechat = True
-        else:
+        t0 = time.time()
+        while 'disabled' not in await ask_wechat_button.get_attribute("class"):
             await ask_wechat_button.click(timeout=2000)
+            try:
+                await ask_wechat_button.locator("xpath=parent::div").locator("span.boss-btn-primary:has-text('确定')").click(timeout=2000)
+            except:
+                pass
+            await page.wait_for_timeout(500)
+            if time.time() - t0 > 5:
+                break
+        else:
             clicked_wechat = True
 
-    if not clicked_phone and not clicked_wechat:
-        raise ValueError("未找到换电话或换微信按钮")
-
-    return clicked_phone and clicked_wechat
+    return clicked_phone or clicked_wechat
 
 
 __all__ = [name for name in globals() if name.endswith("_action") or name.startswith("get_chat")]

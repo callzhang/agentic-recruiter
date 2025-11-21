@@ -201,19 +201,15 @@ class BossServiceAsync:
             await candidate.goto(boss_zhipin_config["chat_url"], wait_until="domcontentloaded", timeout=20000)
         return candidate
 
-    async def save_login_state(self) -> None:
-        if not self.context:
-            return
-        browser_config = get_browser_config()
-        os.makedirs(os.path.dirname(browser_config["storage_state"]), exist_ok=True)
-        await self.context.storage_state(path=browser_config["storage_state"])
-        logger.info("登录状态已保存: %s", browser_config["storage_state"])
-        self.is_logged_in = True
-
     async def _save_login_state_with_lock(self) -> None:
         async with self.browser_lock:
-            await self.save_login_state()
-            logger.info("登录状态已保存")
+            if not self.context:
+                return
+            browser_config = get_browser_config()
+            os.makedirs(os.path.dirname(browser_config["storage_state"]), exist_ok=True)
+            await self.context.storage_state(path=browser_config["storage_state"])
+            logger.debug("登录状态已保存: %s", browser_config["storage_state"])
+            self.is_logged_in = True
 
     async def _ensure_browser_session(self, max_wait_time: int = 600) -> Page:
         """Ensure we have an open Playwright page and a valid login session.
@@ -671,7 +667,7 @@ class BossServiceAsync:
                 bool: True if contact request was sent successfully
             """
             page = await self._ensure_browser_session()
-            return await chat_actions.ask_contact_action(page, chat_id)
+            return await chat_actions.request_contact_action(page, chat_id)
 
         # ------------------ Recommend API ------------------
         @self.app.get("/recommend/candidates")

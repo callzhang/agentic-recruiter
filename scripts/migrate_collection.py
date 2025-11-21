@@ -169,7 +169,7 @@ def rename_collection(client: MilvusClient, zilliz_config: dict, old_name: str, 
                         "index_type": "AUTOINDEX",
                     }
                     new_col.create_index(field_name=field.name, index_params=index_params)
-                elif field.name in ['version', 'current', 'conversation_id', 'chat_id', 'stage']:
+                elif field.name in ['version', 'current', 'conversation_id', 'chat_id', 'stage', 'name']:
                     # Scalar indexes
                     new_col.create_index(field_name=field.name, index_params={})
             except Exception as e:

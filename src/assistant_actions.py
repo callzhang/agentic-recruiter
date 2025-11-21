@@ -9,7 +9,7 @@ import requests
 from functools import lru_cache
 from typing import Any, Dict, List, Optional
 from .candidate_store import upsert_candidate
-from .config import get_dingtalk_config
+from .config import get_dingtalk_config, get_openai_config
 from .global_logger import logger
 from .assistant_utils import _openai_client
 from pydantic import BaseModel, Field
@@ -39,10 +39,14 @@ ACTIONS = {
     "PLAN_PROMPTS": "自动化工作流计划动作"
 }
 ACTION_PROMPTS = {
-    "CHAT_ACTION": """针对候选人简历，根据岗位信息里面的drill_down_questions，提出问题，让候选人回答经验细节，或者澄清模棱两可的地方。重点在于挖掘简历细节，判断候选人是否符合岗位要求。提问前可以先肯定候选人的能力和岗位契合度。
-如果候选人表达对于公司或者岗位有疑问，尤其是高分的候选人，请优先回答候选人的问题、解答岗位疑问、介绍公司情况等，已打消其顾虑、提高他的求职意愿。
-如果候选人认真回答了招聘顾问之前提出的问题，回答内容有逻辑，代表了其认真思考，请做岗位介绍，并吸引其进一步沟通，不必再提问。
+    "CHAT_ACTION": """如果是初次沟通，请针对候选人简历，根据岗位信息里面的drill_down_questions，提出问题，让候选人回答经验细节，或者澄清模棱两可的地方。重点在于挖掘简历细节，判断候选人是否符合岗位要求。提问前可以先肯定候选人的能力和岗位契合度。
+如果初次沟通后，候选人表达对于公司或者岗位有疑问，尤其是高分的候选人，请优先回答候选人的问题、解答岗位疑问、介绍公司情况等，已打消其顾虑、提高他的求职意愿。
+如果候选人认真回答了招聘顾问之前提出的问题，回答内容有逻辑，代表了其认真思考，请做岗位介绍，并吸引其进一步沟通，不必再提更多问题。
+如果候选人表达没有兴趣，则结束沟通，不要继续提问。
+如果判断候选人符合岗位要求，则表达希望本周或下周进行面试沟通。
 请直接生成一条可以发送给候选人的自然语言消息，不要超过150字。不要发模板或者嵌入占位符，不要使用任何格式化、引号、JSON或括号。
+请不要透露我们的岗位筛选标准，不要让候选人觉得我们不重视他。
+结束沟通请回复"收到"。
 """,
     "ANALYZE_ACTION": f"""请根据岗位描述，对候选人的简历进行打分，用于决定是否继续推进。
         重点关注keyword里面的正负向关键词要进行加分和减分。
@@ -147,7 +151,10 @@ def init_chat(
     if not candidate_id:
         raise ValueError("Failed to create candidate record")
     
-    return conversation.id
+    return {
+        "conversation_id": conversation.id,
+        "candidate_id": candidate_id,
+    }
 
 ## ------------Main Message Generation----------------------------------
 
@@ -194,6 +201,7 @@ def generate_message(
             assert 'role' in item and 'content' in item, "input_message must be a list of dict with role, content"
     
     # Create a new run
+    openai_config = get_openai_config()
     if json_schema:
         if purpose == "ANALYZE_ACTION":
             response = _openai_client.responses.parse(
@@ -201,7 +209,7 @@ def generate_message(
                 instructions=instruction,
                 input= input_message,
                 text_format=json_schema,
-                model="gpt-5-mini",
+                model=openai_config["model"],
             )
             result = response.output_parsed.model_dump() 
             upsert_candidate(conversation_id=conversation_id, analysis=result)
@@ -213,7 +221,7 @@ def generate_message(
             conversation=conversation_id,
             instructions=instruction,
             input=input_message,
-            model="gpt-5-mini",
+            model=openai_config["model"],
         )
         return response.output_text
     

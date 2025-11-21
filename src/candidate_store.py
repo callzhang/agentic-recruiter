@@ -1,4 +1,5 @@
 """Zilliz/Milvus-backed QA and candidate interaction store integration."""
+from difflib import SequenceMatcher
 from functools import lru_cache
 import json
 import uuid
@@ -163,6 +164,7 @@ def get_candidate_by_dict(kwargs: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     identifiers = [id for id in identifiers if id] or None
     resume_text = kwargs.get("resume_text")
     fields = kwargs.get("fields", _readable_fields)
+    last_message = kwargs.get("last_message", '')
     
     results = get_candidates(
         identifiers=identifiers, 
@@ -171,15 +173,22 @@ def get_candidate_by_dict(kwargs: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         limit=1, 
         fields=fields
     )
+    stored_candidate = results[0] if results else {}
+    # stored_last_message = stored_candidate.get("last_message", '')
+    # similarity = SequenceMatcher(a=last_message, b=stored_last_message).ratio()
+    # if stored_candidate and similarity < 0.8:
+    #     logger.warning(f"last_message similarity mismatch: {similarity} for {kwargs} and {stored_candidate}")
+    #     results = []
 
     if not results and resume_text:
         results = search_candidates_by_resume(
             resume_text=resume_text, 
-            filter_expr=f'job_applied == "{job_applied}"' if job_applied else None, 
+            filter_expr=f'name == "{name}" and job_applied == "{job_applied}"' if name and job_applied else None, 
             fields=fields, 
             limit=1
         )
-    return results[0] if results else {}
+        stored_candidate = results[0] if results else {}
+    return stored_candidate
 
 def get_candidates(
     identifiers: Optional[List[str]] = None,
@@ -288,8 +297,8 @@ def upsert_candidate(**candidate) -> Optional[str]:
         field = next((f for f in get_collection_schema() if f.name == k), None)
         if field.dtype == DataType.VARCHAR:
             candidate[k] = truncate_field(str(v), field.max_length)
-        elif field.dtype == DataType.BOOL:
-            candidate[k] = True if v==1 or v.lower() in ['true', '1'] else False
+        elif field.dtype == DataType.BOOL and isinstance(v, str):
+            candidate[k] = True if v.lower() in ['true', 'yes', '1'] else False
         elif field.dtype == DataType.JSON and isinstance(v, str):
             candidate[k] = json.loads(v)
     
@@ -325,7 +334,7 @@ def search_candidates_by_resume(
     filter_expr: Optional[str] = None,
     fields: Optional[List[str]] = None,
     limit: Optional[int] = None,
-    similarity_threshold: float = 0.9,
+    similarity_threshold: float = 0.95,
 ) -> Optional[Dict[str, Any]]:
     """Search for similar candidates by resume text.
     
@@ -345,12 +354,15 @@ def search_candidates_by_resume(
             collection_name=_collection_name,
             data=[resume_vector],
             filter=filter_expr,
-            limit=limit or _zilliz_config["similarity_top_k"],
+            limit=limit*3 or _zilliz_config["similarity_top_k"], # set a larger limit to ensure we get enough candidates
             output_fields=fields or _readable_fields,
-            search_params={"metric_type": "IP", "params": {}},
+            search_params={"metric_type": "IP"}, # use cosine to be guaranteed that the result is normalized to 0-1
         )
         
         # Filter by similarity threshold
+        # candidates.sort(key=lambda x: x['distance'], reverse=True)
+        results_str = '\n'.join([f'{r["entity"]["candidate_id"]}({r["entity"]["name"]}): {r["distance"]}' for r in results[0]])
+        logger.debug(f"search_candidates_by_resume: results: \n{results_str}")
         candidates = [r['entity'] for r in results[0] if  r['distance'] > similarity_threshold]
         return candidates
     except Exception as exc:

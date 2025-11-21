@@ -111,11 +111,9 @@
             <h3 class="font-bold text-gray-800">✨ 自动生成消息</h3>
         </div>
         <div id="message-content" class="p-2">
-            {% if generated_message not in ['', 'None', 'null', None] %}
-            <textarea id="message-text" name="generated_message" class="w-full h-32 p-2 border rounded-lg">{{ generated_message }}</textarea>
-            {% else %}
-            <div class="text-center py-8 text-gray-500">⏳分析完成后，如果匹配度达标，将自动生成...</div>
-            {% endif %}
+            <textarea id="message-text" name="generated_message" class="w-full h-32 p-2 border rounded-lg">
+                {% if generated_message not in ['', 'None', 'null', None] %}{{ generated_message }}{% else %}⏳分析完成后，如果匹配度达标，将自动生成...{% endif %}
+            </textarea>
         </div>
         <div class="flex p-2 gap-2">
             <button onclick="greetAndSendMessage()"
@@ -123,7 +121,7 @@
                 📤 打招呼+发送消息
             </button>
             <button hx-post="/candidates/pass"
-                    hx-include="#candidate-context"
+                    hx-vals='{{ candidate | tojson | safe }}'
                     hx-target="body"
                     hx-swap="none"
                     class="px-4 py-1 bg-gray-600 text-white text-sm rounded hover:bg-gray-800">
@@ -179,24 +177,26 @@ async function process_candidate() {
         let analysis = analysis_container ? JSON.parse(analysis_container.getAttribute('data-analysis')) : null;
         let is_full_analysis = analysis.resume_type === 'full';
         let current_score = analysis?.overall || 0;
+        const skill_score = analysis?.skill || 0;
+        const startup_fit_score = analysis?.startup_fit || 0;
+        const background_score = analysis?.background || 0;
         const { chat_threshold, borderline_threshold, seek_threshold } = getThresholdValues();
         
         let newStage = 'PASS'; // Default to PASS
         // Step 4a: Check chat_threshold - generate message if above
-        if (current_score >= chat_threshold) {
+        if (current_score >= chat_threshold || skill_score >= seek_threshold || startup_fit_score >= seek_threshold || background_score >= seek_threshold) {
             newStage = 'CHAT';
-            const messageDiv = document.getElementById('message-content');
-            if (messageDiv?.textContent?.includes('⏳')) {
+            const messageText = document.getElementById('message-text').value;
+            if (messageText?.includes('⏳')) {
                 await generateMessage();
             }
             
             // Step 4b: Check borderline_threshold - try to get full resume and re-analyze
-            if (current_score >= borderline_threshold) {
+            if (current_score >= borderline_threshold || skill_score >= seek_threshold || startup_fit_score >= seek_threshold || background_score >= seek_threshold) {
                 newStage = 'SEEK';
                 
                 // For chat mode, try to get full resume and re-analyze
                 if (mode !== 'recommend') {
-                    // debugger;
                     let full_resume_text = document.getElementById('resume-textarea-full')?.value?.trim() || '';
                     if (full_resume_text.includes('⏳')) {
                         await fetchFullResume();
@@ -214,6 +214,7 @@ async function process_candidate() {
                     // Step 4c: Send notification if analysis was updated
                     if (is_full_analysis && current_score >= borderline_threshold) {
                         await sendDingNotification(analysis, name, getCandidateData('job_applied'));
+                        await generateMessage();
                     }
                     // Step 4d: Check seek_threshold - request contact if above
                     if (is_full_analysis && current_score >= seek_threshold) {
@@ -245,9 +246,7 @@ async function process_candidate() {
                 identifiers: getIdentifiers()
             }
         });
-        setTimeout(() => {
-            document.dispatchEvent(event);
-        }, 100);
+        document.dispatchEvent(event);
         
     } catch (error) {
         console.error('Error processing candidate:', error);
@@ -263,7 +262,10 @@ async function process_candidate() {
         // Don't re-throw - let finally handle cleanup
     } finally {
         // Always re-enable cards after processing, even on error
-        enableAllCards();
+        // Use setTimeout to ensure this runs even if there are unhandled promise rejections
+        setTimeout(() => {
+            enableAllCards();
+        }, 0);
     }
 }
 
@@ -271,22 +273,6 @@ async function process_candidate() {
  * Send DingTalk notification when candidate score exceeds borderline threshold
  */
 async function sendDingNotification(analysis, candidateName, jobApplied) {
-    // Format analysis result in markdown (client-side formatting)
-    const markdownMessage = `**候选人**: ${candidateName}
-**岗位**: ${jobApplied}
-
-**评分结果**:
-- 技能匹配度: ${analysis.skill || 'N/A'}/10
-- 创业契合度: ${analysis.startup_fit || 'N/A'}/10
-- 基础背景: ${analysis.background || 'N/A'}/10
-- **综合评分: ${analysis.overall || 'N/A'}/10**
-
-**分析总结**:
-${analysis.summary || '暂无'}
-
-**跟进建议**:
-${analysis.followup_tips || '暂无'}`;
-
     // Get candidate data for server-side notification
     const candidate = getCandidateData();
     const notified = candidate.notified;
@@ -297,20 +283,21 @@ ${analysis.followup_tips || '暂无'}`;
         return;
     }
     
-    const title = `候选人 ${candidateName} 通过初步筛选`;
-    
-    // Create FormData with formatted message and candidate identifiers
-    candidate.title = title;
-    candidate.message = markdownMessage;
-    
-    
-    // Send to server for notification (server handles notified check and sending)
+    // Send analysis data to server - server will format the message
     const response = await fetch('/candidates/notify', {
         method: 'POST',
-        body: JSON.stringify(candidate)
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            ...candidate,
+            analysis: analysis 
+        })
     });
+    const result = await window.handleApiResponse(response);
     
-    await window.handleApiResponse(response);
+    // Update candidate data with notified status if notification was successful
+    if (result && result.success) {
+        await updateCandidateData({ notified: true });
+    }
 }
 
 async function fetchOnlineResume() {
@@ -344,29 +331,6 @@ async function fetchFullResume() {
     switchResumeTab('full');
 }
 
-function switchResumeTab(tab) {
-    // Hide all tab contents
-    document.getElementById('tab-content-online').classList.add('hidden');
-    document.getElementById('tab-content-full').classList.add('hidden');
-    
-    // Remove active styles from all tabs
-    document.getElementById('tab-online').classList.remove('bg-white', 'border-b-2', 'border-blue-500', 'text-blue-600');
-    document.getElementById('tab-online').classList.add('text-gray-600');
-    document.getElementById('tab-full').classList.remove('bg-white', 'border-b-2', 'border-blue-500', 'text-blue-600');
-    document.getElementById('tab-full').classList.add('text-gray-600');
-    
-    // Show selected tab content and activate tab button
-    if (tab === 'online') {
-        document.getElementById('tab-content-online').classList.remove('hidden');
-        document.getElementById('tab-online').classList.remove('text-gray-600');
-        document.getElementById('tab-online').classList.add('bg-white', 'border-b-2', 'border-blue-500', 'text-blue-600');
-    } else if (tab === 'full') {
-        document.getElementById('tab-content-full').classList.remove('hidden');
-        document.getElementById('tab-full').classList.remove('text-gray-600');
-        document.getElementById('tab-full').classList.add('bg-white', 'border-b-2', 'border-blue-500', 'text-blue-600');
-    }
-}
-
 async function generateMessage() {
     showToast('生成消息...', 'info');
     const values = getCandidateData();
@@ -380,7 +344,6 @@ async function generateMessage() {
 }
 
 async function greetAndSendMessage() {
-    showToast('打招呼+发送消息...', 'info');
     const message_textarea = document.getElementById('message-text');
     const message = message_textarea.value.trim();
     const stage = getCandidateData('stage');
@@ -401,7 +364,6 @@ async function greetAndSendMessage() {
             swap: 'none',
             values: values
         });
-        showToast('消息发送成功！', 'success');
         // Update to CHAT stage (not GREET, as GREET is not in STAGES)
         const currentStage = getCandidateData('stage');
         await updateCandidateData({
@@ -517,32 +479,41 @@ async function initializeNewChat() {
  * Update candidate data in the form and broadcast update to card
  * This function combines both updateCandidateData and updateCandidateCard
  */
-async function updateCandidateData(record) {
-    record.saved = true
+async function updateCandidateData(data) {
+    const dataCopy = {...data};
+    data.saved = true
     // update the resume, analysis and generated_message fields
-    if (record.resume_text) {
-        document.getElementById('resume-textarea-online').value = record.resume_text;
+    if (data.resume_text) {
+        document.getElementById('resume-textarea-online').value = data.resume_text;
+        document.getElementById('resume-textarea-online').textContent = data.resume_text;
+        delete data.resume_text;
     }
-    if (record.full_resume) {
-        document.getElementById('resume-textarea-full').value = record.full_resume;
+    if (data.full_resume) {
+        document.getElementById('resume-textarea-full').value = data.full_resume;
+        document.getElementById('resume-textarea-full').textContent = data.full_resume;
+        delete data.full_resume;
     }
-    if (record.analysis) {
+    if (data.analysis) {
         // Await the HTMX ajax call using htmxAjaxPromise
         await htmxAjaxPromise('POST', '/candidates/render-analysis-result', {
             swap: 'innerHTML',
-            values: { analysis: JSON.stringify(record.analysis) },
+            values: { analysis: JSON.stringify(data.analysis) },
             target: '#analysis-content',
         });
+        delete data.analysis;
     }
-    if (record.generated_message) {
-        document.getElementById('message-content').value = record.generated_message;
+    if (data.generated_message) {
+        messageTextArea = document.getElementById('message-text')
+        messageTextArea.value = data.generated_message;
+        messageTextArea.textContent = data.generated_message;
+        delete data.generated_message;
     }
 
     // Get current data from hx-vals
     const currentData = getCandidateData();
     // get the updated fields
     const updates = Object.fromEntries(
-        Object.entries(record).filter(([k, v]) => v!== currentData[k] && v !== null && v !== undefined && v !== '')
+        Object.entries(dataCopy).filter(([k, v]) => v!== currentData[k] && v !== null && v !== undefined && v !== '')
     );
     // if no updates, return
     if (Object.keys(updates).length === 0) {
@@ -550,7 +521,7 @@ async function updateCandidateData(record) {
     }
     
     // Merge updates
-    const mergedData = { ...currentData, ...updates };
+    const mergedData = { ...currentData, ...data };
     
     // Update hx-vals attribute with merged data
     const container = document.getElementById('candidate-context');
@@ -561,8 +532,6 @@ async function updateCandidateData(record) {
         chat_id: mergedData.chat_id,
         conversation_id: mergedData.conversation_id,
         candidate_id: mergedData.candidate_id,
-        name: mergedData.name,
-        job_applied: mergedData.job_applied,
         index: mergedData.index
     };
     
@@ -570,19 +539,18 @@ async function updateCandidateData(record) {
     const event = new CustomEvent('candidate:update', {
         detail: {
             identifiers: identifiers,
-            updates: updates,
+            updates: mergedData,
         }
     });
     document.dispatchEvent(event);
 
     // update to cloud 
     if (Object.keys(updates).length > 0) {
-        debugger;
         response = await fetch('/candidates/save', {
             method: 'POST',
             body: JSON.stringify({...identifiers, ...updates}),
         });
-        await window.handleApiResponse(response);
+        // await window.handleApiResponse(response);
     }
 }
 
@@ -604,6 +572,33 @@ function getThresholdValues() {
         borderline_threshold: parseFloat(document.getElementById('threshold-borderline')?.value) || 7.0,
         seek_threshold: parseFloat(document.getElementById('threshold-seek')?.value) || 9.0
     };
+}
+
+// ============================================================================
+// UI Helper Functions
+// ============================================================================
+
+function switchResumeTab(tab) {
+    // Hide all tab contents
+    document.getElementById('tab-content-online').classList.add('hidden');
+    document.getElementById('tab-content-full').classList.add('hidden');
+    
+    // Remove active styles from all tabs
+    document.getElementById('tab-online').classList.remove('bg-white', 'border-b-2', 'border-blue-500', 'text-blue-600');
+    document.getElementById('tab-online').classList.add('text-gray-600');
+    document.getElementById('tab-full').classList.remove('bg-white', 'border-b-2', 'border-blue-500', 'text-blue-600');
+    document.getElementById('tab-full').classList.add('text-gray-600');
+    
+    // Show selected tab content and activate tab button
+    if (tab === 'online') {
+        document.getElementById('tab-content-online').classList.remove('hidden');
+        document.getElementById('tab-online').classList.remove('text-gray-600');
+        document.getElementById('tab-online').classList.add('bg-white', 'border-b-2', 'border-blue-500', 'text-blue-600');
+    } else if (tab === 'full') {
+        document.getElementById('tab-content-full').classList.remove('hidden');
+        document.getElementById('tab-full').classList.remove('text-gray-600');
+        document.getElementById('tab-full').classList.add('bg-white', 'border-b-2', 'border-blue-500', 'text-blue-600');
+    }
 }
 
 // ============================================================================
@@ -658,12 +653,19 @@ requestAnimationFrame(() => {
     }
     
     // Wrap process_candidate in error handling to ensure cards are re-enabled
-    process_candidate().catch(error => {
-        console.error('Unhandled error in process_candidate:', error);
-        showToast(`处理候选人时出错: ${error.message || error}`, 'error');
-        // Ensure cards are re-enabled even if error wasn't caught by finally
-        enableAllCards();
-    });
+    // Use a more robust error handler that always re-enables cards
+    (async () => {
+        try {
+            await process_candidate();
+        } catch (error) {
+            console.error('Unhandled error in process_candidate:', error);
+            showToast(`处理候选人时出错: ${error.message || error}`, 'error');
+        } finally {
+            // Always re-enable cards, even if process_candidate's finally didn't run
+            // This is a safety net in case of unhandled promise rejections or other edge cases
+            enableAllCards();
+        }
+    })();
 });
 
 </script>

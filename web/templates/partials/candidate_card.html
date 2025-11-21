@@ -1,15 +1,12 @@
 <!-- Candidate card for list view -->
 <div class="candidate-card p-4 border rounded-lg cursor-pointer bg-white hover:bg-blue-50 transition {% if candidate.viewed %}opacity-60{% endif %}"
-    hx-get="/candidates/detail" hx-vals='{{ candidate | tojson }}' hx-target="#detail-pane"
+    hx-get="/candidates/detail" 
+    hx-vals='{"candidate": {{ candidate | tojson | safe }} }'
+    hx-target="#detail-pane"
     hx-include="#job-selector,#threshold-chat,#threshold-borderline,#threshold-seek"
     hx-on::click="console.log('Candidate clicked:', JSON.parse(this.dataset.candidate));">
     <div class="flex items-start space-x-3 relative">
-        <input type="hidden" name="analysis" value="{{ analysis | tojson }}">
-        <!-- score badge in upper-right corner -->
-        <div class="absolute top-0 right-0 bg-gradient-to-r from-blue-500 to-indigo-600 text-white text-xs font-bold px-2 py-1 rounded-bl-lg rounded-tr-lg shadow-md {% if candidate.score is not defined or candidate.score is none %}hidden{% endif %}"
-            data-badge="score">
-            {% if candidate.score is defined and candidate.score is not none %}{{ candidate.score }}{% endif %}
-        </div>
+        <!-- <input type="hidden" name="analysis" value="{{ analysis | tojson }}"> -->
         <!-- avatar -->
         <div class="flex-shrink-0">
             <div class="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center">
@@ -43,6 +40,11 @@
                 {{ candidate.job_applied or '未指定岗位' }}
             </p>
         </div>
+        <!-- score badge in upper-right corner -->
+        <div class="absoluåte top-0 right-0 bg-gradient-to-r from-blue-500 to-indigo-600 text-white text-xs font-bold px-2 py-1 rounded-bl-lg rounded-tr-lg shadow-md {% if candidate.score is not defined or candidate.score is none %}hidden{% endif %}"
+            data-badge="score">
+            {% if candidate.score is defined and candidate.score is not none %}{{ candidate.score }}{% endif %}
+        </div>
     </div>
     <!-- last message - full width -->
     <p class="text-xs text-gray-500 mt-1 line-clamp-2">
@@ -59,6 +61,11 @@
             class="inline-block px-2 py-1 text-xs rounded-full bg-blue-100 text-blue-700 {% if not candidate.saved %}hidden{% endif %}"
             data-tag="saved">
             💾 已保存
+        </span>
+        <span
+            class="inline-block px-2 py-1 text-xs rounded-full bg-red-100 text-red-700 {% if not candidate.notified %}hidden{% endif %}"
+            data-tag="notified">
+            🔔 已通知
         </span>
     </div>
 </div>

@@ -10,7 +10,7 @@ from datetime import datetime
 import json
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Form, Query, Request, Response
+from fastapi import APIRouter, BackgroundTasks, Form, Query, Request, Response, Body
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from tenacity import retry, stop_after_attempt, wait_exponential
@@ -174,14 +174,13 @@ async def list_candidates(
             restored += 1
 
         # Extract resume_text and full_resume from candidate
-        resume_text = candidate.pop("resume_text", '')
-        full_resume = candidate.pop("full_resume", '')
-        analysis = candidate.pop("analysis", '')
         html += templates.get_template("partials/candidate_card.html").render({
+            "analysis": candidate.pop("analysis", ''),
+            "resume_text": candidate.pop("resume_text", ''),
+            "full_resume": candidate.pop("full_resume", ''),
+            "metadata": candidate.pop("metadata", {}),
+            "generated_message": candidate.pop("generated_message", ''),
             "candidate": candidate,
-            "analysis": analysis,
-            "resume_text": resume_text,
-            "full_resume": full_resume,
             "selected": False
         })
     logger.info(f"Restored {restored}/{len(candidates)} candidates from cloud store")
@@ -196,18 +195,18 @@ async def list_candidates(
 async def get_candidate_detail(request: Request):
     """Get candidate detail view."""
     # Parse index if provided
-    candidate = dict(request.query_params)
-    str2bool = lambda v: {'true': True, 'false': False}.get(v, v)
-    candidate = {k:str2bool(v) for k, v in candidate.items() if v}
+    # str2bool = lambda v: {'true': True, 'false': False}.get(v, v)
+    # candidate = dict(request.query_params)
+    # candidate = {k:str2bool(v) for k, v in candidate.items() if v}
+    candidate = json.loads(request.query_params.get('candidate', '{}'))
     identifiers = [candidate.get('candidate_id'), candidate.get('chat_id'), candidate.get('conversation_id')]
     identifiers = [id for id in identifiers if id] or None
     # Try to find existing candidate
     stored_candidate = get_candidate_by_dict(candidate)
-    if stored_candidate and stored_candidate.get('chat_id') and stored_candidate.get('chat_id'):
-        if candidate.get('chat_id') == stored_candidate.get('chat_id'):
-            candidate.update(stored_candidate)
-        else:
-            logger.warning(f"chat_id mismatch: {candidate.get('chat_id')} != {stored_candidate.get('chat_id')}")
+    if stored_candidate and candidate['name'] != stored_candidate.get('name'):
+        logger.warning(f"name mismatch: {candidate.get('name')} != {stored_candidate.get('name')}")
+    if candidate.get('chat_id') and stored_candidate.get('chat_id') and candidate.get('chat_id') != stored_candidate.get('chat_id'):
+        logger.warning(f"chat_id mismatch: {candidate.get('chat_id')} != {stored_candidate.get('chat_id')}")
     else:
         candidate.update(stored_candidate)
     candidate['score'] = stored_candidate.get("analysis", {}).get("overall")
@@ -304,7 +303,7 @@ async def init_chat(
         page = await boss_service.service._ensure_browser_session()
         history = await chat_actions.get_chat_history_action(page, chat_id)
         
-    conversation_id = assistant_actions.init_chat(
+    result = assistant_actions.init_chat(
         mode=mode,
         chat_id=chat_id,
         job_info=job_info,
@@ -312,10 +311,9 @@ async def init_chat(
         online_resume_text=resume_text,
         chat_history=history
     )
-    
-    return {
-        "conversation_id": conversation_id,
-    }
+    assert result.get("conversation_id"), "conversation_id is required"
+    assert result.get("candidate_id"), "candidate_id is required"
+    return result
 
 
 @router.post("/analyze")
@@ -510,46 +508,49 @@ async def send_message(
 
 @router.post("/notify")
 async def notify_hr(
-    title: str = Form(...),
-    message: str = Form(...),
-    job_id: Optional[str] = Form(None),
-    chat_id: Optional[str] = Form(None),
-    name: Optional[str] = Form(None),
-    job_applied: Optional[str] = Form(None),
-    conversation_id: Optional[str] = Form(None),
+    analysis: dict = Body(...),
+    job_id: Optional[str] = Body(None),
+    chat_id: Optional[str] = Body(None),
+    conversation_id: Optional[str] = Body(None),
+    candidate_id: Optional[str] = Body(None),
 ):
-    """Send DingTalk notification to HR.
+    """Send DingTalk notification to HR."""
+    # Double check if candidate has already been notified
+    candidate = get_candidate_by_dict({"chat_id": chat_id, "conversation_id": conversation_id, "candidate_id": candidate_id})
     
-    Args:
-        title: Notification title
-        message: Notification message in markdown format
-        job_id: Optional job ID to lookup job-specific notification config
-        chat_id: Optional candidate chat_id to check/update notified field
-        conversation_id: Optional candidate conversation_id to check/update notified field
-        
-    Returns:
-        JSONResponse: Success status
-    """
-    try:
-        # Double check if candidate has already been notified
-        candidate = get_candidate_by_dict({"chat_id": chat_id, "conversation_id": conversation_id, "name": name, "job_applied": job_applied})
-        
-        # Skip if already notified
-        if candidate.get("notified"):
-            return {"success": False, "error": "该候选人已发送过通知，避免重复发送"}
-        
-        # Send notification with job_id support
-        success = send_dingtalk_notification(title=title, message=message, job_id=job_id)
-        
-        if success:
-            # Update candidate's notified field after successful notification
-            upsert_candidate(candidate_id=candidate.get('candidate_id'), notified=True)
-            return {"success": True, "message": "通知发送成功"}
-        else:
-            return {"success": False, "error": "通知发送失败"}
-    except Exception as exc:
-        logger.exception("Failed to send DingTalk notification")
-        return {"success": False, "error": f"通知发送失败: {str(exc)}"}
+    # Skip if already notified
+    if candidate.get("notified"):
+        return {"success": False, "error": "该候选人已发送过通知，避免重复发送"}
+    
+    # Generate message from analysis if not provided
+    name = candidate.get("name", "未知候选人")
+    job_applied = candidate.get("job_applied", "未指定岗位")
+    message = f"""**候选人**: {name}
+**岗位**: {job_applied}
+
+**评分结果**:
+- 技能匹配度: {analysis.get('skill', 'N/A')}/10
+- 创业契合度: {analysis.get('startup_fit', 'N/A')}/10
+- 基础背景: {analysis.get('background', 'N/A')}/10
+- **综合评分: {analysis.get('overall', 'N/A')}/10**
+
+**分析总结**:
+{analysis.get('summary', '暂无')}
+
+**跟进建议**:
+{analysis.get('followup_tips', '暂无')}"""
+    
+    title = f"候选人 {name} 通过初步筛选"
+    
+    # Send notification with job_id support
+    success = send_dingtalk_notification(title=title, message=message, job_id=job_id)
+    
+    if success:
+        # Update candidate's notified field after successful notification
+        upsert_candidate(candidate_id=candidate.get('candidate_id'), notified=True)
+        return {"success": True, "message": "通知发送成功"}
+    else:
+        return {"success": False, "error": "通知发送失败"}
 
 
 @router.post("/fetch-online-resume", response_class=HTMLResponse)
