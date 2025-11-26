@@ -826,6 +826,32 @@ window.batchProcessingActive = false;
 window.stopBatchProcessing = false;
 
 /**
+ * Check if currently on the candidate page
+ */
+function isOnCandidatePage() {
+    return window.location.pathname.includes('/candidates') || 
+           window.location.pathname === '/candidates';
+}
+
+/**
+ * Check if batch processing should be cancelled
+ * Returns true if we should stop processing
+ */
+function shouldCancelBatchProcessing() {
+    // Check if not on candidate page
+    if (!isOnCandidatePage()) {
+        return true;
+    }
+    
+    // Check if tab is hidden/inactive
+    if (document.hidden || document.visibilityState === 'hidden') {
+        return true;
+    }
+    
+    return false;
+}
+
+/**
  * Process all candidate cards sequentially
  */
 window.processAllCandidates = async function processAllCandidates() {
@@ -883,6 +909,13 @@ window.processAllCandidates = async function processAllCandidates() {
         // Check if user requested stop
         if (window.stopBatchProcessing) {
             showToast(`批量处理已停止 (${processed}/${total} 完成)`, 'warning');
+            break;
+        }
+        
+        // Check if we should cancel due to page/tab change
+        if (shouldCancelBatchProcessing()) {
+            showToast(`批量处理已取消 (页面已切换或标签页已隐藏)`, 'warning');
+            window.stopBatchProcessing = true;
             break;
         }
         
@@ -966,6 +999,13 @@ window.processAllCandidates = async function processAllCandidates() {
             // Wait for process_candidate() to complete
             await processingPromise;
             
+            // Check again after processing completes
+            if (shouldCancelBatchProcessing()) {
+                showToast(`批量处理已取消 (页面已切换或标签页已隐藏)`, 'warning');
+                window.stopBatchProcessing = true;
+                break;
+            }
+            
             processed++;
             showToast(`✅ ${name} 处理完成 (${processed}/${total})`, 'success');
         } catch (error) {
@@ -1012,6 +1052,42 @@ function stopBatchProcessingHandler() {
     }
     showToast('正在停止批量处理...', 'info');
 }
+
+// ============================================================================
+// Batch Processing Cancellation Listeners
+// ============================================================================
+
+// Cancel batch processing when tab becomes hidden
+document.addEventListener('visibilitychange', () => {
+    if (window.batchProcessingActive && document.hidden) {
+        window.stopBatchProcessing = true;
+        showToast('批量处理已暂停 (标签页已隐藏)', 'warning');
+    }
+});
+
+// Cancel batch processing when navigating away from candidate page
+// Check after HTMX swaps complete
+document.body.addEventListener('htmx:afterSwap', () => {
+    if (window.batchProcessingActive && !isOnCandidatePage()) {
+        window.stopBatchProcessing = true;
+        showToast('批量处理已取消 (已离开候选人页面)', 'warning');
+    }
+});
+
+// Cancel batch processing on browser navigation (back/forward)
+window.addEventListener('popstate', () => {
+    if (window.batchProcessingActive && !isOnCandidatePage()) {
+        window.stopBatchProcessing = true;
+        showToast('批量处理已取消 (已离开候选人页面)', 'warning');
+    }
+});
+
+// Cancel batch processing on page unload
+window.addEventListener('beforeunload', () => {
+    if (window.batchProcessingActive) {
+        window.stopBatchProcessing = true;
+    }
+});
 
 // ============================================================================
 // Global HTMX Event Listeners

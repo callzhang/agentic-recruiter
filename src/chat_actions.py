@@ -522,7 +522,8 @@ async def request_contact_action(page: Page, chat_id: str) -> bool:
     dialog = await _go_to_chat_dialog(page, chat_id)
     if not dialog:
         raise ValueError("未找到指定对话项")
-    
+    phone_number = None
+    wechat_number = None
     clicked_phone, clicked_wechat = False, False
     ask_phone_button = page.locator("span.operate-btn:has-text('换电话')").first
     if await ask_phone_button.count() > 0:
@@ -538,6 +539,12 @@ async def request_contact_action(page: Page, chat_id: str) -> bool:
                 break
         else:
             clicked_phone = True
+    view_phone_number = page.locator("span.operate-btn:has-text('查看电话')").first
+    if await view_phone_number.count() > 0:
+        await view_phone_number.click(timeout=2000)
+        phone_number = await view_phone_number.locator("xpath=parent::div").locator("div.exchange-tooltip > span.exchanged > span").inner_text(timeout=2000)
+
+
     ask_wechat_button = page.locator("span.operate-btn:has-text('换微信')").first
     if await ask_wechat_button.count() > 0:
         t0 = time.time()
@@ -552,8 +559,18 @@ async def request_contact_action(page: Page, chat_id: str) -> bool:
                 break
         else:
             clicked_wechat = True
+    # check wechat number
+    view_wechat_number = page.locator("span.operate-btn:has-text('查看微信')").first
+    if await view_wechat_number.count() > 0:
+        await view_wechat_number.click(timeout=2000)
+        wechat_number = await view_wechat_number.locator("xpath=parent::div").locator("div.exchange-tooltip > span.exchanged > span").inner_text(timeout=2000)
 
-    return clicked_phone or clicked_wechat
+    return {
+        "phone_number": phone_number,
+        "wechat_number": wechat_number,
+        "clicked_phone": clicked_phone,
+        "clicked_wechat": clicked_wechat,
+    }
 
 
 __all__ = [name for name in globals() if name.endswith("_action") or name.startswith("get_chat")]

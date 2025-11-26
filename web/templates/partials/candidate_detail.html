@@ -142,9 +142,13 @@
 
 <!-- Centralized Candidate Analysis & Workflow Logic -->
 <script>
-const detailRoot = document.getElementById('candidate-detail-root');
-const candidateDetailViewMode = detailRoot?.dataset?.viewMode || 'interactive';
-window.__candidate_detail_view_mode = candidateDetailViewMode;
+// Initialize root and view mode (runs on each HTMX swap)
+// Use var to allow redeclaration when HTMX swaps content multiple times
+var root = document.getElementById('candidate-detail-root');
+var viewMode = root?.dataset?.viewMode || 'interactive';
+// Persist on window for other scripts
+window.__candidate_detail_root = window.__candidate_detail_root || root;
+window.__candidate_detail_view_mode = window.__candidate_detail_view_mode || viewMode;
 
 async function process_candidate() {
     const getIdentifiers = () => {
@@ -182,7 +186,7 @@ async function process_candidate() {
         // Step 4: Check threshold and determine stage (sequential: chat → borderline → seek)
         const analysis_container = document.querySelector('#analysis-content #analysis-result-container');
         let analysis = analysis_container ? JSON.parse(analysis_container.getAttribute('data-analysis')) : null;
-        let is_full_analysis = analysis.resume_type === 'full';
+        let is_full_analysis = analysis?.resume_type === 'full';
         let current_score = analysis?.overall || 0;
         const skill_score = analysis?.skill || 0;
         const startup_fit_score = analysis?.startup_fit || 0;
@@ -510,7 +514,7 @@ async function updateCandidateData(data) {
         delete data.analysis;
     }
     if (data.generated_message) {
-        messageTextArea = document.getElementById('message-text')
+        const messageTextArea = document.getElementById('message-text')
         messageTextArea.value = data.generated_message;
         messageTextArea.textContent = data.generated_message;
         delete data.generated_message;
@@ -535,7 +539,7 @@ async function updateCandidateData(data) {
     container.setAttribute('hx-vals', JSON.stringify(mergedData));
     
     // Get identifiers from the updated data for matching
-    identifiers = {
+    const identifiers = {
         chat_id: mergedData.chat_id,
         conversation_id: mergedData.conversation_id,
         candidate_id: mergedData.candidate_id,
@@ -553,7 +557,7 @@ async function updateCandidateData(data) {
 
     // update to cloud 
     if (Object.keys(updates).length > 0) {
-        response = await fetch('/candidates/save', {
+        const response = await fetch('/candidates/save', {
             method: 'POST',
             body: JSON.stringify({...identifiers, ...updates}),
         });
@@ -645,9 +649,12 @@ function htmxAjaxPromise(method, url, options) {
     });
 }
 
-// Trigger workflow when this partial is loaded via HTMX (interactive view)
-if (candidateDetailViewMode !== 'readonly') {
-    // Since this script runs when HTMX swaps content, we can call it directly
+// Run initialization when partial is loaded via HTMX
+// This ensures process_candidate() runs on each HTMX swap
+(function () {
+    const viewMode = window.__candidate_detail_view_mode || 'interactive';
+    if (viewMode === 'readonly') return;
+    
     // Use requestAnimationFrame to ensure DOM is ready
     requestAnimationFrame(() => {
         // Set initial tab state - show online tab if resume_text exists, otherwise show full tab
@@ -661,7 +668,6 @@ if (candidateDetailViewMode !== 'readonly') {
         }
         
         // Wrap process_candidate in error handling to ensure cards are re-enabled
-        // Use a more robust error handler that always re-enables cards
         (async () => {
             try {
                 await process_candidate();
@@ -670,11 +676,10 @@ if (candidateDetailViewMode !== 'readonly') {
                 showToast(`处理候选人时出错: ${error.message || error}`, 'error');
             } finally {
                 // Always re-enable cards, even if process_candidate's finally didn't run
-                // This is a safety net in case of unhandled promise rejections or other edge cases
                 enableAllCards();
             }
         })();
     });
-}
+})();
 
 </script>
