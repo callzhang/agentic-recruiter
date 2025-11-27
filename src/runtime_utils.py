@@ -3,6 +3,7 @@
 import subprocess
 import sys
 import platform
+import re
 from pathlib import Path
 from typing import Dict, Optional, Any
 from datetime import datetime
@@ -35,16 +36,27 @@ def get_git_commit(short: bool = True, repo_path: Optional[Path] = None) -> Opti
     repo_path = repo_path or get_repo_path()
     
     try:
-        format_str = "--short" if short else ""
+        # Use --short flag correctly
+        cmd = ["git", "rev-parse", "--short", "HEAD"] if short else ["git", "rev-parse", "HEAD"]
         result = subprocess.run(
-            ["git", "rev-parse", format_str, "HEAD"] if format_str else ["git", "rev-parse", "HEAD"],
-            cwd=repo_path,
+            cmd,
+            cwd=str(repo_path),
             capture_output=True,
             text=True,
             timeout=5
         )
         if result.returncode == 0:
-            return result.stdout.strip()
+            commit_hash = result.stdout.strip()
+            if commit_hash:
+                return commit_hash
+        else:
+            # Log the actual error from git
+            error_msg = result.stderr.strip() if result.stderr else "Unknown error"
+            logger.debug(f"Git command failed: {error_msg}")
+    except subprocess.TimeoutExpired:
+        logger.debug("Git command timed out")
+    except FileNotFoundError:
+        logger.debug("Git command not found - git may not be installed")
     except Exception as e:
         logger.debug(f"Failed to get git commit: {e}")
     
@@ -335,6 +347,53 @@ def get_system_info() -> Dict[str, Any]:
         "architecture": platform.machine(),
         "timestamp": datetime.now().isoformat()
     }
+
+
+def get_version_from_changelog(changelog_path: Optional[Path] = None) -> Optional[str]:
+    """Get the latest version number from CHANGELOG.md.
+    
+    Args:
+        changelog_path: Optional path to CHANGELOG.md, defaults to repo root
+        
+    Returns:
+        Optional[str]: Version string (e.g., "v2.4.4") or None if not found
+    """
+    if changelog_path is None:
+        repo_path = get_repo_path()
+        changelog_path = repo_path / "CHANGELOG.md"
+    elif changelog_path.is_dir():
+        changelog_path = changelog_path / "CHANGELOG.md"
+    
+    if not changelog_path.exists():
+        logger.debug(f"CHANGELOG.md not found at {changelog_path}")
+        return None
+    
+    try:
+        with open(changelog_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        # Extract the latest version section (first ## after # 更新日志)
+        # Match pattern: ## vX.X.X (date) - title
+        sections = re.split(r'^## ', content, flags=re.MULTILINE)
+        
+        if len(sections) < 2:
+            return None
+        
+        # Get the first version section (most recent)
+        latest_section = sections[1]  # First section after split is the header
+        lines = latest_section.split('\n')
+        
+        # Extract version info from first line
+        first_line = lines[0] if lines else ""
+        version_match = re.match(r'^(v[\d.]+) \(([^)]+)\) - (.+)$', first_line)
+        
+        if version_match:
+            version = version_match.group(1)  # Extract version like "v2.4.4"
+            return version
+    except Exception as e:
+        logger.debug(f"Failed to parse CHANGELOG.md: {e}")
+    
+    return None
 
 
 def get_runtime_info() -> Dict[str, Any]:

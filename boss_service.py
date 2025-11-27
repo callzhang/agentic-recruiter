@@ -404,16 +404,24 @@ class BossServiceAsync:
                     - timestamp: ISO format timestamp
                     - new_message_count: Count of new messages
                     - new_greet_count: Count of new greeting requests
+                    - version: Current git commit hash (short)
             """
+            from src.runtime_utils import get_version_from_changelog
+            # Get version from CHANGELOG.md - do this first before any async operations
+            version = get_version_from_changelog()
+            
             page = await self._ensure_browser_session()
             stats = await chat_actions.get_chat_stats_action(page)
-            return {
+            response_data = {
                 "status": "running",
                 "logged_in": self.is_logged_in,
                 "timestamp": datetime.now().isoformat(),
                 "new_message_count": stats.get("new_message_count", 0),
                 "new_greet_count": stats.get("new_greet_count", 0),
+                "version": version,  # Always include version, even if None
             }
+            logger.debug(f"Status response: {response_data}")
+            return response_data
 
         @self.app.get("/version/check")
         async def check_version():

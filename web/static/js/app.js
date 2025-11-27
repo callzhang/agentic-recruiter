@@ -1309,6 +1309,7 @@ document.addEventListener('candidate:update', function(event) {
 function initRuntimeCheck() {
     const statusDot = document.getElementById('status-dot');
     const statusText = document.getElementById('status-text');
+    const versionTag = document.getElementById('version-tag');
     
     let runtimeCheckInterval = null;
     let lastVersionCheck = 0;
@@ -1336,6 +1337,10 @@ function initRuntimeCheck() {
                     statusDot.className = 'w-2 h-2 bg-green-500 rounded-full animate-pulse';
                     statusText.textContent = '服务运行中';
                     statusText.className = 'text-sm text-gray-600';
+                    
+                    // Update version tag - always update, even if version is null/undefined
+                    console.log('Status response data:', data); // Debug log
+                    versionTag.textContent = data.version;
                 } else {
                     // Service returned error
                     statusDot.className = 'w-2 h-2 bg-yellow-500 rounded-full animate-pulse';
@@ -1427,6 +1432,33 @@ function initRuntimeCheck() {
     
     // Check immediately on page load
     runtimeCheck();
+    
+    // Also update version tag immediately if element exists (in case status check hasn't run yet)
+    if (versionTag) {
+        // Try to get version from status endpoint immediately
+        fetch('/status')
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                if (data.version) {
+                    // Version from changelog is already in format "v2.4.4", so just use it directly
+                    versionTag.textContent = data.version;
+                } else {
+                    versionTag.textContent = 'v-...';
+                }
+            })
+            .catch(error => {
+                console.error('Failed to fetch version:', error); // Debug
+                // Silently fail - version will be updated on next status check
+                versionTag.textContent = 'v-...';
+            });
+    } else {
+        console.error('version-tag element not found!'); // Debug
+    }
     
     // Then check every 30 seconds
     runtimeCheckInterval = setInterval(runtimeCheck, 30000);
