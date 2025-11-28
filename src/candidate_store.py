@@ -261,7 +261,7 @@ def search_candidates_advanced(
                 resume_text=semantic_query,
                 filter_expr=filter_expr,
                 fields=fields,
-                limit=limit or None,
+                limit=limit * 3 if limit else None,
                 similarity_threshold=0.5,
             )
         else:
@@ -269,7 +269,7 @@ def search_candidates_advanced(
                 collection_name=_collection_name,
                 filter=filter_expr,
                 output_fields=fields,
-                limit=limit or 100,
+                limit=limit * 3 if limit else None,
                 output_fields_order=order_clause,
             )
     except Exception as exc:

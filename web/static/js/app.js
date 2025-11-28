@@ -836,6 +836,7 @@ function isOnCandidatePage() {
 /**
  * Check if batch processing should be cancelled
  * Returns true if we should stop processing
+ * Only checks page navigation, not tab visibility
  */
 function shouldCancelBatchProcessing() {
     // Check if not on candidate page
@@ -843,11 +844,7 @@ function shouldCancelBatchProcessing() {
         return true;
     }
     
-    // Check if tab is hidden/inactive
-    if (document.hidden || document.visibilityState === 'hidden') {
-        return true;
-    }
-    
+    // Don't cancel based on tab visibility - allow switching tabs
     return false;
 }
 
@@ -914,7 +911,10 @@ window.processAllCandidates = async function processAllCandidates() {
         
         // Check if we should cancel due to page/tab change
         if (shouldCancelBatchProcessing()) {
-            showToast(`批量处理已取消 (页面已切换或标签页已隐藏)`, 'warning');
+            // Only show toast if it's a page navigation, not tab visibility change
+            if (!isOnCandidatePage()) {
+                showToast(`批量处理已取消 (已离开候选人页面)`, 'warning');
+            }
             window.stopBatchProcessing = true;
             break;
         }
@@ -1001,7 +1001,10 @@ window.processAllCandidates = async function processAllCandidates() {
             
             // Check again after processing completes
             if (shouldCancelBatchProcessing()) {
-                showToast(`批量处理已取消 (页面已切换或标签页已隐藏)`, 'warning');
+                // Only show toast if it's a page navigation, not tab visibility change
+                if (!isOnCandidatePage()) {
+                    showToast(`批量处理已取消 (已离开候选人页面)`, 'warning');
+                }
                 window.stopBatchProcessing = true;
                 break;
             }
@@ -1057,13 +1060,8 @@ function stopBatchProcessingHandler() {
 // Batch Processing Cancellation Listeners
 // ============================================================================
 
-// Cancel batch processing when tab becomes hidden
-document.addEventListener('visibilitychange', () => {
-    if (window.batchProcessingActive && document.hidden) {
-        window.stopBatchProcessing = true;
-        showToast('批量处理已暂停 (标签页已隐藏)', 'warning');
-    }
-});
+// Don't cancel batch processing when tab becomes hidden - allow switching tabs
+// Batch processing will continue in the background
 
 // Cancel batch processing when navigating away from candidate page
 // Check after HTMX swaps complete
