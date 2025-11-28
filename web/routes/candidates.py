@@ -160,6 +160,7 @@ async def list_candidates(
         names=list({n for n in names}),
         job_applied=job_applied,
         limit=len(candidates) * 2,
+        strict=False,
     )
 
     # Render candidate cards
@@ -214,10 +215,8 @@ async def get_candidate_detail(request: Request):
     # candidate = dict(request.query_params)
     # candidate = {k:str2bool(v) for k, v in candidate.items() if v}
     candidate = json.loads(request.query_params.get('candidate', '{}'))
-    identifiers = [candidate.get('candidate_id'), candidate.get('chat_id'), candidate.get('conversation_id')]
-    identifiers = [id for id in identifiers if id] or None
     # Try to find existing candidate
-    stored_candidate = get_candidate_by_dict(candidate)
+    stored_candidate = get_candidate_by_dict(candidate, strict=False)
     if stored_candidate and candidate['name'] != stored_candidate.get('name'):
         logger.warning(f"name mismatch: {candidate.get('name')} != {stored_candidate.get('name')}")
     if candidate.get('chat_id') and stored_candidate.get('chat_id') and candidate.get('chat_id') != stored_candidate.get('chat_id'):
@@ -535,7 +534,12 @@ async def notify_hr(
 ):
     """Send DingTalk notification to HR."""
     # Double check if candidate has already been notified
-    candidate = get_candidate_by_dict({"chat_id": chat_id, "conversation_id": conversation_id, "candidate_id": candidate_id})
+    candidate = get_candidate_by_dict({
+        "chat_id": chat_id,
+        "conversation_id": conversation_id,
+        "candidate_id": candidate_id,
+        "job_id": job_id,
+    })
     
     # Skip if already notified
     if candidate.get("notified"):

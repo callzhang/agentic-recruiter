@@ -151,7 +151,7 @@ def create_collection(collection_name: Optional[str] = None) -> bool:
 # ------------------------------------------------------------------
 # Candidate Operations
 # ------------------------------------------------------------------
-def get_candidate_by_dict(kwargs: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def get_candidate_by_dict(kwargs: Dict[str, Any], strict: bool = True) -> Optional[Dict[str, Any]]:
     """Get a candidate by a candidate object"""
 
     candidate_id = kwargs.get("candidate_id")
@@ -171,6 +171,7 @@ def get_candidate_by_dict(kwargs: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         job_applied=job_applied,
         limit=1,
         fields=fields,
+        strict=strict,
     )
     stored_candidate = results[0] if results else {}
     # stored_last_message = stored_candidate.get("last_message", '')
@@ -206,6 +207,7 @@ def search_candidates_advanced(
     sort_by: str = "updated_at",
     sort_direction: str = "desc",
     fields: Optional[List[str]] = None,
+    strict = True
 ) -> List[Dict[str, Any]]:
     """Advanced candidate search supporting multiple filters, identifiers and semantic queries."""
 
@@ -214,32 +216,34 @@ def search_candidates_advanced(
 
     fields = fields or _readable_fields
 
-    clauses = []
-    clauses.append(_build_in_clause("candidate_id", candidate_ids))
-    clauses.append(_build_in_clause("chat_id", chat_ids))
-    clauses.append(_build_in_clause("conversation_id", conversation_ids))
-    clauses.append(_build_in_clause("name", names))
-
+    identifiers = []
+    identifiers.append(_build_in_clause("candidate_id", candidate_ids))
+    identifiers.append(_build_in_clause("chat_id", chat_ids))
+    identifiers.append(_build_in_clause("conversation_id", conversation_ids))
+    identifiers.append(_build_in_clause("name", names))
+    conditions = []
     if job_applied:
-        clauses.append(f"job_applied == {_quote(job_applied)}")
+        conditions.append(f"job_applied == {_quote(job_applied)}")
     if stage:
-        clauses.append(f"stage == {_quote(stage.upper())}")
+        conditions.append(f"stage == {_quote(stage.upper())}")
     if isinstance(notified, bool):
-        clauses.append(f"notified == {notified}")
+        conditions.append(f"notified == {notified}")
     if updated_from:
-        clauses.append(f"updated_at >= {_quote(updated_from)}")
+        conditions.append(f"updated_at >= {_quote(updated_from)}")
     if updated_to:
-        clauses.append(f"updated_at <= {_quote(updated_to)}")
+        conditions.append(f"updated_at <= {_quote(updated_to)}")
     if resume_contains:
         # Use Milvus like operator to search in both resume_text and full_resume
         # Note: like is case-sensitive in Milvus
         keyword = resume_contains.strip().replace("'", "\\'")
-        clauses.append(f"(resume_text like '%{keyword}%') or (full_resume like '%{keyword}%')")
+        conditions.append(f"(resume_text like '%{keyword}%') or (full_resume like '%{keyword}%')")
     if min_score is not None:
         # Use bracket notation to filter JSON field: analysis["overall"] >= min_score
-        clauses.append(f'analysis["overall"] >= {min_score}')
+        identifiers.append(f'analysis["overall"] >= {min_score}')
 
-    filter_expr = " and ".join([c for c in clauses if c]) if clauses else 'candidate_id != ""'
+    filter_expr = f" {'and' if strict else 'or'} ".join([c for c in identifiers if c])
+    if conditions:
+        filter_expr = f" {filter_expr} and {'and'.join(conditions)}"
 
     sortable_fields = {
         "updated_at",

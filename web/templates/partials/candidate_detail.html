@@ -68,7 +68,7 @@
                 </div>
                 <div id="resume-online-container">
                     <textarea id="resume-textarea-online" readonly class="w-full h-64 p-2 bg-gray-50 border rounded-lg font-mono text-sm">
-                        {% if resume_text %} {{ resume_text }} {% else %} ⏳ 正在加载在线简历... {% endif %}
+                        {%- if resume_text -%}{{ resume_text }}{%- else -%}⏳ 正在加载在线简历...{%- endif -%}
                     </textarea>
                 </div>
             </div>
@@ -84,7 +84,7 @@
                 </div>
                 <div id="resume-full-container">
                     <textarea id="resume-textarea-full" readonly class="w-full h-64 p-2 bg-gray-50 border rounded-lg font-mono text-sm">
-                        {% if full_resume %} {{ full_resume }} {% else %} ⏳ 正在加载完整简历... {% endif %}
+                        {%- if full_resume -%}{{ full_resume }}{%- else -%}⏳ 正在加载完整简历...{%- endif -%}
                     </textarea>
                 </div>
             </div>
@@ -112,7 +112,7 @@
         </div>
         <div id="message-content" class="p-2">
             <textarea id="message-text" name="generated_message" class="w-full h-32 p-2 border rounded-lg">
-                {% if generated_message not in ['', 'None', 'null', None] %}{{ generated_message }}{% else %}⏳分析完成后，如果匹配度达标，将自动生成...{% endif %}
+                {%- if generated_message not in ['', 'None', 'null', None] -%}{{ generated_message }}{%- else -%}⏳分析完成后，如果匹配度达标，将自动生成...{%- endif -%}
             </textarea>
         </div>
         <div class="flex p-2 gap-2">
@@ -226,6 +226,7 @@ async function process_candidate() {
                     if (is_full_analysis && current_score >= borderline_threshold) {
                         await sendDingNotification(analysis, name, getCandidateData('job_applied'));
                         await generateMessage();
+                        await greetAndSendMessage();
                     }
                     // Step 4d: Check seek_threshold - request contact if above
                     if (is_full_analysis && current_score >= seek_threshold) {
@@ -235,7 +236,7 @@ async function process_candidate() {
                 }else{
                     // For recommend mode, greet and send message
                     await greetAndSendMessage();
-                    await sendDingNotification(analysis, name, getCandidateData('job_applied'));
+                    // await sendDingNotification(analysis, name, getCandidateData('job_applied'));
                 }
             }
             

@@ -139,7 +139,10 @@ def get_job_by_id(job_id: str) -> Optional[Dict[str, Any]]:
 def insert_job(**job_data) -> bool:
     """Insert a new job"""
     client = get_client()
-    base_job_id = get_base_job_id(job_data['id'])
+    job_id = job_data.get('job_id') or job_data.get('id', '')
+    if not job_id:
+        raise ValueError('job_id is required')
+    base_job_id = get_base_job_id(job_id)
     versioned_job_id = f'{base_job_id}_v1'
     
     now = datetime.now().isoformat()
@@ -301,7 +304,7 @@ def delete_job_version(base_job_id: str, version: int) -> bool:
 # Vercel handler - must inherit from BaseHTTPRequestHandler
 # See: https://vercel.com/docs/functions/runtimes/python
 from http.server import BaseHTTPRequestHandler
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, unquote
 
 class handler(BaseHTTPRequestHandler):
     """Vercel serverless function handler - inherits from BaseHTTPRequestHandler"""
@@ -342,9 +345,11 @@ class handler(BaseHTTPRequestHandler):
         if 'job_id' in query:
             job_id_val = query['job_id']
             if isinstance(job_id_val, list) and job_id_val:
-                return job_id_val[0]
-            return job_id_val
+                # Query params may be URL-encoded
+                return unquote(job_id_val[0])
+            return unquote(job_id_val) if job_id_val else None
         # Try to extract from path: /api/jobs/{job_id}/...
+        # Path is already URL-decoded in do_GET/do_POST/do_DELETE
         parts = path.split('/')
         if len(parts) >= 4 and parts[2] == 'jobs':
             return parts[3]
@@ -564,21 +569,21 @@ class handler(BaseHTTPRequestHandler):
     
     def do_GET(self):
         """Handle GET requests"""
-        path = self.path.split('?')[0]
+        path = unquote(self.path.split('?')[0])
         query = self._get_query_params()
         body = {}
         self._handle_route('GET', path, query, body)
     
     def do_POST(self):
         """Handle POST requests"""
-        path = self.path.split('?')[0]
+        path = unquote(self.path.split('?')[0])
         query = self._get_query_params()
         body = self._get_body()
         self._handle_route('POST', path, query, body)
     
     def do_DELETE(self):
         """Handle DELETE requests"""
-        path = self.path.split('?')[0]
+        path = unquote(self.path.split('?')[0])
         query = self._get_query_params()
         body = self._get_body()
         self._handle_route('DELETE', path, query, body)
