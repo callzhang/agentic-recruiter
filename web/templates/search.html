@@ -367,6 +367,31 @@ document.addEventListener('DOMContentLoaded', function() {
             updateUrl();
         }
     });
+    
+    // Filter out empty form values before HTMX submission
+    // This allows backend to use int/float types directly
+    document.body.addEventListener('htmx:configRequest', function(event) {
+        const form = document.getElementById('search-form');
+        if (form && event.detail.elt === form) {
+            // For GET requests, HTMX uses the form data to build query params
+            // We need to filter out empty values
+            const formData = new FormData(form);
+            const cleanedParams = {};
+            
+            // Only include non-empty values
+            for (const [key, value] of formData.entries()) {
+                const trimmedValue = String(value).trim();
+                // Skip empty strings, but keep "0" and "false" as valid values
+                if (trimmedValue !== '' && trimmedValue !== null && trimmedValue !== undefined) {
+                    cleanedParams[key] = trimmedValue;
+                }
+            }
+            
+            // Replace the request parameters with cleaned ones
+            // HTMX will use these to build the query string for GET requests
+            event.detail.parameters = cleanedParams;
+        }
+    });
 });
 
 document.addEventListener('click', function (event) {

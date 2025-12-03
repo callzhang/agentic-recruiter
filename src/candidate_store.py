@@ -243,7 +243,7 @@ def search_candidates_advanced(
 
     filter_expr = f" {'and' if strict else 'or'} ".join([c for c in identifiers if c])
     if conditions:
-        filter_expr = f" {filter_expr} and {'and'.join(conditions)}"
+        filter_expr = f" {filter_expr} and {'and'.join(conditions)}" if filter_expr else ' and '.join(conditions)
 
     sortable_fields = {
         "updated_at",

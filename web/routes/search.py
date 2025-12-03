@@ -43,14 +43,14 @@ async def search_candidates(
     job_applied: Optional[str] = Query(None, description="Job position filter"),
     stage: Optional[str] = Query(None, description="Candidate stage"),
     notified: Optional[str] = Query(None, description="Notified flag (true/false)"),
-    score_min: Optional[float] = Query(None, ge=0, le=10, description="Minimum analysis score"),
+    score_min: Optional[float] = Query(None, ge=0, le=10, description="Minimum analysis score (0-10)"),
     date_from: Optional[str] = Query(None, description="Updated at (from, YYYY-MM-DD)"),
     date_to: Optional[str] = Query(None, description="Updated at (to, YYYY-MM-DD)"),
     resume_contains: Optional[str] = Query(None, description="Resume text contains"),
     semantic_query: Optional[str] = Query(None, description="Semantic search query"),
     sort_by: str = Query("updated_at"),
     sort_dir: str = Query("desc"),
-    limit: int = Query(100, gt=0, le=500),
+    limit: int = Query(100, gt=0, le=500, description="Result limit (1-500)"),
 ):
     """Search for candidates with advanced filters and return a table view."""
 
