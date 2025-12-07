@@ -1331,9 +1331,29 @@ function initRuntimeCheck() {
                 
                 if (response.ok) {
                     const data = await response.json();
-                    // Service is running
-                    statusDot.className = 'w-2 h-2 bg-green-500 rounded-full animate-pulse';
-                    statusText.textContent = '服务运行中';
+                    // Check Zilliz connection status
+                    if (data.zilliz_connected === false) {
+                        // Zilliz connection failed - show error
+                        statusDot.className = 'w-2 h-2 bg-red-500 rounded-full animate-pulse';
+                        statusText.textContent = 'Zilliz 连接失败';
+                        statusText.className = 'text-sm text-red-600 font-semibold';
+                        
+                        // Show error toast (only once per session)
+                        if (!sessionStorage.getItem('zilliz_error_shown')) {
+                            const errorMsg = data.zilliz_error 
+                                ? `Zilliz 数据库连接失败: ${data.zilliz_error}` 
+                                : 'Zilliz 数据库连接失败，请检查配置';
+                            showToast(errorMsg, 'error');
+                            sessionStorage.setItem('zilliz_error_shown', 'true');
+                        }
+                    } else {
+                        // Service is running normally
+                        statusDot.className = 'w-2 h-2 bg-green-500 rounded-full animate-pulse';
+                        statusText.textContent = '服务运行中';
+                        statusText.className = 'text-sm text-gray-600';
+                        // Clear error flag if connection is restored
+                        sessionStorage.removeItem('zilliz_error_shown');
+                    }
                     statusText.className = 'text-sm text-gray-600';
                     
                     // Update version tag - always update, even if version is null/undefined

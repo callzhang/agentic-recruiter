@@ -405,10 +405,28 @@ class BossServiceAsync:
                     - new_message_count: Count of new messages
                     - new_greet_count: Count of new greeting requests
                     - version: Current git commit hash (short)
+                    - zilliz_connected: Boolean indicating if Zilliz connection is healthy
             """
             from src.runtime_utils import get_version_from_changelog
+            from src.candidate_store import _client
+            
             # Get version from CHANGELOG.md - do this first before any async operations
             version = get_version_from_changelog()
+            
+            # Check Zilliz connection health
+            zilliz_connected = False
+            zilliz_error = None
+            if _client:
+                try:
+                    # Try to list collections as a health check
+                    _client.list_collections()
+                    zilliz_connected = True
+                except Exception as exc:
+                    zilliz_connected = False
+                    zilliz_error = str(exc)
+                    logger.warning("Zilliz connection check failed: %s", exc)
+            else:
+                zilliz_error = "Client not initialized"
             
             page = await self._ensure_browser_session()
             stats = await chat_actions.get_chat_stats_action(page)
@@ -419,6 +437,8 @@ class BossServiceAsync:
                 "new_message_count": stats.get("new_message_count", 0),
                 "new_greet_count": stats.get("new_greet_count", 0),
                 "version": version,  # Always include version, even if None
+                "zilliz_connected": zilliz_connected,
+                "zilliz_error": zilliz_error,
             }
             logger.debug(f"Status response: {response_data}")
             return response_data

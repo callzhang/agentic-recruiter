@@ -136,9 +136,6 @@ def create_job_collection(collection_name: Optional[str] = None) -> bool:
     """
     collection_name = collection_name or _collection_name
     
-    if not _client:
-        logger.error("Zilliz client not available")
-        return False
     
     try:
         # Check if collection already exists
@@ -264,6 +261,7 @@ def get_job_by_id(job_id: str) -> Optional[Dict[str, Any]]:
     Returns:
         Current version of the job, or None if not found
     """
+    
     # Extract base job_id (remove _vN suffix if present)
     base_job_id = get_base_job_id(job_id)
     
@@ -298,6 +296,7 @@ def insert_job(**job_data) -> bool:
     Returns:
         bool: True if successful, False otherwise
     """
+    
     # Extract base job_id (remove any existing _vN suffix if present)
     base_job_id = get_base_job_id(job_data["id"])
     versioned_job_id = f"{base_job_id}_v1"
@@ -329,6 +328,7 @@ def update_job(job_id: str, **job_data) -> bool:
     Returns:
         bool: True if successful, False otherwise
     """
+    
     # Extract base job_id
     base_job_id = get_base_job_id(job_id)
     
@@ -372,6 +372,7 @@ def get_job_versions(base_job_id: str) -> List[Dict[str, Any]]:
     Returns:
         List of all versions sorted by created_at DESC (latest first)
     """
+    
     # Query all records where job_id starts with base_job_id_v
     results = _client.query(
         collection_name=_collection_name,
@@ -407,6 +408,7 @@ def switch_job_version(base_job_id: str, version: int) -> bool:
     Returns:
         bool: True if successful, False otherwise
     """
+    
     # Get all versions
     all_versions = get_job_versions(base_job_id)
     
@@ -476,6 +478,7 @@ def delete_job_version(base_job_id: str, version: int) -> bool:
     Returns:
         bool: True if successful, False otherwise
     """
+    
     versioned_job_id = f"{base_job_id}_v{version}"
     _client.delete(collection_name=_collection_name, filter=f'job_id == "{versioned_job_id}"')
     
@@ -492,6 +495,7 @@ def delete_job(job_id: str) -> bool:
     Returns:
         bool: True if successful, False otherwise
     """
+    
     # Extract base job_id
     base_job_id = get_base_job_id(job_id)
     

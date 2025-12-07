@@ -53,25 +53,29 @@ _readable_fields = [f.name for f in get_collection_schema() if f.dtype != DataTy
 # MilvusClient Connection
 # ------------------------------------------------------------------
 
-def _create_client() -> Optional[MilvusClient]:
-    """Create and return a MilvusClient instance, or None if connection fails."""
-    try:    
-        endpoint = _zilliz_config["endpoint"]
-        client = MilvusClient(
-            uri=endpoint,
-            token=_zilliz_config.get("token", ''),
-            user=_zilliz_config["user"],
-            password=_zilliz_config["password"],
-            secure=endpoint.startswith("https://"),
-        )
-        logger.debug("Connected to Zilliz endpoint %s", endpoint)
-        return client
-    except Exception as exc:
-        logger.error("Failed to create Zilliz client: %s", exc, exc_info=True)
-        return None
+def _create_client() -> MilvusClient:
+    """Create and return a MilvusClient instance.
+    
+    Raises:
+        RuntimeError: If connection fails, the application should not start.
+    """
+    endpoint = _zilliz_config["endpoint"]
+    client = MilvusClient(
+        uri=endpoint,
+        token=_zilliz_config.get("token", ''),
+        user=_zilliz_config["user"],
+        password=_zilliz_config["password"],
+        secure=endpoint.startswith("https://"),
+    )
+    logger.info("✅ Connected to Zilliz endpoint: %s", endpoint)
+    return client
 
-# Global client instance
-_client: Optional[MilvusClient] = _create_client()
+# Global client instance - raises RuntimeError if connection fails
+try:
+    _client: MilvusClient = _create_client()
+except Exception as exc:
+    logger.critical("❌ 初始化Zilliz客户端失败. 应用无法启动: %s", exc, exc_info=True)
+    raise RuntimeError(f"Zilliz 数据库启动失败: {exc}") from exc
 
 # ------------------------------------------------------------------
 # Embedding Generation
