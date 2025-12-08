@@ -21,7 +21,8 @@ from .global_logger import logger
 
 
 # Stage order used for conversion calculations
-STAGE_FLOW = ["GREET", "CHAT", "SEEK", "CONTACT"]
+# Import from unified stage definition
+from .candidate_stages import STAGE_FLOW, STAGE_SEEK, STAGE_PASS, normalize_stage
 HIGH_SCORE_THRESHOLD = 7
 
 
@@ -55,40 +56,74 @@ class ScoreAnalysis:
 
 
 def _score_quality(scores: List[int]) -> ScoreAnalysis:
+    """计算肖像得分，用于评估岗位画像质量。
+    
+    肖像得分由三个维度组成：
+    1. 分布均匀度（40%）：评估3-8分段的分布是否均匀
+    2. 高分占比（30%）：评估高分（≥7分）占比是否合理（不超过25%）
+    3. 中心分数（30%）：评估平均分是否接近理想值6分
+    
+    Args:
+        scores: 候选人评分列表（1-10分）
+        
+    Returns:
+        ScoreAnalysis: 包含各项统计指标和肖像得分的分析结果
+    """
     if not scores:
         return ScoreAnalysis(0, 0.0, 0.0, {}, 0.0, "暂无评分数据")
+    # 优先使用 numpy 向量化以加速大样本，若不可用则回退到纯 Python
+    try:
+        import numpy as np  # type: ignore
 
-    clipped = [min(10, max(1, int(s))) for s in scores]
-    dist = Counter(clipped)
-    avg = sum(clipped) / len(clipped)
+        arr = np.clip(np.array(scores, dtype=int), 1, 10)
+        avg = float(arr.mean())
+        dist_dict = {int(k): int(v) for k, v in zip(*np.unique(arr, return_counts=True))}
 
-    # Uniformity across 3–8
-    focus_scores = [dist.get(i, 0) for i in range(3, 9)]
-    focus_total = sum(focus_scores)
-    if focus_total:
-        max_dev = (max(focus_scores) - min(focus_scores)) / max(1, focus_total)
-        uniform_score = max(0.0, 1 - max_dev * 1.5)
-    else:
-        uniform_score = 0.4  # slight penalty if no data in 3–8 range
+        focus = arr[(arr >= 3) & (arr <= 8)]
+        if focus.size:
+            counts = np.bincount(focus, minlength=11)[3:9]
+            max_dev = (counts.max() - counts.min()) / max(1, counts.sum())
+            uniform_score = max(0.0, 1 - max_dev * 1.5)
+        else:
+            uniform_score = 0.4
 
-    high_share = dist_count(clipped, lambda s: s >= HIGH_SCORE_THRESHOLD) / len(clipped)
-    high_penalty = max(0.0, (high_share - 0.25) / 0.75)  # penalty only above 25%
+        high_share = float((arr >= HIGH_SCORE_THRESHOLD).mean())
+    except Exception:  # pragma: no cover - fallback path
+        clipped = [min(10, max(1, int(s))) for s in scores]
+        dist = Counter(clipped)
+        dist_dict = dict(dist)
+        avg = sum(clipped) / len(clipped)
+        focus_scores = [dist.get(i, 0) for i in range(3, 9)]
+        focus_total = sum(focus_scores)
+        if focus_total:
+            max_dev = (max(focus_scores) - min(focus_scores)) / max(1, focus_total)
+            uniform_score = max(0.0, 1 - max_dev * 1.5)
+        else:
+            uniform_score = 0.4
+        high_share = dist_count(clipped, lambda s: s >= HIGH_SCORE_THRESHOLD) / len(clipped)
+
+    # 高分占比超过25%开始惩罚
+    high_penalty = max(0.0, (high_share - 0.25) / 0.75)
     center_score = max(0.0, 1 - abs(avg - 6) / 6)
 
+    # 综合计算肖像得分：三个维度的加权平均
+    # 分布均匀度40% + (1-高分惩罚)30% + 中心分数30%
     quality = (uniform_score * 0.4) + ((1 - high_penalty) * 0.3) + (center_score * 0.3)
+    # 将得分映射到1-10分范围，保留1位小数
     quality_score = round(max(1.0, min(10.0, quality * 10)), 1)
 
+    # 根据计算结果生成评语
     comment = (
-        "分布集中在高分段，需优化画像" if high_penalty > 0.05
-        else "分布均衡，画像质量良好" if uniform_score > 0.6
-        else "分布略偏，可再细化画像"
+        "分布集中在高分段，需优化画像" if high_penalty > 0.05  # 高分占比过高
+        else "分布均衡，画像质量良好" if uniform_score > 0.6  # 分布均匀
+        else "分布略偏，可再细化画像"  # 其他情况
     )
 
     return ScoreAnalysis(
-        count=len(clipped),
+        count=sum(dist_dict.values()),
         average=round(avg, 2),
         high_share=round(high_share, 3),
-        distribution=dict(dist),
+        distribution=dist_dict,
         quality_score=quality_score,
         comment=comment,
     )
@@ -111,7 +146,7 @@ def build_daily_series(candidates: List[Dict[str, Any]], days: int = 7) -> List[
         if day < start:
             continue
         bucket[day]["new"] += 1
-        if (cand.get("stage") or "").upper() == "SEEK":
+        if normalize_stage(cand.get("stage")) == STAGE_SEEK:
             bucket[day]["seek"] += 1
 
     series = []
@@ -123,7 +158,8 @@ def build_daily_series(candidates: List[Dict[str, Any]], days: int = 7) -> List[
 
 
 def conversion_table(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    stage_counts = Counter((cand.get("stage") or "").upper() for cand in candidates)
+    # Normalize stage names using unified stage utilities
+    stage_counts = Counter(normalize_stage(cand.get("stage")) or "" for cand in candidates)
     rows: List[Dict[str, Any]] = []
     for idx, stage in enumerate(STAGE_FLOW):
         count = stage_counts.get(stage, 0)
@@ -137,11 +173,11 @@ def conversion_table(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             "rate": round(rate, 3),
         })
     # Track PASS separately to show rejection ratio
-    pass_count = stage_counts.get("PASS", 0)
+    pass_count = stage_counts.get(STAGE_PASS, 0)
     if pass_count:
-        total_screened = pass_count + sum(stage_counts[s] for s in ("GREET", "CHAT", "SEEK", "CONTACT"))
+        total_screened = pass_count + sum(stage_counts[s] for s in STAGE_FLOW)
         rows.append({
-            "stage": "PASS",
+            "stage": STAGE_PASS,
             "count": pass_count,
             "previous": total_screened - pass_count,
             "rate": round(pass_count / max(total_screened, 1), 3),
@@ -149,14 +185,23 @@ def conversion_table(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return rows
 
 
-def fetch_job_candidates(job_name: str, limit: int = 2000, days: int | None = None) -> List[Dict[str, Any]]:
+def fetch_job_candidates(job_name: str, days: int | None = None) -> List[Dict[str, Any]]:
+    """Fetch candidates for a job with optional time range and limit.
+    
+    Args:
+        job_name: Job position name
+        limit: Maximum number of candidates to return. If None, uses a large default (10000)
+        days: Number of days to look back. If None, fetches all candidates
+    
+    Returns:
+        List of candidate dictionaries
+    """
     updated_from = None
     if days:
         start_dt = datetime.now() - timedelta(days=days)
         updated_from = start_dt.isoformat()
     return search_candidates_advanced(
         job_applied=job_name,
-        limit=limit,
         fields=["candidate_id", "job_applied", "stage", "analysis", "updated_at"],
         updated_from=updated_from,
         sort_by="updated_at",
@@ -165,7 +210,9 @@ def fetch_job_candidates(job_name: str, limit: int = 2000, days: int | None = No
 
 
 def compile_job_stats(job_name: str) -> Dict[str, Any]:
-    candidates = fetch_job_candidates(job_name, limit=2000)
+    # 获取最近一周的候选人数据用于统计
+    # 不设置 limit，使用默认的 10000 以获取所有符合条件的候选人
+    candidates = fetch_job_candidates(job_name, days=7)
     # Score analysis uses latest 100
     recent_scores = [
         (cand.get("analysis") or {}).get("overall")
@@ -177,21 +224,26 @@ def compile_job_stats(job_name: str) -> Dict[str, Any]:
     daily = build_daily_series(candidates, days=7)
     conversions = conversion_table(candidates)
 
-    # Today stats for "best record"
-    today = datetime.now().date()
-    today_candidates = [c for c in candidates if _parse_dt(c.get("updated_at")) and _parse_dt(c.get("updated_at")).date() == today]
-    today_high = dist_count(
+    # 近7天统计数据（用于进展分计算和"best record"评选）
+    # candidates 已经是最近7天的数据（通过 days=7 获取）
+    recent_7days_candidates = candidates  # 最近7天的所有候选人
+    recent_7days_high = dist_count(
         [
             (c.get("analysis") or {}).get("overall")
-            for c in today_candidates
+            for c in recent_7days_candidates
             if (c.get("analysis") or {}).get("overall") is not None
         ],
         lambda s: s >= HIGH_SCORE_THRESHOLD,
     )
-    # 进展分：今日进展到SEEK阶段的候选人数
-    today_seek = sum(1 for c in today_candidates if (c.get("stage") or "").upper() == "SEEK")
-    # 使用进展分而不是画像质评分
-    today_metric = (len(today_candidates) + today_high) * max(today_seek, 1)
+    # 进展分：近7天进展到SEEK阶段的候选人数
+    recent_7days_seek = sum(1 for c in recent_7days_candidates if normalize_stage(c.get("stage")) == STAGE_SEEK)
+    # 进展分 = (近7天候选人数量 + SEEK阶段人数) × 肖像质量分 / 10 (归一化)
+    # 肖像质量分范围是1-10，除以10归一化到0-1范围
+    recent_7days_metric = (len(recent_7days_candidates) + recent_7days_seek) * score_summary.quality_score / 10
+    
+    # 今日数据（用于显示今日新增）
+    today = datetime.now().date()
+    today_candidates = [c for c in candidates if _parse_dt(c.get("updated_at")) and _parse_dt(c.get("updated_at")).date() == today]
 
     return {
         "job": job_name,
@@ -199,10 +251,10 @@ def compile_job_stats(job_name: str) -> Dict[str, Any]:
         "conversions": conversions,
         "score_summary": score_summary,
         "today": {
-            "count": len(today_candidates),
-            "high": today_high,
-            "seek": today_seek,
-            "metric": round(today_metric, 2),
+            "count": len(recent_7days_candidates),  # 近7天候选人数量（用于进展分计算）
+            "high": recent_7days_high,  # 近7天高分人数
+            "seek": recent_7days_seek,  # 近7天SEEK人数
+            "metric": round(recent_7days_metric, 2),  # 进展分（基于近7天）
         },
         "total": len(candidates),
     }

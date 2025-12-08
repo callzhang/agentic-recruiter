@@ -291,7 +291,7 @@ def search_candidates_advanced(
     reverse = sort_direction.lower() != "asc"
     candidates.sort(key=lambda c: c.get(sort_by_normalized) or "", reverse=reverse)
 
-    return candidates[:limit]
+    return candidates[:limit] if limit else candidates
         
 
 truncate_field = lambda string, length: string.encode('utf-8')[:length].decode('utf-8', errors='ignore').strip()

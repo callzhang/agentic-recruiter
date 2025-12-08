@@ -77,7 +77,7 @@ class ManagerState(ManagerInputState):
 class RecruiterState(BaseModel):
     """Recruiter agent state to process a single candidate"""
     # mode: Literal["recommend", "greet", "chat", "followup"] = Field(description="The mode to look for candidates", default="recommend")
-    stage: Literal["GREET", "PASS", "CHAT", "SEEK", "CONTACT"] = Field(description="The stage of the candidate", default=None)
+    stage: Literal["PASS", "CHAT", "SEEK", "CONTACT"] = Field(description="The stage of the candidate", default=None)
     candidate: Candidate = Field(description="The candidate to process")
     # job_info: Dict = Field(description="The job description to analyze the candidate")
     # assistant_info: Dict = Field(description="The assistant persona to analyze the candidate")

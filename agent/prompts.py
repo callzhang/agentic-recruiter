@@ -1,12 +1,8 @@
 
 import json
 
-STAGES = {
-    "PASS": "< 7, 不匹配，已拒绝",
-    "CHAT": ">= 7, 沟通中",
-    "SEEK": ">= 9, 强匹配，主动寻求联系方式",
-    # "CONTACT": "已获得联系方式",
-}
+# Import unified stage definitions
+from src.candidate_stages import STAGE_DESCRIPTIONS as STAGES
 
 MANAGER_PROMPT = """
 你是一个招聘总监，负责管理招聘顾问的招聘流程。你的任务是：
@@ -49,14 +45,15 @@ RECRUITER_PROMPT = f"""
     - 说明我们发消息后，候选人没有回复，因此需要继续跟进。如果距离上条信息已经过去1天以上，可以再发送一条跟进信息(send_chat_message_tool)。
 ---
 **Analyze结果的评分标准,相应动作,阶段转换**：
-- 如果overall_score<7 则标记为`PASS`阶段，并结束流程，这时候不需要调用工具，只需要给manager简述结果。
-- 如果overall_score>=7 则标记为`GREET`阶段，
+- 如果overall_score < chat_threshold 则标记为`PASS`阶段，并结束流程，这时候不需要调用工具，只需要给manager简述结果。
+- 如果overall_score >= chat_threshold 且 < borderline_threshold 则标记为`CHAT`阶段，
     - 如果mode=recommend，则和候选人打招呼(greet_candidate_tool)
     - 如果mode=chat，则和候选人交流，深入挖掘简历细节(send_chat_message_tool)
     - 并请求完整简历(request_full_resume_tool)。
-- 如果overall_score>=9，则标记为`SEEK`阶段，
+- 如果overall_score >= borderline_threshold 且 < seek_threshold 则标记为`SEEK`阶段，
     - 这时候需要请求候选人联系方式(request_contact_message_tool)。
     - 并给候选人发一条消息吸引候选人回复，说明为什么符合岗位要求，并且邀请候选人进一步电话或者短信沟通(send_chat_message_tool)。
+- 如果overall_score >= seek_threshold 则标记为`CONTACT`阶段，已获得联系方式。
 ---
 **沟通要点和注意事项**
 - 不要连续给候选人连续发送过多消息，以免打扰候选人。每发出一条信息后，等待候选人回复再发出下一条信息。

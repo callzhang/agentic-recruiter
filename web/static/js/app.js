@@ -1489,11 +1489,14 @@ function initRuntimeCheck() {
 }
 
 // ============================================================================
-// Daily Chart Component (Bar Chart for 7-day new/SEEK stats)
+// Daily Chart Component (Bar Chart for 7-day new/SEEK stats using Chart.js)
 // ============================================================================
 
+// Store chart instances to allow proper cleanup
+const chartInstances = new Map();
+
 /**
- * Render bar chart for daily stats
+ * Render bar chart for daily stats using Chart.js
  * @param {HTMLElement} container - Container element with data-daily attribute
  */
 function renderDailyChart(container) {
@@ -1503,12 +1506,35 @@ function renderDailyChart(container) {
     const dailyData = JSON.parse(dailyDataStr);
     if (!dailyData || dailyData.length === 0) return;
     
-    const chartContainer = container.querySelector('.flex.items-end');
-    if (!chartContainer) return;
+    // Check if Chart.js is available
+    if (typeof Chart === 'undefined') {
+        console.error('Chart.js is not loaded');
+        return;
+    }
     
-    // Calculate max value for scaling
-    const maxValue = Math.max(...dailyData.map(d => Math.max(d.new || 0, d.seek || 0)), 1);
-    const chartHeight = 200; // pixels
+    // Find or create canvas element
+    let canvas = container.querySelector('canvas');
+    if (!canvas) {
+        // Remove old HTML chart if exists
+        const oldChart = container.querySelector('.flex.items-end');
+        if (oldChart) {
+            oldChart.remove();
+        }
+        
+        // Create canvas element
+        canvas = document.createElement('canvas');
+        canvas.style.maxHeight = '250px';
+        container.insertBefore(canvas, container.firstChild);
+    }
+    
+    // Destroy existing chart if it exists
+    const chartId = container.getAttribute('data-chart-id') || `chart-${Date.now()}-${Math.random()}`;
+    container.setAttribute('data-chart-id', chartId);
+    
+    if (chartInstances.has(chartId)) {
+        chartInstances.get(chartId).destroy();
+        chartInstances.delete(chartId);
+    }
     
     // Format date (MM-DD)
     function formatDate(dateStr) {
@@ -1520,33 +1546,95 @@ function renderDailyChart(container) {
         }
     }
     
-    // Generate chart bars
-    const chartHTML = dailyData.map(d => {
-        const newHeight = maxValue > 0 ? (chartHeight * (d.new || 0) / maxValue) : 0;
-        const seekHeight = maxValue > 0 ? (chartHeight * (d.seek || 0) / maxValue) : 0;
-        
-        return `
-            <div class="flex flex-col items-center flex-1">
-                <div class="w-full flex items-end justify-center gap-1 h-48 mb-2">
-                    <div class="flex-1 flex flex-col items-center justify-end gap-0.5">
-                        <div class="w-full bg-blue-200 rounded-t hover:bg-blue-300 transition cursor-pointer" 
-                             style="height: ${newHeight}px; min-height: ${(d.new || 0) > 0 ? 4 : 0}px;"
-                             title="新增: ${d.new || 0}"></div>
-                        <div class="w-full bg-indigo-400 rounded-t hover:bg-indigo-500 transition cursor-pointer" 
-                             style="height: ${seekHeight}px; min-height: ${(d.seek || 0) > 0 ? 4 : 0}px;"
-                             title="SEEK: ${d.seek || 0}"></div>
-                    </div>
-                </div>
-                <div class="text-xs text-gray-600 text-center">${formatDate(d.date)}</div>
-                <div class="text-xs text-gray-500 text-center mt-1">
-                    <div class="text-blue-600 font-semibold">${d.new || 0}</div>
-                    <div class="text-indigo-600 font-semibold">${d.seek || 0}</div>
-                </div>
-            </div>
-        `;
-    }).join('');
+    // Prepare data
+    const labels = dailyData.map(d => formatDate(d.date));
+    const newData = dailyData.map(d => d.new || 0);
+    const seekData = dailyData.map(d => d.seek || 0);
     
-    chartContainer.innerHTML = chartHTML;
+    // Create Chart.js bar chart
+    const chart = new Chart(canvas, {
+        type: 'bar',
+        data: {
+            labels: labels,
+            datasets: [
+                {
+                    label: '新增',
+                    data: newData,
+                    backgroundColor: 'rgba(59, 130, 246, 0.6)', // blue-500 with opacity
+                    borderColor: 'rgba(59, 130, 246, 1)',
+                    borderWidth: 1,
+                    borderRadius: 4,
+                },
+                {
+                    label: 'SEEK',
+                    data: seekData,
+                    backgroundColor: 'rgba(99, 102, 241, 0.6)', // indigo-500 with opacity
+                    borderColor: 'rgba(99, 102, 241, 1)',
+                    borderWidth: 1,
+                    borderRadius: 4,
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: {
+                    display: true,
+                    position: 'top',
+                    labels: {
+                        usePointStyle: true,
+                        padding: 15,
+                        font: {
+                            size: 12
+                        }
+                    }
+                },
+                tooltip: {
+                    mode: 'index',
+                    intersect: false,
+                    callbacks: {
+                        label: function(context) {
+                            return `${context.dataset.label}: ${context.parsed.y}`;
+                        }
+                    }
+                }
+            },
+            scales: {
+                x: {
+                    stacked: false,
+                    grid: {
+                        display: false
+                    },
+                    ticks: {
+                        font: {
+                            size: 11
+                        }
+                    }
+                },
+                y: {
+                    beginAtZero: true,
+                    stacked: false,
+                    grid: {
+                        color: 'rgba(0, 0, 0, 0.05)'
+                    },
+                    ticks: {
+                        stepSize: 1,
+                        font: {
+                            size: 11
+                        }
+                    }
+                }
+            },
+            interaction: {
+                mode: 'index',
+                intersect: false
+            }
+        }
+    });
+    
+    // Store chart instance
+    chartInstances.set(chartId, chart);
 }
 
 // Initialize charts when DOM is ready or after HTMX swap
@@ -1629,13 +1717,20 @@ function renderJobStats(data) {
     const container = document.getElementById('job-stats');
     if (!container) return;
     
-    const jobs = data.jobs || [];
+    let jobs = data.jobs || [];
     const best = data.best;
     
     if (jobs.length === 0) {
         container.innerHTML = '<div class="text-gray-600">暂无数据，先去处理候选人吧。</div>';
         return;
     }
+    
+    // 按进展分倒序排列（从高到低）
+    jobs = jobs.sort((a, b) => {
+        const metricA = (a.today && a.today.metric) || 0;
+        const metricB = (b.today && b.today.metric) || 0;
+        return metricB - metricA; // 倒序：高进展分在前
+    });
     
     let html = '';
     
@@ -1648,20 +1743,21 @@ function renderJobStats(data) {
                     <div>
                         <p class="text-sm opacity-80">今日最优秀战绩</p>
                         <h3 class="text-2xl font-bold">${best.job}</h3>
-                        <p class="mt-2 text-lg">得分 ${best.today.metric.toFixed(1)} = (今日 ${best.today.count} 人 + 高分 ${best.today.high} 人) × 进展分 ${best.today.seek} 人</p>
+                        <p class="mt-2 text-lg">进展分 ${best.today.metric.toFixed(1)} = (近7日 ${best.today.count} 人 + SEEK ${best.today.seek} 人) × 肖像得分 ${ss.quality_score} ÷ 10</p>
                         <p class="text-sm opacity-80">高分占比 ${(ss.high_share * 100).toFixed(1)}% · 平均分 ${ss.average}</p>
                     </div>
                     <div class="text-right">
-                        <p class="text-sm opacity-80">最近100人评分</p>
+                        <p class="text-sm opacity-80">肖像得分</p>
                         <p class="text-4xl font-extrabold">${ss.quality_score}</p>
-                        <p class="text-sm opacity-80">${ss.comment}</p>
+                        <p class="text-xs opacity-70 mt-1">分布均匀度40% + 高分占比30% + 中心分数30%</p>
+                        <p class="text-sm opacity-80 mt-2">${ss.comment}</p>
                     </div>
                 </div>
             </div>
         `;
     }
     
-    // Render job cards
+    // Render job cards (已按进展分倒序排列)
     jobs.forEach(job => {
         const ss = job.score_summary;
         const dailyData = job.daily || [];
@@ -1683,29 +1779,23 @@ function renderJobStats(data) {
                         <h3 class="text-xl font-bold text-gray-800">${job.job}</h3>
                         <p class="text-sm text-gray-500">总候选人 ${job.total} · 高分占比 ${(ss.high_share * 100).toFixed(1)}% · 画像质量 ${ss.quality_score}/10</p>
                         <p class="text-sm text-gray-500">评语：${ss.comment}</p>
+                        ${job.today ? `
+                        <p class="text-sm text-gray-600 mt-2">
+                            <span class="font-semibold">进展分 ${job.today.metric.toFixed(1)}</span> = 
+                            (近7日 ${job.today.count} 人 + SEEK ${job.today.seek} 人) × 肖像得分 ${ss.quality_score} ÷ 10
+                        </p>
+                        ` : ''}
                     </div>
                     <div class="text-right">
-                        <p class="text-sm text-gray-500">最近100人平均分</p>
-                        <p class="text-3xl font-extrabold text-indigo-600">${ss.average}</p>
+                        <p class="text-sm text-gray-500">肖像得分</p>
+                        <p class="text-3xl font-extrabold text-indigo-600">${ss.quality_score}</p>
                     </div>
                 </div>
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
                         <h4 class="text-sm font-semibold text-gray-700 mb-2">近7日新增/SEEK</h4>
-                        <div class="daily-chart-container" data-daily='${JSON.stringify(dailyData)}'>
-                            <div class="flex items-end gap-2 p-4 bg-gray-50 rounded-lg min-h-[250px]">
-                                <!-- Chart will be rendered by JavaScript -->
-                            </div>
-                            <div class="flex items-center justify-center gap-4 mt-3 text-xs">
-                                <div class="flex items-center gap-1">
-                                    <div class="w-3 h-3 bg-blue-200 rounded"></div>
-                                    <span class="text-gray-600">新增</span>
-                                </div>
-                                <div class="flex items-center gap-1">
-                                    <div class="w-3 h-3 bg-indigo-400 rounded"></div>
-                                    <span class="text-gray-600">SEEK</span>
-                                </div>
-                            </div>
+                        <div class="daily-chart-container p-4 bg-gray-50 rounded-lg" data-daily='${JSON.stringify(dailyData)}' style="min-height: 250px;">
+                            <!-- Chart.js canvas will be inserted here -->
                         </div>
                     </div>
                     <div>

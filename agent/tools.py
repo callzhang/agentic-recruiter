@@ -243,12 +243,10 @@ def analyze_resume_tool(
         'summary': summary,
         'followup_tips': followup_tips
     }
-    if overall < 7:
-        stage = 'PASS'
-    elif overall < 9:
-        stage = 'GREET'
-    else:
-        stage = 'SEEK'
+    # Use unified stage determination from candidate_stages
+    from src.candidate_stages import determine_stage
+    # Default thresholds: chat_threshold=5.0, borderline_threshold=7.0, seek_threshold=9.0
+    stage = determine_stage(overall, chat_threshold=5.0, borderline_threshold=7.0, seek_threshold=9.0)
     return Command(
         update={
             'stage': stage,
@@ -274,7 +272,8 @@ def notify_hr_tool(title: str, report: str, stage: str, contact_info: str) -> bo
     Usage:
         Call this tool when the candidate is in SEEK stage and contact information is received from the candidate
     """
-    if stage != 'SEEK':
+    from src.candidate_stages import STAGE_SEEK
+    if stage != STAGE_SEEK:
         raise ValueError(f"Candidate is not in SEEK stage: {stage}")
 
     runtime = get_runtime(RecruiterState)
@@ -433,7 +432,8 @@ def request_contact_tool(chat_id: str, tool_call_id: Annotated[str, InjectedTool
     """
     runtime = get_runtime(RecruiterState)
     stage = runtime.state.stage
-    if stage != 'SEEK':
+    from src.candidate_stages import STAGE_SEEK
+    if stage != STAGE_SEEK:
         raise ValueError(f"Candidate is not in SEEK stage: {stage}")
     web_portal = runtime.context.web_portal
     result = _call_api("POST", f"{web_portal}/chat/contact/request", {"chat_id": chat_id})

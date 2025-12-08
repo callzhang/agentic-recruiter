@@ -14,13 +14,8 @@ from .global_logger import logger
 from .assistant_utils import _openai_client
 from pydantic import BaseModel, Field
 
-# Constants
-STAGES = [
-    "PASS", # < chat_threshold,不匹配，已拒绝
-    "CHAT", # >= chat_threshold,沟通中
-    "SEEK", # >= borderline_threshold,寻求联系方式
-    "CONTACT", # >= seek_threshold,已获得联系方式
-]
+# Constants - Import from unified stage definition
+from .candidate_stages import ALL_STAGES as STAGES, STAGE_DESCRIPTIONS
 ACTIONS = {
     # generate message actions
     "CHAT_ACTION": "请根据上述沟通历史，生成下一条跟进消息。重点在于挖掘简历细节，判断候选人是否符合岗位要求，请直接提出问题，让候选人回答经验细节，或者澄清模棱两可的地方", # 打招呼 询问简历细节,
