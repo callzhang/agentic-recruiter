@@ -726,19 +726,15 @@ async def request_contact(
         candidate = get_candidate_by_dict({"chat_id": chat_id}, strict=False)
     
     # Update candidate metadata with contact info
+    # metadata merging is now handled in upsert_candidate()
     if candidate:
-        existing_metadata = candidate.get("metadata", {}) or {}
-        # Merge with existing metadata to preserve other fields
-        updated_metadata = {
-            **existing_metadata,
-            "phone_number": phone_number,
-            "wechat_number": wechat_number,
-        }
-        
         upsert_candidate(
             candidate_id=candidate.get("candidate_id"),
             chat_id=chat_id,
-            metadata=updated_metadata,
+            metadata={
+                "phone_number": phone_number,
+                "wechat_number": wechat_number,
+            },
         )
         
         return JSONResponse({

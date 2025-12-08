@@ -257,8 +257,9 @@ async function process_candidate() {
                         is_full_analysis = analysis.resume_type === 'full';
                         current_score = analysis?.overall || current_score;
                     }
-                    // Step 4c: Send notification if analysis was updated
                     if (is_full_analysis && current_score >= borderline_threshold) {
+                        // Step 4c: Send notification if analysis was updated
+                        debugger;
                         await sendDingNotification(analysis, name, getCandidateData('job_applied'));
                         await generateMessage();
                         await greetAndSendMessage();
@@ -402,25 +403,34 @@ async function greetAndSendMessage() {
         return '已经打招呼过了';
     }
     
-    try {
-        const values = getCandidateData();
-        values.message = message;
+    // Check if last message's role is "user" before sending
+    const values = getCandidateData();
+    const metadata = values.metadata;
+    
+    if (metadata && metadata.history && Array.isArray(metadata.history) && metadata.history.length > 0) {
+        const lastMessage = metadata.history[metadata.history.length - 1];
+        const lastRole = lastMessage.role;
         
-        await htmxAjaxPromise('POST', '/candidates/send', {
-            target: '#message-content',
-            swap: 'none',
-            values: values
-        });
-        // Update to CHAT stage (not GREET, as GREET is not in STAGES)
-        const currentStage = getCandidateData('stage');
-        await updateCandidateData({
-            stage: currentStage || 'CHAT',
-            greeted: true
-        });
-    } catch (err) {
-        showToast('消息发送失败！', 'error');
-        throw err;
+        if (lastRole !== 'user') {
+            showToast('等待候选人回复后再发送消息', 'info');
+            return '等待候选人回复';
+        }
     }
+    
+
+    values.message = message;
+    
+    await htmxAjaxPromise('POST', '/candidates/send', {
+        target: '#message-content',
+        swap: 'none',
+        values: values
+    });
+    // Update to CHAT stage
+    const currentStage = getCandidateData('stage');
+    await updateCandidateData({
+        stage: currentStage || 'CHAT',
+        greeted: true
+    });
 }
 
 
@@ -486,18 +496,14 @@ async function requestContact() {
     console.log('Contact requested:', data);
     
     // Update candidate data with contact info in metadata
+    // metadata merging is now handled in backend upsert_candidate()
     if (data && (data.phone_number || data.wechat_number)) {
-        const currentData = getCandidateData();
-        const existingMetadata = currentData.metadata || {};
-        const updatedMetadata = {
-            ...existingMetadata,
-            phone_number: data.phone_number || existingMetadata.phone_number,
-            wechat_number: data.wechat_number || existingMetadata.wechat_number,
-        };
-        
         await updateCandidateData({
             stage: 'CONTACT',
-            metadata: updatedMetadata
+            metadata: {
+                phone_number: data.phone_number,
+                wechat_number: data.wechat_number,
+            }
         });
         
         // Update contact info display dynamically

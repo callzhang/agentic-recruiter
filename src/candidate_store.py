@@ -324,6 +324,13 @@ def upsert_candidate(**candidate) -> Optional[str]:
         candidate_id = stored_candidate.get('candidate_id') if stored_candidate else None
         candidate['candidate_id'] = candidate_id
     
+    # Merge metadata if updating existing candidate and metadata is being updated
+    if candidate_id and stored_candidate and "metadata" in candidate:
+        existing_metadata = stored_candidate.get("metadata", {}) or {}
+        new_metadata = candidate.get("metadata", {}) or {}
+        existing_metadata.update(new_metadata) 
+        candidate["metadata"] = existing_metadata
+    
     # fixing fields types and filtering only valid fields
     candidate['updated_at'] = datetime.now().isoformat()
     candidate = {k: v for k, v in candidate.items() if k in _all_fields and (v or v == 0)}

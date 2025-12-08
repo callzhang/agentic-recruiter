@@ -71,36 +71,23 @@ def _score_quality(scores: List[int]) -> ScoreAnalysis:
     """
     if not scores:
         return ScoreAnalysis(0, 0.0, 0.0, {}, 0.0, "暂无评分数据")
-    # 优先使用 numpy 向量化以加速大样本，若不可用则回退到纯 Python
-    try:
-        import numpy as np  # type: ignore
+    
+    # 使用 numpy 向量化以加速大样本计算
+    import numpy as np  # type: ignore
 
-        arr = np.clip(np.array(scores, dtype=int), 1, 10)
-        avg = float(arr.mean())
-        dist_dict = {int(k): int(v) for k, v in zip(*np.unique(arr, return_counts=True))}
+    arr = np.clip(np.array(scores, dtype=int), 1, 10)
+    avg = float(arr.mean())
+    dist_dict = {int(k): int(v) for k, v in zip(*np.unique(arr, return_counts=True))}
 
-        focus = arr[(arr >= 3) & (arr <= 8)]
-        if focus.size:
-            counts = np.bincount(focus, minlength=11)[3:9]
-            max_dev = (counts.max() - counts.min()) / max(1, counts.sum())
-            uniform_score = max(0.0, 1 - max_dev * 1.5)
-        else:
-            uniform_score = 0.4
+    focus = arr[(arr >= 3) & (arr <= 8)]
+    if focus.size:
+        counts = np.bincount(focus, minlength=11)[3:9]
+        max_dev = (counts.max() - counts.min()) / max(1, counts.sum())
+        uniform_score = max(0.0, 1 - max_dev * 1.5)
+    else:
+        uniform_score = 0.1
 
-        high_share = float((arr >= HIGH_SCORE_THRESHOLD).mean())
-    except Exception:  # pragma: no cover - fallback path
-        clipped = [min(10, max(1, int(s))) for s in scores]
-        dist = Counter(clipped)
-        dist_dict = dict(dist)
-        avg = sum(clipped) / len(clipped)
-        focus_scores = [dist.get(i, 0) for i in range(3, 9)]
-        focus_total = sum(focus_scores)
-        if focus_total:
-            max_dev = (max(focus_scores) - min(focus_scores)) / max(1, focus_total)
-            uniform_score = max(0.0, 1 - max_dev * 1.5)
-        else:
-            uniform_score = 0.4
-        high_share = dist_count(clipped, lambda s: s >= HIGH_SCORE_THRESHOLD) / len(clipped)
+    high_share = float((arr >= HIGH_SCORE_THRESHOLD).mean())
 
     # 高分占比超过25%开始惩罚
     high_penalty = max(0.0, (high_share - 0.25) / 0.75)
@@ -114,7 +101,7 @@ def _score_quality(scores: List[int]) -> ScoreAnalysis:
 
     # 根据计算结果生成评语
     comment = (
-        "分布集中在高分段，需优化画像" if high_penalty > 0.05  # 高分占比过高
+        "分布集中在高分段，需优化画像" if high_penalty > 0.1  # 高分占比过高
         else "分布均衡，画像质量良好" if uniform_score > 0.6  # 分布均匀
         else "分布略偏，可再细化画像"  # 其他情况
     )
@@ -158,30 +145,65 @@ def build_daily_series(candidates: List[Dict[str, Any]], days: int = 7) -> List[
 
 
 def conversion_table(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Calculate stage conversion rates.
+    
+    Stage flow: PASS → CHAT → SEEK → CONTACT
+    Conversion rate formula: (current_stage + all_following_stages) / previous_stage_count
+    
+    - PASS: First stage, rejected candidates (score < chat_threshold)
+    - CHAT: From total screened (score >= chat_threshold)
+    - SEEK: From CHAT (score >= borderline_threshold)
+    - CONTACT: From SEEK (score >= seek_threshold)
+    """
     # Normalize stage names using unified stage utilities
     stage_counts = Counter(normalize_stage(cand.get("stage")) or "" for cand in candidates)
     rows: List[Dict[str, Any]] = []
-    for idx, stage in enumerate(STAGE_FLOW):
-        count = stage_counts.get(stage, 0)
-        prev = stage_counts.get(STAGE_FLOW[idx - 1], 0) if idx > 0 else 0
-        denominator = count + prev if idx > 0 else max(count, 1)
-        rate = count / denominator if denominator else 0.0
-        rows.append({
-            "stage": stage,
-            "count": count,
-            "previous": prev,
-            "rate": round(rate, 3),
-        })
-    # Track PASS separately to show rejection ratio
+    
+    # Calculate stage counts
     pass_count = stage_counts.get(STAGE_PASS, 0)
-    if pass_count:
-        total_screened = pass_count + sum(stage_counts[s] for s in STAGE_FLOW)
-        rows.append({
-            "stage": STAGE_PASS,
-            "count": pass_count,
-            "previous": total_screened - pass_count,
-            "rate": round(pass_count / max(total_screened, 1), 3),
-        })
+    chat_count = stage_counts.get("CHAT", 0)
+    seek_count = stage_counts.get("SEEK", 0)
+    contact_count = stage_counts.get("CONTACT", 0)
+    
+    # Calculate total screened (all candidates except those without stage)
+    total_screened = pass_count + chat_count + seek_count + contact_count
+    
+    # PASS: First stage
+    # 转化率 = (PASS + CHAT + SEEK + CONTACT) / 总筛选人数 = 100%
+    rows.append({
+        "stage": STAGE_PASS,
+        "count": pass_count,
+        "previous": total_screened,  # Total screened is the "previous" for PASS
+        "rate": round(pass_count / (total_screened or 1), 3),
+    })
+    
+    # CHAT: Second stage
+    # 转化率 = (CHAT + SEEK + CONTACT) / 总筛选人数
+    rows.append({
+        "stage": "CHAT",
+        "count": chat_count,
+        "previous": total_screened,  # From total screened
+        "rate": round((chat_count + seek_count + contact_count) / (total_screened or 1), 3),
+    })
+    
+    # SEEK: Third stage
+    # 转化率 = (SEEK + CONTACT) / CHAT人数
+    rows.append({
+        "stage": "SEEK",
+        "count": seek_count,
+        "previous": chat_count,  # From CHAT
+        "rate": round((seek_count + contact_count) / (chat_count or 1), 3),
+    })
+    
+    # CONTACT: Fourth stage
+    # 转化率 = CONTACT / SEEK人数
+    rows.append({
+        "stage": "CONTACT",
+        "count": contact_count,
+        "previous": seek_count,  # From SEEK
+        "rate": round(contact_count / (seek_count or 1), 3),
+    })
+    
     return rows
 
 
