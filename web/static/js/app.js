@@ -1354,7 +1354,6 @@ function initRuntimeCheck() {
                         // Clear error flag if connection is restored
                         sessionStorage.removeItem('zilliz_error_shown');
                     }
-                    statusText.className = 'text-sm text-gray-600';
                     
                     // Update version tag - always update, even if version is null/undefined
                     console.log('Status response data:', data); // Debug log
@@ -1488,6 +1487,306 @@ function initRuntimeCheck() {
         }
     });
 }
+
+// ============================================================================
+// Daily Chart Component (Bar Chart for 7-day new/SEEK stats)
+// ============================================================================
+
+/**
+ * Render bar chart for daily stats
+ * @param {HTMLElement} container - Container element with data-daily attribute
+ */
+function renderDailyChart(container) {
+    const dailyDataStr = container.getAttribute('data-daily');
+    if (!dailyDataStr) return;
+    
+    const dailyData = JSON.parse(dailyDataStr);
+    if (!dailyData || dailyData.length === 0) return;
+    
+    const chartContainer = container.querySelector('.flex.items-end');
+    if (!chartContainer) return;
+    
+    // Calculate max value for scaling
+    const maxValue = Math.max(...dailyData.map(d => Math.max(d.new || 0, d.seek || 0)), 1);
+    const chartHeight = 200; // pixels
+    
+    // Format date (MM-DD)
+    function formatDate(dateStr) {
+        try {
+            const date = new Date(dateStr);
+            return `${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+        } catch {
+            return dateStr.split('T')[0].slice(5) || dateStr.slice(-5);
+        }
+    }
+    
+    // Generate chart bars
+    const chartHTML = dailyData.map(d => {
+        const newHeight = maxValue > 0 ? (chartHeight * (d.new || 0) / maxValue) : 0;
+        const seekHeight = maxValue > 0 ? (chartHeight * (d.seek || 0) / maxValue) : 0;
+        
+        return `
+            <div class="flex flex-col items-center flex-1">
+                <div class="w-full flex items-end justify-center gap-1 h-48 mb-2">
+                    <div class="flex-1 flex flex-col items-center justify-end gap-0.5">
+                        <div class="w-full bg-blue-200 rounded-t hover:bg-blue-300 transition cursor-pointer" 
+                             style="height: ${newHeight}px; min-height: ${(d.new || 0) > 0 ? 4 : 0}px;"
+                             title="新增: ${d.new || 0}"></div>
+                        <div class="w-full bg-indigo-400 rounded-t hover:bg-indigo-500 transition cursor-pointer" 
+                             style="height: ${seekHeight}px; min-height: ${(d.seek || 0) > 0 ? 4 : 0}px;"
+                             title="SEEK: ${d.seek || 0}"></div>
+                    </div>
+                </div>
+                <div class="text-xs text-gray-600 text-center">${formatDate(d.date)}</div>
+                <div class="text-xs text-gray-500 text-center mt-1">
+                    <div class="text-blue-600 font-semibold">${d.new || 0}</div>
+                    <div class="text-indigo-600 font-semibold">${d.seek || 0}</div>
+                </div>
+            </div>
+        `;
+    }).join('');
+    
+    chartContainer.innerHTML = chartHTML;
+}
+
+// Initialize charts when DOM is ready or after HTMX swap
+function initDailyCharts() {
+    document.querySelectorAll('.daily-chart-container').forEach(container => {
+        renderDailyChart(container);
+    });
+}
+
+// Initialize charts on page load
+document.addEventListener('DOMContentLoaded', initDailyCharts);
+
+// Re-initialize charts after HTMX swaps
+document.body.addEventListener('htmx:afterSwap', function(event) {
+    if (event.detail.target) {
+        // Check if the swapped content contains chart containers
+        const swappedCharts = event.detail.target.querySelectorAll('.daily-chart-container');
+        if (swappedCharts.length > 0) {
+            initDailyCharts();
+        }
+    }
+});
+
+// Also check for charts in the swapped element itself
+document.body.addEventListener('htmx:afterSwap', function(event) {
+    if (event.detail.target.classList && event.detail.target.classList.contains('daily-chart-container')) {
+        renderDailyChart(event.detail.target);
+    }
+});
+
+// ============================================================================
+// Stats Page Component (Renders stats from JSON API)
+// ============================================================================
+
+/**
+ * Render quick stats cards
+ */
+function renderQuickStats(data) {
+    const container = document.getElementById('quick-stats');
+    if (!container) return;
+    
+    const stats = data.quick_stats || {};
+    container.innerHTML = `
+        <div class="bg-white rounded-lg shadow p-6">
+            <h3 class="text-sm text-gray-600 mb-2">已筛选候选人总数</h3>
+            <p class="text-3xl font-bold text-blue-600">${stats.total_candidates || 0}</p>
+        </div>
+        <div class="bg-white rounded-lg shadow p-6">
+            <h3 class="text-sm text-gray-600 mb-2">新消息</h3>
+            <p class="text-3xl font-bold text-green-600">${stats.new_messages || 0}</p>
+        </div>
+        <div class="bg-white rounded-lg shadow p-6">
+            <h3 class="text-sm text-gray-600 mb-2">新招呼</h3>
+            <p class="text-3xl font-bold text-yellow-600">${stats.new_greets || 0}</p>
+        </div>
+        <div class="bg-white rounded-lg shadow p-6">
+            <h3 class="text-sm text-gray-600 mb-2">运行中工作流</h3>
+            <p class="text-3xl font-bold text-purple-600">${stats.running_workflows || 0}</p>
+        </div>
+    `;
+}
+
+/**
+ * Format conversion rate badge
+ */
+function formatRateBadge(rate) {
+    let color = 'text-amber-600';
+    if (rate >= 0.6) {
+        color = 'text-green-600';
+    } else if (rate < 0.3) {
+        color = 'text-red-600';
+    }
+    return `<span class="font-semibold ${color}">${(rate * 100).toFixed(0)}%</span>`;
+}
+
+/**
+ * Render job statistics
+ */
+function renderJobStats(data) {
+    const container = document.getElementById('job-stats');
+    if (!container) return;
+    
+    const jobs = data.jobs || [];
+    const best = data.best;
+    
+    if (jobs.length === 0) {
+        container.innerHTML = '<div class="text-gray-600">暂无数据，先去处理候选人吧。</div>';
+        return;
+    }
+    
+    let html = '';
+    
+    // Render best job card
+    if (best) {
+        const ss = best.score_summary;
+        html += `
+            <div class="bg-gradient-to-r from-indigo-600 to-blue-500 text-white rounded-lg shadow p-6">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="text-sm opacity-80">今日最优秀战绩</p>
+                        <h3 class="text-2xl font-bold">${best.job}</h3>
+                        <p class="mt-2 text-lg">得分 ${best.today.metric.toFixed(1)} = (今日 ${best.today.count} 人 + 高分 ${best.today.high} 人) × 进展分 ${best.today.seek} 人</p>
+                        <p class="text-sm opacity-80">高分占比 ${(ss.high_share * 100).toFixed(1)}% · 平均分 ${ss.average}</p>
+                    </div>
+                    <div class="text-right">
+                        <p class="text-sm opacity-80">最近100人评分</p>
+                        <p class="text-4xl font-extrabold">${ss.quality_score}</p>
+                        <p class="text-sm opacity-80">${ss.comment}</p>
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+    
+    // Render job cards
+    jobs.forEach(job => {
+        const ss = job.score_summary;
+        const dailyData = job.daily || [];
+        
+        // Generate conversion rows
+        const convRows = (job.conversions || []).map(c => `
+            <tr>
+                <td class="py-1">${c.stage}</td>
+                <td class="py-1">${c.count}</td>
+                <td class="py-1 text-sm text-gray-500">${c.previous}</td>
+                <td class="py-1">${formatRateBadge(c.rate)}</td>
+            </tr>
+        `).join('');
+        
+        html += `
+            <div class="bg-white rounded-lg shadow p-6">
+                <div class="flex items-center justify-between mb-4">
+                    <div>
+                        <h3 class="text-xl font-bold text-gray-800">${job.job}</h3>
+                        <p class="text-sm text-gray-500">总候选人 ${job.total} · 高分占比 ${(ss.high_share * 100).toFixed(1)}% · 画像质量 ${ss.quality_score}/10</p>
+                        <p class="text-sm text-gray-500">评语：${ss.comment}</p>
+                    </div>
+                    <div class="text-right">
+                        <p class="text-sm text-gray-500">最近100人平均分</p>
+                        <p class="text-3xl font-extrabold text-indigo-600">${ss.average}</p>
+                    </div>
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <h4 class="text-sm font-semibold text-gray-700 mb-2">近7日新增/SEEK</h4>
+                        <div class="daily-chart-container" data-daily='${JSON.stringify(dailyData)}'>
+                            <div class="flex items-end gap-2 p-4 bg-gray-50 rounded-lg min-h-[250px]">
+                                <!-- Chart will be rendered by JavaScript -->
+                            </div>
+                            <div class="flex items-center justify-center gap-4 mt-3 text-xs">
+                                <div class="flex items-center gap-1">
+                                    <div class="w-3 h-3 bg-blue-200 rounded"></div>
+                                    <span class="text-gray-600">新增</span>
+                                </div>
+                                <div class="flex items-center gap-1">
+                                    <div class="w-3 h-3 bg-indigo-400 rounded"></div>
+                                    <span class="text-gray-600">SEEK</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div>
+                        <h4 class="text-sm font-semibold text-gray-700 mb-2">阶段转化率</h4>
+                        <table class="min-w-full text-left text-sm">
+                            <thead>
+                                <tr class="text-gray-500">
+                                    <th class="py-1">阶段</th>
+                                    <th class="py-1">人数</th>
+                                    <th class="py-1">上阶段</th>
+                                    <th class="py-1">转化</th>
+                                </tr>
+                            </thead>
+                            <tbody>${convRows}</tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        `;
+    });
+    
+    container.innerHTML = html;
+    
+    // Initialize charts after rendering
+    initDailyCharts();
+}
+
+/**
+ * Load and render stats page
+ */
+async function loadStatsPage() {
+    const quickStatsContainer = document.getElementById('quick-stats');
+    const jobStatsContainer = document.getElementById('job-stats');
+    
+    if (!quickStatsContainer && !jobStatsContainer) {
+        console.log('Stats containers not found, skipping loadStatsPage');
+        return; // Not on stats page
+    }
+    
+    console.log('Loading stats page...');
+    try {
+        const response = await fetch('/stats', {
+            method: 'GET',
+            headers: { 'Accept': 'application/json' }
+        });
+        
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+        
+        const data = await response.json();
+        console.log('Stats data received:', data);
+        
+        if (data.success) {
+            if (quickStatsContainer) {
+                renderQuickStats(data);
+            }
+            if (jobStatsContainer) {
+                renderJobStats(data);
+            }
+        } else {
+            console.error('Stats API returned success=false:', data);
+        }
+    } catch (error) {
+        console.error('Failed to load stats:', error);
+        if (quickStatsContainer) {
+            quickStatsContainer.innerHTML = '<div class="text-red-600">加载统计数据失败: ' + error.message + '</div>';
+        }
+        if (jobStatsContainer) {
+            jobStatsContainer.innerHTML = '<div class="text-red-600">加载统计数据失败: ' + error.message + '</div>';
+        }
+    }
+}
+
+// Load stats on page load (for index page)
+document.addEventListener('DOMContentLoaded', function() {
+    // Check if we're on the index page
+    if (document.getElementById('quick-stats') || document.getElementById('job-stats')) {
+        loadStatsPage();
+    }
+});
 
 // Initialize runtime check when DOM is ready
 if (document.readyState === 'loading') {

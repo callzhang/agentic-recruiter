@@ -1,4 +1,5 @@
 """Configuration management - loads from config.yaml and secrets.yaml"""
+import os
 import yaml
 from functools import lru_cache
 from pathlib import Path
@@ -43,6 +44,10 @@ def get_openai_config() -> Dict[str, Any]:
     
 def get_dingtalk_config() -> Dict[str, str]:
     """Get DingTalk configuration."""
+    env_url = os.getenv("DINGTALK_WEBHOOK")
+    env_secret = os.getenv("DINGTALK_SECRET")
+    if env_url:
+        return {"url": env_url, "secret": env_secret or ""}
     return _secrets_values["dingtalk"]
 
     

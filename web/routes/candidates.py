@@ -438,8 +438,8 @@ async def generate_message(
             chat_history = [default_user_message]
             new_messages = [default_user_message]
     
-    # generate message if the last message is not from recruiter
-    if new_messages:
+    # generate message if there is new message from user(candidate)
+    if [m for m in new_messages if m.get('role') == 'user']:
         # Generate message
         message = assistant_actions.generate_message(
             input_message=new_messages,
@@ -700,6 +700,65 @@ async def pass_candidate(
             content='<div class="text-red-500">❌ 操作失败</div>',
             status_code=500
         )
+
+
+@router.post("/request-contact")
+async def request_contact(
+    chat_id: str = Body(...),
+    candidate_id: Optional[str] = Body(None),
+):
+    """Request contact information (phone and WeChat) from a candidate and store in metadata."""
+    page = await boss_service.service._ensure_browser_session()
+    
+    # Call request_contact_action to get contact info
+    contact_result = await chat_actions.request_contact_action(page, chat_id)
+    
+    # Extract phone_number and wechat_number
+    phone_number = contact_result.get("phone_number")
+    wechat_number = contact_result.get("wechat_number")
+    
+    # Find the candidate by candidate_id or chat_id
+    candidate = None
+    if candidate_id:
+        candidate = get_candidate_by_dict({"candidate_id": candidate_id}, strict=False)
+    
+    if not candidate and chat_id:
+        candidate = get_candidate_by_dict({"chat_id": chat_id}, strict=False)
+    
+    # Update candidate metadata with contact info
+    if candidate:
+        existing_metadata = candidate.get("metadata", {}) or {}
+        # Merge with existing metadata to preserve other fields
+        updated_metadata = {
+            **existing_metadata,
+            "phone_number": phone_number,
+            "wechat_number": wechat_number,
+        }
+        
+        upsert_candidate(
+            candidate_id=candidate.get("candidate_id"),
+            chat_id=chat_id,
+            metadata=updated_metadata,
+        )
+        
+        return JSONResponse({
+            "success": True,
+            "phone_number": phone_number,
+            "wechat_number": wechat_number,
+            "clicked_phone": contact_result.get("clicked_phone", False),
+            "clicked_wechat": contact_result.get("clicked_wechat", False),
+        })
+    else:
+        # Candidate not found, but still return the contact info
+        logger.warning(f"Candidate not found for chat_id: {chat_id}, candidate_id: {candidate_id}")
+        return JSONResponse({
+            "success": False,
+            "error": "Candidate not found",
+            "phone_number": phone_number,
+            "wechat_number": wechat_number,
+            "clicked_phone": contact_result.get("clicked_phone", False),
+            "clicked_wechat": contact_result.get("clicked_wechat", False),
+        })
 
 
 # ============================================================================

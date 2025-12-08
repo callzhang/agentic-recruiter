@@ -2,10 +2,12 @@
 """Async FastAPI service that automates Boss直聘 via Playwright."""
 
 import asyncio
+import json
 import os
 import tempfile
+from dataclasses import asdict
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timedelta, time
 from typing import Any, Dict, List, Optional
 
 import sentry_sdk
@@ -22,6 +24,7 @@ from src.config import get_boss_zhipin_config, get_browser_config, get_service_c
 from src.global_logger import logger
 import src.chat_actions as chat_actions
 import src.recommendation_actions as recommendation_actions
+from src.stats_service import compile_all_jobs, send_daily_dingtalk_report
 
 class BossServiceAsync:
     """Async Playwright driver exposed as FastAPI service.
@@ -68,6 +71,7 @@ class BossServiceAsync:
         self.browser_lock = asyncio.Lock()
         self.startup_complete = asyncio.Event()
         self.event_manager = None  # Placeholder for legacy debug endpoint
+        self.daily_report_task: Optional[asyncio.Task] = None
         self.setup_cors()
         self.setup_routes()
         self.setup_exception_handlers()
@@ -90,6 +94,9 @@ class BossServiceAsync:
         self.playwright = await async_playwright().start()
         await self.start_browser()
         self.startup_complete.set()
+        # Kick off daily stats report loop (best effort, non-blocking)
+        if not self.daily_report_task:
+            self.daily_report_task = asyncio.create_task(self._daily_report_loop())
         logger.debug("Playwright 初始化完成。")
 
     async def start_browser(self) -> None:
@@ -154,7 +161,33 @@ class BossServiceAsync:
         self.page = None
         self.playwright = None
         self.is_logged_in = False
+        if self.daily_report_task:
+            self.daily_report_task.cancel()
         logger.debug("Playwright 已停止。")
+
+    async def _daily_report_loop(self) -> None:
+        """Send daily DingTalk report using compiled stats.
+
+        Runs once per day at 09:00 local time. The heavy lifting happens in a
+        thread to avoid blocking the event loop because requests.post is sync.
+        """
+
+        while True:
+            now = datetime.now()
+            target = datetime.combine(now.date(), time(hour=9, minute=0))
+            if now >= target:
+                target += timedelta(days=1)
+            wait_seconds = (target - now).total_seconds()
+            try:
+                await asyncio.sleep(wait_seconds)
+            except asyncio.CancelledError:  # graceful shutdown
+                return
+
+            try:
+                await asyncio.to_thread(send_daily_dingtalk_report)
+                logger.info("每日战报已发送")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("发送每日战报失败: %s", exc)
 
     # ------------------------------------------------------------------
     # Browser/session helpers
@@ -1086,20 +1119,14 @@ async def web_index(request: Request):
     """
     return templates.TemplateResponse("index.html", {"request": request})
 
-@app.get("/stats", response_class=HTMLResponse, tags=["web"])
+@app.get("/stats", tags=["web"])
 async def web_stats():
-    """Get quick statistics for the Web UI dashboard.
-    
-    Returns HTML cards displaying:
-    - Total candidate count from Zilliz store
-    - New message count
-    - New greeting count
-    - Running workflows count (placeholder)
+    """Get statistics data as JSON for frontend rendering.
     
     Returns:
-        HTMLResponse: HTML cards with statistics
+        JSONResponse: Statistics data including jobs, best job, and quick stats
     """
-    # Get message counts from chat stats
+    # Get quick stats (candidate count, message counts)
     new_messages = 0
     new_greets = 0
     try:
@@ -1110,35 +1137,44 @@ async def web_stats():
     except Exception as e:
         logger.warning(f"Failed to get chat stats: {e}")
     
-    # Try to get total candidates from store
     try:
         total_candidates = get_candidate_count()
     except Exception as e:
         total_candidates = 0
         logger.warning(f"Failed to get candidate count: {e}")
     
-    # Count running workflows (placeholder - would need actual tracking)
-    running_workflows = 0
+    # Get job statistics
+    stats_data = await asyncio.to_thread(compile_all_jobs)
+    jobs = stats_data.get("jobs", [])
+    best = stats_data.get("best")
     
-    html = f'''
-    <div class="bg-white rounded-lg shadow p-6">
-        <h3 class="text-sm text-gray-600 mb-2">已筛选候选人总数</h3>
-        <p class="text-3xl font-bold text-blue-600">{total_candidates}</p>
-    </div>
-    <div class="bg-white rounded-lg shadow p-6">
-        <h3 class="text-sm text-gray-600 mb-2">新消息</h3>
-        <p class="text-3xl font-bold text-green-600">{new_messages}</p>
-    </div>
-    <div class="bg-white rounded-lg shadow p-6">
-        <h3 class="text-sm text-gray-600 mb-2">新招呼</h3>
-        <p class="text-3xl font-bold text-yellow-600">{new_greets}</p>
-    </div>
-    <div class="bg-white rounded-lg shadow p-6">
-        <h3 class="text-sm text-gray-600 mb-2">运行中工作流</h3>
-        <p class="text-3xl font-bold text-purple-600">{running_workflows}</p>
-    </div>
-    '''
-    return HTMLResponse(content=html)
+    # Convert ScoreAnalysis objects to dictionaries for JSON serialization
+    from src.stats_service import ScoreAnalysis
+    
+    def convert_score_analysis(obj):
+        """Recursively convert ScoreAnalysis objects to dictionaries."""
+        if isinstance(obj, ScoreAnalysis):
+            return asdict(obj)
+        elif isinstance(obj, dict):
+            return {k: convert_score_analysis(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [convert_score_analysis(item) for item in obj]
+        return obj
+    
+    jobs_serialized = convert_score_analysis(jobs)
+    best_serialized = convert_score_analysis(best) if best else None
+    
+    return JSONResponse({
+        "success": True,
+        "quick_stats": {
+            "total_candidates": total_candidates,
+            "new_messages": new_messages,
+            "new_greets": new_greets,
+            "running_workflows": 0,  # Placeholder
+        },
+        "best": best_serialized,
+        "jobs": jobs_serialized,
+    })
 
 @app.get("/recent-activity", response_class=HTMLResponse, tags=["web"])
 async def web_recent_activity():

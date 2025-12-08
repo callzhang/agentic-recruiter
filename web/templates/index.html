@@ -52,31 +52,30 @@
 </div>
 
 <div class="space-y-8">
-    <!-- Welcome header -->
-    <div class="bg-gradient-to-r from-blue-600 to-indigo-600 rounded-lg shadow-lg p-8 text-white">
-        <h1 class="text-4xl font-bold mb-2">欢迎使用 星尘BOSS招聘助手</h1>
-        <p class="text-lg opacity-90">智能化招聘管理系统，提升招聘效率</p>
+    <!-- Quick stats -->
+    <div id="quick-stats" class="grid grid-cols-1 md:grid-cols-4 gap-6">
+        <!-- Will be loaded via JavaScript -->
+        <div class="bg-white rounded-lg shadow p-6 animate-pulse">
+            <div class="h-4 bg-gray-200 rounded w-3/4 mb-4"></div>
+            <div class="h-8 bg-gray-200 rounded"></div>
+        </div>
+        <div class="bg-white rounded-lg shadow p-6 animate-pulse">
+            <div class="h-4 bg-gray-200 rounded w-3/4 mb-4"></div>
+            <div class="h-8 bg-gray-200 rounded"></div>
+        </div>
+        <div class="bg-white rounded-lg shadow p-6 animate-pulse">
+            <div class="h-4 bg-gray-200 rounded w-3/4 mb-4"></div>
+            <div class="h-8 bg-gray-200 rounded"></div>
+        </div>
+        <div class="bg-white rounded-lg shadow p-6 animate-pulse">
+            <div class="h-4 bg-gray-200 rounded w-3/4 mb-4"></div>
+            <div class="h-8 bg-gray-200 rounded"></div>
+        </div>
     </div>
     
-    <!-- Quick stats -->
-    <div class="grid grid-cols-1 md:grid-cols-4 gap-6" hx-get="/stats" hx-trigger="load" hx-swap="innerHTML">
-        <!-- Will be loaded via HTMX -->
-        <div class="bg-white rounded-lg shadow p-6 animate-pulse">
-            <div class="h-4 bg-gray-200 rounded w-3/4 mb-4"></div>
-            <div class="h-8 bg-gray-200 rounded"></div>
-        </div>
-        <div class="bg-white rounded-lg shadow p-6 animate-pulse">
-            <div class="h-4 bg-gray-200 rounded w-3/4 mb-4"></div>
-            <div class="h-8 bg-gray-200 rounded"></div>
-        </div>
-        <div class="bg-white rounded-lg shadow p-6 animate-pulse">
-            <div class="h-4 bg-gray-200 rounded w-3/4 mb-4"></div>
-            <div class="h-8 bg-gray-200 rounded"></div>
-        </div>
-        <div class="bg-white rounded-lg shadow p-6 animate-pulse">
-            <div class="h-4 bg-gray-200 rounded w-3/4 mb-4"></div>
-            <div class="h-8 bg-gray-200 rounded"></div>
-        </div>
+    <!-- Job statistics -->
+    <div id="job-stats" class="space-y-6">
+        <!-- Will be loaded via JavaScript -->
     </div>
     
     <!-- Quick actions -->

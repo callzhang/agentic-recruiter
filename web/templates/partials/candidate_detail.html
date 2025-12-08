@@ -26,6 +26,41 @@
             {% endif %}
         </div>
     </div>
+    
+    <!-- Contact Information Section -->
+    {% set metadata = candidate.metadata if candidate.metadata else {} %}
+    {% set phone_number = metadata.phone_number if metadata and metadata.phone_number else None %}
+    {% set wechat_number = metadata.wechat_number if metadata and metadata.wechat_number else None %}
+    {% if phone_number or wechat_number %}
+    <div class="bg-blue-50 border border-blue-200 rounded-lg p-4">
+        <h3 class="font-semibold text-gray-800 mb-2">📞 联系方式</h3>
+        <div class="flex flex-wrap gap-4">
+            {% if phone_number %}
+            <div class="flex items-center space-x-2">
+                <span class="text-gray-600">电话:</span>
+                <span class="font-mono text-blue-700">{{ phone_number }}</span>
+            </div>
+            {% else %}
+            <div class="flex items-center space-x-2">
+                <span class="text-gray-600">电话:</span>
+                <span class="text-gray-400">未获取</span>
+            </div>
+            {% endif %}
+            {% if wechat_number %}
+            <div class="flex items-center space-x-2">
+                <span class="text-gray-600">微信:</span>
+                <span class="font-mono text-blue-700">{{ wechat_number }}</span>
+            </div>
+            {% else %}
+            <div class="flex items-center space-x-2">
+                <span class="text-gray-600">微信:</span>
+                <span class="text-gray-400">未获取</span>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+    {% endif %}
+    
     {% if candidate.name and ('先生' in candidate.name or '女士' in candidate.name) and not candidate.chat_id%}
         <div class="flex items-center space-x-2 bg-yellow-100 border-l-4 border-yellow-400 text-yellow-800 px-4 py-2 rounded shadow-sm my-2">
             <span>⚠️</span>
@@ -424,8 +459,10 @@ async function startAnalysis() {
 }
 
 async function requestContact() {
+    debugger;
     const values = getCandidateData();
     const chat_id = values.chat_id;
+    const candidate_id = values.candidate_id;
     const mode = values.mode;
     
     // Skip contact request for recommend mode (no chat_id available)
@@ -436,18 +473,92 @@ async function requestContact() {
     
     showToast('请求联系方式...', 'info');
     
-    // Endpoint expects JSON body with embed=True format
-    const response = await fetch('/chat/contact/request', {
+    // Call new endpoint with both chat_id and candidate_id
+    const response = await fetch('/candidates/request-contact', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ chat_id: chat_id })
+        body: JSON.stringify({ 
+            chat_id: chat_id,
+            candidate_id: candidate_id 
+        })
     });
     const data = await window.handleApiResponse(response);
     console.log('Contact requested:', data);
     
-    // Update to CONTACT stage if contact was successfully obtained
-    if (data && data.success !== false) {
+    // Update candidate data with contact info in metadata
+    if (data && (data.phone_number || data.wechat_number)) {
+        const currentData = getCandidateData();
+        const existingMetadata = currentData.metadata || {};
+        const updatedMetadata = {
+            ...existingMetadata,
+            phone_number: data.phone_number || existingMetadata.phone_number,
+            wechat_number: data.wechat_number || existingMetadata.wechat_number,
+        };
+        
+        await updateCandidateData({
+            stage: 'CONTACT',
+            metadata: updatedMetadata
+        });
+        
+        // Update contact info display dynamically
+        updateContactInfoDisplay(data.phone_number, data.wechat_number);
+        
+        showToast('联系方式已获取并保存', 'success');
+    } else if (data && data.success !== false) {
+        // Contact request succeeded but no numbers obtained yet
         await updateCandidateData({stage: 'CONTACT'});
+    }
+}
+
+/**
+ * Update contact information display in the DOM
+ */
+function updateContactInfoDisplay(phoneNumber, wechatNumber) {
+    // Check if contact info section exists
+    let contactSection = document.querySelector('.bg-blue-50.border.border-blue-200');
+    
+    if (!contactSection && (phoneNumber || wechatNumber)) {
+        // Create contact info section if it doesn't exist
+        const header = document.querySelector('#candidate-detail-root > div.flex.justify-between');
+        if (header && header.nextElementSibling) {
+            contactSection = document.createElement('div');
+            contactSection.className = 'bg-blue-50 border border-blue-200 rounded-lg p-4';
+            contactSection.innerHTML = `
+                <h3 class="font-semibold text-gray-800 mb-2">📞 联系方式</h3>
+                <div class="flex flex-wrap gap-4" id="contact-info-content"></div>
+            `;
+            header.parentNode.insertBefore(contactSection, header.nextElementSibling);
+        }
+    }
+    
+    if (contactSection) {
+        const contentDiv = contactSection.querySelector('#contact-info-content') || contactSection.querySelector('.flex.flex-wrap');
+        if (contentDiv) {
+            let html = '';
+            if (phoneNumber) {
+                html += `<div class="flex items-center space-x-2">
+                    <span class="text-gray-600">电话:</span>
+                    <span class="font-mono text-blue-700">${phoneNumber}</span>
+                </div>`;
+            } else {
+                html += `<div class="flex items-center space-x-2">
+                    <span class="text-gray-600">电话:</span>
+                    <span class="text-gray-400">未获取</span>
+                </div>`;
+            }
+            if (wechatNumber) {
+                html += `<div class="flex items-center space-x-2">
+                    <span class="text-gray-600">微信:</span>
+                    <span class="font-mono text-blue-700">${wechatNumber}</span>
+                </div>`;
+            } else {
+                html += `<div class="flex items-center space-x-2">
+                    <span class="text-gray-600">微信:</span>
+                    <span class="text-gray-400">未获取</span>
+                </div>`;
+            }
+            contentDiv.innerHTML = html;
+        }
     }
 }
 
