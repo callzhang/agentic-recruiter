@@ -4,7 +4,6 @@
   "description": "Boss Zhipin bot - Homepage and Jobs Editor deployed on Vercel",
   "scripts": {
     "build": "echo 'Build complete'",
-    "dev": "vercel dev",
     "deploy": "vercel --prod"
   },
   "keywords": ["boss-zhipin", "homepage", "jobs", "editor", "stats"],

@@ -44,13 +44,22 @@ def get_client():
             raise ValueError(f'Zilliz credentials not configured. Missing: {", ".join(missing)}. Please set these environment variables in Vercel.')
         
         try:
-            _client = MilvusClient(
-                uri=ZILLIZ_ENDPOINT,
-                # token=ZILLIZ_TOKEN,
-                user=ZILLIZ_USER,
-                password=ZILLIZ_PASSWORD,
-                secure=ZILLIZ_ENDPOINT.startswith('https://'),
-            )
+            # Match the working pattern from stats.py
+            # Only pass token if it's provided and not empty
+            # When using user/password auth, token should not be passed
+            token_value = ZILLIZ_TOKEN if (ZILLIZ_TOKEN and ZILLIZ_TOKEN.strip()) else None
+            
+            client_kwargs = {
+                'uri': ZILLIZ_ENDPOINT,
+                'user': ZILLIZ_USER,
+                'password': ZILLIZ_PASSWORD,
+                'secure': ZILLIZ_ENDPOINT.startswith('https://'),
+            }
+            # Only add token if it's explicitly provided (for API key auth)
+            if token_value:
+                client_kwargs['token'] = token_value
+            
+            _client = MilvusClient(**client_kwargs)
         except Exception as e:
             raise ValueError(f'Failed to connect to Zilliz: {str(e)}')
     return _client

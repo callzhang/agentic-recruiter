@@ -399,9 +399,8 @@ async function greetAndSendMessage() {
     const message = message_textarea.value.trim();
     const stage = getCandidateData('stage');
     const greeted = getCandidateData('greeted');
-    debugger;
-    
     const need_reply = await shouldReply();
+    debugger;
     if (!need_reply || greeted) {
         showToast('等待候选人回复后再发送消息', 'info');
         return;

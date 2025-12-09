@@ -4,7 +4,6 @@
   "description": "Standalone jobs editor page for Boss Zhipin bot",
   "scripts": {
     "build": "echo 'Build complete'",
-    "dev": "vercel dev",
     "deploy": "vercel --prod"
   },
   "keywords": ["jobs", "editor", "boss-zhipin"],

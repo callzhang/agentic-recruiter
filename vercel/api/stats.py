@@ -57,17 +57,22 @@ def _create_candidate_client() -> MilvusClient:
         raise ValueError(f'Zilliz credentials not configured. Missing: {", ".join(missing)}. Please set these environment variables in Vercel.')
     
     # Create client - will raise exception if connection fails
-    # Match the exact pattern from main codebase: src/candidate_store.py
-    token_value = ZILLIZ_TOKEN if (ZILLIZ_TOKEN and ZILLIZ_TOKEN.strip()) else ''
-    print(f"Creating MilvusClient: uri={ZILLIZ_ENDPOINT[:50]}..., user={ZILLIZ_USER}, token={'***' if token_value else '(empty)'}", file=sys.stderr)
+    # Only pass token if it's provided and not empty
+    # When using user/password auth, token should not be passed
+    token_value = ZILLIZ_TOKEN if (ZILLIZ_TOKEN and ZILLIZ_TOKEN.strip()) else None
+    print(f"Creating MilvusClient: uri={ZILLIZ_ENDPOINT[:50]}..., user={ZILLIZ_USER}, token={'***' if token_value else '(not provided)'}", file=sys.stderr)
     
-    client = MilvusClient(
-        uri=ZILLIZ_ENDPOINT,
-        token=token_value,  # Empty string if not provided, matching main codebase
-        user=ZILLIZ_USER,
-        password=ZILLIZ_PASSWORD,
-        secure=ZILLIZ_ENDPOINT.startswith('https://'),
-    )
+    client_kwargs = {
+        'uri': ZILLIZ_ENDPOINT,
+        'user': ZILLIZ_USER,
+        'password': ZILLIZ_PASSWORD,
+        'secure': ZILLIZ_ENDPOINT.startswith('https://'),
+    }
+    # Only add token if it's explicitly provided (for API key auth)
+    if token_value:
+        client_kwargs['token'] = token_value
+    
+    client = MilvusClient(**client_kwargs)
     
     # Verify connection - will raise exception if verification fails
     # This ensures the connection is actually established before returning
@@ -215,6 +220,57 @@ def build_daily_series(candidates: List[Dict[str, Any]], days: int = 7) -> List[
         series.append({"date": d.isoformat(), **data})
     return series
 
+def build_daily_candidate_counts(candidates: List[Dict[str, Any]], total_count: int, days: int = 30) -> List[Dict[str, Any]]:
+    """Build daily cumulative candidate counts for historical chart.
+    
+    Note: Candidate collection only has updated_at field, not created_at.
+    We use updated_at as the date for counting.
+    
+    Args:
+        candidates: List of candidate records (limited by Milvus query limit)
+        total_count: Total number of candidates in the collection
+        days: Number of days to show in the chart
+    """
+    today = datetime.now().date()
+    start = today - timedelta(days=days - 1)
+    
+    # Count candidates by updated_at date (candidate collection doesn't have created_at)
+    daily_counts = defaultdict(int)
+    candidates_without_date = 0
+    candidates_in_period = 0
+    
+    for cand in candidates:
+        # Candidate collection only has updated_at, not created_at
+        dt = _parse_dt(cand.get("updated_at"))
+        if not dt:
+            candidates_without_date += 1
+            continue
+        day = dt.date()
+        if day >= start:
+            daily_counts[day] += 1
+            candidates_in_period += 1
+    
+    # Calculate candidates before the period
+    # Since we can only fetch 16384 candidates, we estimate:
+    # total_count - candidates_in_period - candidates_without_date = candidates_before_start
+    candidates_before_start = max(0, total_count - candidates_in_period - candidates_without_date)
+    
+    print(f"build_daily_candidate_counts: total_fetched={len(candidates)}, total_in_db={total_count}, in_period={candidates_in_period}, without_date={candidates_without_date}, before_start={candidates_before_start}", file=sys.stderr)
+    
+    # Build cumulative series starting from candidates before the period
+    series = []
+    cumulative = candidates_before_start
+    for i in range(days):
+        d = start + timedelta(days=i)
+        count = daily_counts.get(d, 0)
+        cumulative += count
+        series.append({
+            "date": d.isoformat(),
+            "count": cumulative,
+            "new": count
+        })
+    return series
+
 def conversion_table(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Calculate stage conversion rates."""
     stage_counts = Counter(normalize_stage(cand.get("stage")) or "" for cand in candidates)
@@ -280,7 +336,7 @@ def search_candidates_advanced(
     
     filter_expr = " and ".join(conditions) if conditions else None
     
-    sortable_fields = {"updated_at", "name", "job_applied", "stage"}
+    sortable_fields = {"updated_at", "created_at", "name", "job_applied", "stage"}
     sort_by_normalized = sort_by if sort_by in sortable_fields else "updated_at"
     sort_dir = "DESC" if sort_direction.lower() != "asc" else "ASC"
     order_clause = f"{sort_by_normalized} {sort_dir}"
@@ -494,11 +550,37 @@ class handler(BaseHTTPRequestHandler):
             jobs_serialized = convert_score_analysis(jobs)
             best_serialized = convert_score_analysis(best) if best else None
             
+            # Get daily candidate counts for historical chart
+            print("Getting daily candidate counts...", file=sys.stderr)
+            # Get candidates for historical chart
+            # Note: Milvus has a max query limit of 16384, so we'll get the most recent ones
+            # and calculate cumulative from there
+            # Note: candidate collection only has updated_at, not created_at
+            all_candidates = search_candidates_advanced(
+                fields=["candidate_id", "updated_at"],
+                limit=16384,  # Milvus max limit
+                sort_by="updated_at",
+                sort_direction="desc"  # Get most recent first, then we'll reverse for cumulative
+            )
+            print(f"Fetched {len(all_candidates)} candidates for historical chart (total in DB: {total_candidates})", file=sys.stderr)
+            if len(all_candidates) > 0:
+                # Debug: check first few candidates
+                sample = all_candidates[:3]
+                for i, cand in enumerate(sample):
+                    print(f"Sample candidate {i}: updated_at={cand.get('updated_at')}", file=sys.stderr)
+            daily_candidate_counts = build_daily_candidate_counts(all_candidates, total_candidates, days=30)
+            if daily_candidate_counts:
+                print(f"Built daily counts: {len(daily_candidate_counts)} days", file=sys.stderr)
+                print(f"First day: {daily_candidate_counts[0]}", file=sys.stderr)
+                print(f"Last day: {daily_candidate_counts[-1]}", file=sys.stderr)
+            else:
+                print("WARNING: daily_candidate_counts is empty!", file=sys.stderr)
+            
             response_data = {
                 "success": True,
                 "quick_stats": {
                     "total_candidates": total_candidates,
-                    "running_workflows": 0,  # Placeholder
+                    "daily_candidate_counts": daily_candidate_counts,
                 },
                 "best": best_serialized,
                 "jobs": jobs_serialized,

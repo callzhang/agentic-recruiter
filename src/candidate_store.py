@@ -264,12 +264,18 @@ def search_candidates_advanced(
     order_clause = f"{sort_by_normalized} {sort_dir}"
 
     try:
+        # Cap the limit to stay within Milvus's max query result window of 16384
+        # The function multiplies limit by 3, so we cap the effective limit
+        effective_limit = limit * 3 if limit else None
+        if effective_limit and effective_limit > 16384:
+            effective_limit = 16384
+        
         if semantic_query:
             results = search_candidates_by_resume(
                 resume_text=semantic_query,
                 filter_expr=filter_expr,
                 fields=fields,
-                limit=limit * 3 if limit else None,
+                limit=effective_limit,
                 similarity_threshold=0.5,
             )
         else:
@@ -277,7 +283,7 @@ def search_candidates_advanced(
                 collection_name=_collection_name,
                 filter=filter_expr,
                 output_fields=fields,
-                limit=limit * 3 if limit else None,
+                limit=effective_limit,
                 output_fields_order=order_clause,
             )
     except Exception as exc:

@@ -1492,8 +1492,11 @@ function initRuntimeCheck() {
 // Daily Chart Component (Bar Chart for 7-day new/SEEK stats using Chart.js)
 // ============================================================================
 
-// Store chart instances to allow proper cleanup
-const chartInstances = new Map();
+// Store chart instances to allow proper cleanup (shared across all chart functions)
+if (typeof window.chartInstances === 'undefined') {
+    window.chartInstances = new Map();
+}
+const chartInstances = window.chartInstances;
 
 /**
  * Render bar chart for daily stats using Chart.js
@@ -1633,8 +1636,13 @@ function renderDailyChart(container) {
         }
     });
     
-    // Store chart instance
-    chartInstances.set(chartId, chart);
+    // Store chart instance (use window.chartInstances directly)
+    if (window.chartInstances) {
+        window.chartInstances.set(chartId, chart);
+    }
+    
+    // Also store reference on canvas for quick lookup
+    canvas.chart = chart;
 }
 
 // Initialize charts when DOM is ready or after HTMX swap
@@ -1666,6 +1674,186 @@ document.body.addEventListener('htmx:afterSwap', function(event) {
 });
 
 // ============================================================================
+// Daily Chart Component (Bar Chart for daily new/SEEK stats using Chart.js)
+// ============================================================================
+
+// Use the shared chartInstances map (already defined above - don't redeclare)
+
+/**
+ * Render daily candidate count mixed chart (bar for daily new, line for cumulative)
+ */
+function renderDailyCandidateChart() {
+    const container = document.querySelector('.daily-candidate-chart-container');
+    if (!container) return;
+    
+    const dailyDataStr = container.getAttribute('data-daily');
+    if (!dailyDataStr) return;
+    
+    const dailyData = JSON.parse(dailyDataStr);
+    if (!dailyData || dailyData.length === 0) return;
+    
+    if (typeof Chart === 'undefined') {
+        throw new Error('Chart.js is not loaded');
+    }
+    
+    // Destroy existing chart if it exists
+    const existingChartId = container.getAttribute('data-chart-id');
+    if (existingChartId && window.chartInstances && window.chartInstances.has(existingChartId)) {
+        window.chartInstances.get(existingChartId).destroy();
+        window.chartInstances.delete(existingChartId);
+    }
+    
+    // Create canvas element
+    const canvas = document.createElement('canvas');
+    canvas.style.maxHeight = '250px';
+    container.innerHTML = '';
+    container.appendChild(canvas);
+    
+    const chartId = `candidate-chart-${Date.now()}`;
+    container.setAttribute('data-chart-id', chartId);
+    
+    // Format date (MM-DD)
+    function formatDate(dateStr) {
+        try {
+            const date = new Date(dateStr);
+            return `${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+        } catch {
+            return dateStr.split('T')[0].slice(5) || dateStr.slice(-5);
+        }
+    }
+    
+    // Prepare data
+    const labels = dailyData.map(d => formatDate(d.date));
+    const cumulativeData = dailyData.map(d => d.count || 0);
+    const newData = dailyData.map(d => d.new || 0);
+    
+    // Create Chart.js mixed chart (bar + line)
+    const chart = new Chart(canvas, {
+        type: 'bar',
+        data: {
+            labels: labels,
+            datasets: [
+                {
+                    label: '当日新增',
+                    data: newData,
+                    type: 'bar',
+                    backgroundColor: 'rgba(16, 185, 129, 0.6)', // green-500 with opacity
+                    borderColor: 'rgba(16, 185, 129, 1)',
+                    borderWidth: 1,
+                    borderRadius: 4,
+                    yAxisID: 'y',
+                },
+                {
+                    label: '累计总数',
+                    data: cumulativeData,
+                    type: 'line',
+                    borderColor: 'rgba(59, 130, 246, 1)', // blue-500
+                    backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                    borderWidth: 2,
+                    fill: false,
+                    tension: 0.4,
+                    pointRadius: 3,
+                    pointHoverRadius: 5,
+                    yAxisID: 'y1',
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: {
+                    display: true,
+                    position: 'top',
+                    labels: {
+                        usePointStyle: true,
+                        padding: 15,
+                        font: {
+                            size: 12
+                        }
+                    }
+                },
+                tooltip: {
+                    mode: 'index',
+                    intersect: false,
+                    callbacks: {
+                        label: function(context) {
+                            return `${context.dataset.label}: ${context.parsed.y}`;
+                        }
+                    }
+                }
+            },
+            scales: {
+                x: {
+                    grid: {
+                        display: false
+                    },
+                    ticks: {
+                        font: {
+                            size: 11
+                        },
+                        maxRotation: 45,
+                        minRotation: 45
+                    }
+                },
+                y: {
+                    type: 'linear',
+                    position: 'left',
+                    beginAtZero: true,
+                    title: {
+                        display: true,
+                        text: '当日新增',
+                        font: {
+                            size: 12
+                        }
+                    },
+                    grid: {
+                        color: 'rgba(0, 0, 0, 0.05)'
+                    },
+                    ticks: {
+                        font: {
+                            size: 11
+                        }
+                    }
+                },
+                y1: {
+                    type: 'linear',
+                    position: 'right',
+                    beginAtZero: true,
+                    title: {
+                        display: true,
+                        text: '累计总数',
+                        font: {
+                            size: 12
+                        }
+                    },
+                    grid: {
+                        drawOnChartArea: false, // Only draw grid for left axis
+                    },
+                    ticks: {
+                        font: {
+                            size: 11
+                        }
+                    }
+                }
+            },
+            interaction: {
+                mode: 'index',
+                intersect: false
+            }
+        }
+    });
+    
+    // Store chart instance (use window.chartInstances directly)
+    if (window.chartInstances) {
+        window.chartInstances.set(chartId, chart);
+    }
+    
+    // Also store reference on canvas for quick lookup
+    canvas.chart = chart;
+}
+
+// ============================================================================
 // Stats Page Component (Renders stats from JSON API)
 // ============================================================================
 
@@ -1674,27 +1862,27 @@ document.body.addEventListener('htmx:afterSwap', function(event) {
  */
 function renderQuickStats(data) {
     const container = document.getElementById('quick-stats');
-    if (!container) return;
+    if (!container) {
+        return;
+    }
     
     const stats = data.quick_stats || {};
+    const dailyData = stats.daily_candidate_counts || [];
+    
     container.innerHTML = `
-        <div class="bg-white rounded-lg shadow p-6">
+        <div class="bg-white rounded-lg shadow p-6 col-span-1 md:col-span-2">
             <h3 class="text-sm text-gray-600 mb-2">已筛选候选人总数</h3>
-            <p class="text-3xl font-bold text-blue-600">${stats.total_candidates || 0}</p>
-        </div>
-        <div class="bg-white rounded-lg shadow p-6">
-            <h3 class="text-sm text-gray-600 mb-2">新消息</h3>
-            <p class="text-3xl font-bold text-green-600">${stats.new_messages || 0}</p>
-        </div>
-        <div class="bg-white rounded-lg shadow p-6">
-            <h3 class="text-sm text-gray-600 mb-2">新招呼</h3>
-            <p class="text-3xl font-bold text-yellow-600">${stats.new_greets || 0}</p>
-        </div>
-        <div class="bg-white rounded-lg shadow p-6">
-            <h3 class="text-sm text-gray-600 mb-2">运行中工作流</h3>
-            <p class="text-3xl font-bold text-purple-600">${stats.running_workflows || 0}</p>
+            <p class="text-3xl font-bold text-blue-600 mb-4">${stats.total_candidates || 0}</p>
+            <div class="daily-candidate-chart-container" data-daily='${JSON.stringify(dailyData)}' style="min-height: 250px;">
+                <!-- Chart.js canvas will be inserted here -->
+            </div>
         </div>
     `;
+    
+    // Initialize the chart after rendering
+    setTimeout(() => {
+        renderDailyCandidateChart();
+    }, 100);
 }
 
 /**
@@ -1831,50 +2019,46 @@ async function loadStatsPage() {
     const jobStatsContainer = document.getElementById('job-stats');
     
     if (!quickStatsContainer && !jobStatsContainer) {
-        console.log('Stats containers not found, skipping loadStatsPage');
         return; // Not on stats page
     }
     
-    console.log('Loading stats page...');
-    try {
-        const response = await fetch('/stats', {
-            method: 'GET',
-            headers: { 'Accept': 'application/json' }
-        });
-        
-        if (!response.ok) {
-            throw new Error(`HTTP ${response.status}`);
-        }
-        
-        const data = await response.json();
-        console.log('Stats data received:', data);
-        
-        if (data.success) {
-            if (quickStatsContainer) {
-                renderQuickStats(data);
-            }
-            if (jobStatsContainer) {
-                renderJobStats(data);
-            }
-        } else {
-            console.error('Stats API returned success=false:', data);
-        }
-    } catch (error) {
-        console.error('Failed to load stats:', error);
-        if (quickStatsContainer) {
-            quickStatsContainer.innerHTML = '<div class="text-red-600">加载统计数据失败: ' + error.message + '</div>';
-        }
-        if (jobStatsContainer) {
-            jobStatsContainer.innerHTML = '<div class="text-red-600">加载统计数据失败: ' + error.message + '</div>';
-        }
+    const response = await fetch('/stats', {
+        method: 'GET',
+        headers: { 'Accept': 'application/json' }
+    });
+    
+    if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+    
+    const data = await response.json();
+    
+    if (!data.success) {
+        throw new Error(data.error || 'Stats API returned success=false');
+    }
+    
+    if (quickStatsContainer) {
+        renderQuickStats(data);
+    }
+    if (jobStatsContainer) {
+        renderJobStats(data);
     }
 }
 
 // Load stats on page load (for index page)
 document.addEventListener('DOMContentLoaded', function() {
-    // Check if we're on the index page
     if (document.getElementById('quick-stats') || document.getElementById('job-stats')) {
-        loadStatsPage();
+        loadStatsPage().catch(error => {
+            console.error('Failed to load stats:', error);
+            const quickStatsContainer = document.getElementById('quick-stats');
+            const jobStatsContainer = document.getElementById('job-stats');
+            if (quickStatsContainer) {
+                quickStatsContainer.innerHTML = '<div class="text-red-600 p-4">加载统计数据失败: ' + error.message + '</div>';
+            }
+            if (jobStatsContainer) {
+                jobStatsContainer.innerHTML = '<div class="text-red-600 p-4">加载统计数据失败: ' + error.message + '</div>';
+            }
+        });
     }
 });
 

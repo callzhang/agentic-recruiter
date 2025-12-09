@@ -160,6 +160,178 @@ function initDailyCharts() {
 // Initialize charts on page load
 document.addEventListener('DOMContentLoaded', initDailyCharts);
 
+/**
+ * Render daily candidate count line chart
+ */
+function renderDailyCandidateChart() {
+    const container = document.querySelector('.daily-candidate-chart-container');
+    if (!container) return;
+    
+    const dailyDataStr = container.getAttribute('data-daily');
+    if (!dailyDataStr) return;
+    
+    const dailyData = JSON.parse(dailyDataStr);
+    if (!dailyData || dailyData.length === 0) return;
+    
+    // Check if Chart.js is available
+    if (typeof Chart === 'undefined') {
+        console.error('Chart.js is not loaded');
+        return;
+    }
+    
+    // Find or create canvas element
+    let canvas = container.querySelector('canvas');
+    if (!canvas) {
+        canvas = document.createElement('canvas');
+        canvas.style.maxHeight = '250px';
+        container.appendChild(canvas);
+    }
+    
+    // Destroy existing chart if it exists
+    const chartId = container.getAttribute('data-chart-id') || `candidate-chart-${Date.now()}`;
+    container.setAttribute('data-chart-id', chartId);
+    
+    if (chartInstances.has(chartId)) {
+        chartInstances.get(chartId).destroy();
+        chartInstances.delete(chartId);
+    }
+    
+    // Format date (MM-DD)
+    function formatDate(dateStr) {
+        try {
+            const date = new Date(dateStr);
+            return `${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+        } catch {
+            return dateStr.split('T')[0].slice(5) || dateStr.slice(-5);
+        }
+    }
+    
+    // Prepare data
+    const labels = dailyData.map(d => formatDate(d.date));
+    const cumulativeData = dailyData.map(d => d.count || 0);
+    const newData = dailyData.map(d => d.new || 0);
+    
+    // Create Chart.js mixed chart (bar + line)
+    const chart = new Chart(canvas, {
+        type: 'bar',
+        data: {
+            labels: labels,
+            datasets: [
+                {
+                    label: '当日新增',
+                    data: newData,
+                    type: 'bar',
+                    backgroundColor: 'rgba(16, 185, 129, 0.6)', // green-500 with opacity
+                    borderColor: 'rgba(16, 185, 129, 1)',
+                    borderWidth: 1,
+                    borderRadius: 4,
+                    yAxisID: 'y',
+                },
+                {
+                    label: '累计总数',
+                    data: cumulativeData,
+                    type: 'line',
+                    borderColor: 'rgba(59, 130, 246, 1)', // blue-500
+                    backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                    borderWidth: 2,
+                    fill: false,
+                    tension: 0.4,
+                    pointRadius: 3,
+                    pointHoverRadius: 5,
+                    yAxisID: 'y1',
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: {
+                    display: true,
+                    position: 'top',
+                    labels: {
+                        usePointStyle: true,
+                        padding: 15,
+                        font: {
+                            size: 12
+                        }
+                    }
+                },
+                tooltip: {
+                    mode: 'index',
+                    intersect: false,
+                    callbacks: {
+                        label: function(context) {
+                            return `${context.dataset.label}: ${context.parsed.y}`;
+                        }
+                    }
+                }
+            },
+            scales: {
+                x: {
+                    grid: {
+                        display: false
+                    },
+                    ticks: {
+                        font: {
+                            size: 11
+                        },
+                        maxRotation: 45,
+                        minRotation: 45
+                    }
+                },
+                y: {
+                    type: 'linear',
+                    position: 'left',
+                    beginAtZero: true,
+                    title: {
+                        display: true,
+                        text: '当日新增',
+                        font: {
+                            size: 12
+                        }
+                    },
+                    grid: {
+                        color: 'rgba(0, 0, 0, 0.05)'
+                    },
+                    ticks: {
+                        font: {
+                            size: 11
+                        }
+                    }
+                },
+                y1: {
+                    type: 'linear',
+                    position: 'right',
+                    beginAtZero: true,
+                    title: {
+                        display: true,
+                        text: '累计总数',
+                        font: {
+                            size: 12
+                        }
+                    },
+                    grid: {
+                        drawOnChartArea: false, // Only draw grid for left axis
+                    },
+                    ticks: {
+                        font: {
+                            size: 11
+                        }
+                    }
+                }
+            },
+            interaction: {
+                mode: 'index',
+                intersect: false
+            }
+        }
+    });
+    
+    // Store chart instance
+    chartInstances.set(chartId, chart);
+}
+
 // ============================================================================
 // Stats Page Component (Renders stats from JSON API)
 // ============================================================================
@@ -172,16 +344,22 @@ function renderQuickStats(data) {
     if (!container) return;
     
     const stats = data.quick_stats || {};
+    const dailyData = stats.daily_candidate_counts || [];
+    
     container.innerHTML = `
-        <div class="bg-white rounded-lg shadow p-6">
+        <div class="bg-white rounded-lg shadow p-6 col-span-1 md:col-span-2">
             <h3 class="text-sm text-gray-600 mb-2">已筛选候选人总数</h3>
-            <p class="text-3xl font-bold text-blue-600">${stats.total_candidates || 0}</p>
-        </div>
-        <div class="bg-white rounded-lg shadow p-6">
-            <h3 class="text-sm text-gray-600 mb-2">运行中工作流</h3>
-            <p class="text-3xl font-bold text-purple-600">${stats.running_workflows || 0}</p>
+            <p class="text-3xl font-bold text-blue-600 mb-4">${stats.total_candidates || 0}</p>
+            <div class="daily-candidate-chart-container" data-daily='${JSON.stringify(dailyData)}' style="min-height: 250px;">
+                <!-- Chart.js canvas will be inserted here -->
+            </div>
         </div>
     `;
+    
+    // Initialize the chart after rendering
+    setTimeout(() => {
+        renderDailyCandidateChart();
+    }, 100);
 }
 
 /**

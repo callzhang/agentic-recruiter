@@ -70,6 +70,36 @@
     </style>
 </head>
 <body class="bg-gray-50 min-h-screen">
+    <!-- Navigation bar -->
+    <nav class="bg-white shadow-lg sticky top-0 z-50">
+        <div class="container mx-auto px-4">
+            <div class="flex justify-between items-center py-4">
+                <!-- Logo and title -->
+                <div class="flex items-center space-x-4">
+                    <a href="/" class="text-2xl font-bold text-blue-600">🤖 BOSS招聘助手</a>
+                </div>
+                
+                <!-- Navigation links -->
+                <div class="flex space-x-6">
+                    <a href="/" class="text-gray-700 hover:text-blue-600 transition">
+                        首页
+                    </a>
+                    <a href="/jobs" class="text-gray-700 hover:text-blue-600 transition tab-active">
+                        岗位画像
+                    </a>
+                </div>
+                
+                <!-- Status indicator and version -->
+                <div class="flex items-center space-x-4">
+                    <div id="service-status" class="flex items-center space-x-2">
+                        <div id="status-dot" class="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+                        <span id="status-text" class="text-sm text-gray-600">服务运行中</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </nav>
+    
     <!-- Toast Container -->
     <div id="toast-container" class="fixed top-4 right-4 z-50 flex flex-col space-y-2"></div>
     
@@ -1071,6 +1101,15 @@
             }
         }
     </script>
+    
+    <!-- Footer -->
+    <footer class="bg-white border-t mt-12">
+        <div class="container mx-auto px-4 py-6">
+            <div class="text-center text-gray-600 text-sm">
+                <p>BOSS招聘助手 | Powered by FastAPI + Vercel</p>
+            </div>
+        </div>
+    </footer>
 </body>
 </html>
 

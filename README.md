@@ -625,7 +625,6 @@ Agent 系统基于以下规则进行智能决策：
 
 **访问路径：**
 - **HR 管理员（本地服务）**：`http://127.0.0.1:5001/jobs`
-- **非 HR 管理员（公开访问）**：`https://vercel-jobs-iota.vercel.app/`
 
 ![岗位画像界面](docs/images/jobs.png)
 

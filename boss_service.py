@@ -24,7 +24,7 @@ from src.config import get_boss_zhipin_config, get_browser_config, get_service_c
 from src.global_logger import logger
 import src.chat_actions as chat_actions
 import src.recommendation_actions as recommendation_actions
-from src.stats_service import compile_all_jobs, send_daily_dingtalk_report
+from src.stats_service import compile_all_jobs, send_daily_dingtalk_report, build_daily_candidate_counts
 
 class BossServiceAsync:
     """Async Playwright driver exposed as FastAPI service.
@@ -1143,6 +1143,28 @@ async def web_stats():
         total_candidates = 0
         logger.warning(f"Failed to get candidate count: {e}")
     
+    # Get daily candidate counts for historical chart
+    daily_candidate_counts = []
+    try:
+        # Get candidates for historical chart
+        # Note: search_candidates_advanced multiplies limit by 3, so we use 5461 to stay under 16384
+        # 5461 * 3 = 16383, which is just under Milvus's max of 16384
+        all_candidates = await asyncio.to_thread(
+            search_candidates_advanced,
+            fields=["candidate_id", "updated_at"],
+            limit=5461,  # Will become 16383 after * 3, staying under Milvus limit of 16384
+            sort_by="updated_at",
+            sort_direction="desc"
+        )
+        daily_candidate_counts = await asyncio.to_thread(
+            build_daily_candidate_counts,
+            all_candidates,
+            total_candidates,
+            30
+        )
+    except Exception as e:
+        logger.warning(f"Failed to get daily candidate counts: {e}")
+    
     # Get job statistics
     stats_data = await asyncio.to_thread(compile_all_jobs)
     jobs = stats_data.get("jobs", [])
@@ -1168,9 +1190,7 @@ async def web_stats():
         "success": True,
         "quick_stats": {
             "total_candidates": total_candidates,
-            "new_messages": new_messages,
-            "new_greets": new_greets,
-            "running_workflows": 0,  # Placeholder
+            "daily_candidate_counts": daily_candidate_counts,
         },
         "best": best_serialized,
         "jobs": jobs_serialized,

@@ -207,6 +207,58 @@ def conversion_table(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return rows
 
 
+def build_daily_candidate_counts(candidates: List[Dict[str, Any]], total_count: int, days: int = 30) -> List[Dict[str, Any]]:
+    """Build daily cumulative candidate counts for historical chart.
+    
+    Note: Candidate collection only has updated_at field, not created_at.
+    We use updated_at as the date for counting.
+    
+    Args:
+        candidates: List of candidate records (limited by Milvus query limit)
+        total_count: Total number of candidates in the collection
+        days: Number of days to show in the chart
+    """
+    today = datetime.now().date()
+    start = today - timedelta(days=days - 1)
+    
+    # Count candidates by updated_at date (candidate collection doesn't have created_at)
+    daily_counts = defaultdict(int)
+    candidates_without_date = 0
+    candidates_in_period = 0
+    
+    for cand in candidates:
+        # Candidate collection only has updated_at, not created_at
+        dt = _parse_dt(cand.get("updated_at"))
+        if not dt:
+            candidates_without_date += 1
+            continue
+        day = dt.date()
+        if day >= start:
+            daily_counts[day] += 1
+            candidates_in_period += 1
+    
+    # Calculate candidates before the period
+    # Since we can only fetch 16384 candidates, we estimate:
+    # total_count - candidates_in_period - candidates_without_date = candidates_before_start
+    candidates_before_start = max(0, total_count - candidates_in_period - candidates_without_date)
+    
+    logger.debug(f"build_daily_candidate_counts: total_fetched={len(candidates)}, total_in_db={total_count}, in_period={candidates_in_period}, without_date={candidates_without_date}, before_start={candidates_before_start}")
+    
+    # Build cumulative series starting from candidates before the period
+    series = []
+    cumulative = candidates_before_start
+    for i in range(days):
+        d = start + timedelta(days=i)
+        count = daily_counts.get(d, 0)
+        cumulative += count
+        series.append({
+            "date": d.isoformat(),
+            "count": cumulative,
+            "new": count
+        })
+    return series
+
+
 def fetch_job_candidates(job_name: str, days: int | None = None) -> List[Dict[str, Any]]:
     """Fetch candidates for a job with optional time range and limit.
     
