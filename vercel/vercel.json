@@ -1,0 +1,29 @@
+{
+  "version": 2,
+  "rewrites": [
+    {
+      "source": "/api/jobs/(.*)",
+      "destination": "/api/jobs.py"
+    },
+    {
+      "source": "/api/stats",
+      "destination": "/api/stats.py"
+    },
+    {
+      "source": "/jobs",
+      "destination": "/jobs.html"
+    }
+  ],
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        {
+          "key": "Access-Control-Allow-Origin",
+          "value": "*"
+        }
+      ]
+    }
+  ]
+}
+

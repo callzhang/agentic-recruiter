@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>首页 - Stardust招聘助手</title>
+    
+    <!-- Favicon -->
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+    
+    <!-- TailwindCSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Alpine.js -->
+    <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body class="bg-gray-50 min-h-screen">
+    <!-- Navigation bar -->
+    <nav class="bg-white shadow-lg sticky top-0 z-50">
+        <div class="container mx-auto px-4">
+            <div class="flex justify-between items-center py-4">
+                <!-- Logo and title -->
+                <div class="flex items-center space-x-4">
+                    <a href="/" class="text-2xl font-bold text-blue-600">🤖 BOSS招聘助手</a>
+                </div>
+                
+                <!-- Navigation links -->
+                <div class="flex space-x-6">
+                    <a href="/" class="text-gray-700 hover:text-blue-600 transition tab-active">
+                        首页
+                    </a>
+                    <a href="/jobs" class="text-gray-700 hover:text-blue-600 transition">
+                        岗位画像
+                    </a>
+                </div>
+                
+                <!-- Status indicator and version -->
+                <div class="flex items-center space-x-4">
+                    <div id="service-status" class="flex items-center space-x-2">
+                        <div id="status-dot" class="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+                        <span id="status-text" class="text-sm text-gray-600">服务运行中</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </nav>
+    
+    <!-- Main content -->
+    <main class="container mx-auto px-4 py-8">
+        <!-- Warning Modal -->
+        <div x-data="{ 
+                showWarning: false,
+                init() {
+                    this.showWarning = localStorage.getItem('warningAcknowledged') !== 'true';
+                    if (this.showWarning) {
+                        this.$el.style.display = 'flex';
+                    }
+                }
+             }" 
+             x-show="showWarning"
+             x-transition:enter="transition ease-out duration-300"
+             x-transition:enter-start="opacity-0"
+             x-transition:enter-end="opacity-100"
+             x-transition:leave="transition ease-in duration-200"
+             x-transition:leave-start="opacity-100"
+             x-transition:leave-end="opacity-0"
+             class="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50"
+             style="display: none;">
+            <div class="bg-white rounded-lg shadow-2xl max-w-md w-full mx-4"
+                 x-transition:enter="transition ease-out duration-300"
+                 x-transition:enter-start="opacity-0 transform scale-95"
+                 x-transition:enter-end="opacity-100 transform scale-100"
+                 x-transition:leave="transition ease-in duration-200"
+                 x-transition:leave-start="opacity-100 transform scale-100"
+                 x-transition:leave-end="opacity-0 transform scale-95">
+                <div class="p-6">
+                    <div class="flex items-center mb-4">
+                        <div class="w-10 h-10 bg-yellow-100 rounded-full flex items-center justify-center mr-3">
+                            <span class="text-2xl">⚠️</span>
+                        </div>
+                        <h3 class="text-xl font-bold text-gray-800">重要提示</h3>
+                    </div>
+                    <div class="mb-6">
+                        <p class="text-gray-700 leading-relaxed">
+                            请注意，所有的请求都模拟人工动作，不会暴露任何外挂信息。如果被封，联系客服一定不承认使用外挂，而是坚决表达是后台的误判。
+                        </p>
+                    </div>
+                    <div class="flex justify-end">
+                        <button @click="showWarning = false; localStorage.setItem('warningAcknowledged', 'true')"
+                                class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-medium">
+                            我已了解
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="space-y-8">
+            <!-- Quick stats -->
+            <div id="quick-stats" class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <!-- Will be loaded via JavaScript -->
+                <div class="bg-white rounded-lg shadow p-6 animate-pulse">
+                    <div class="h-4 bg-gray-200 rounded w-3/4 mb-4"></div>
+                    <div class="h-8 bg-gray-200 rounded"></div>
+                </div>
+                <div class="bg-white rounded-lg shadow p-6 animate-pulse">
+                    <div class="h-4 bg-gray-200 rounded w-3/4 mb-4"></div>
+                    <div class="h-8 bg-gray-200 rounded"></div>
+                </div>
+            </div>
+            
+            <!-- Job statistics -->
+            <div id="job-stats" class="space-y-6">
+                <!-- Will be loaded via JavaScript -->
+            </div>
+            
+            <!-- Quick actions -->
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                <!-- Candidate management -->
+                <div class="bg-white rounded-lg shadow-lg p-6 hover:shadow-xl transition transform hover:-translate-y-1">
+                    <div class="flex items-center mb-4">
+                        <div class="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center">
+                            <span class="text-2xl">👥</span>
+                        </div>
+                        <h3 class="text-xl font-bold ml-4 text-gray-800">手动招聘</h3>
+                    </div>
+                    <p class="text-gray-600">手动管理候选人，查看简历、分析匹配度、发送消息</p>
+                </div>
+                
+                <!-- Automation -->
+                <div class="bg-white rounded-lg shadow-lg p-6 opacity-60 cursor-not-allowed">
+                    <div class="flex items-center mb-4">
+                        <div class="w-12 h-12 bg-green-100 rounded-lg flex items-center justify-center">
+                            <span class="text-2xl">🤖</span>
+                        </div>
+                        <h3 class="text-xl font-bold ml-4 text-gray-800">自动化工作流</h3>
+                    </div>
+                    <p class="text-gray-600">配置并启动自动化招聘流程，实时监控执行状态</p>
+                    <p class="text-sm text-gray-500 mt-2">🚧 开发中</p>
+                </div>
+                
+                <!-- Jobs -->
+                <a href="/jobs" class="bg-white rounded-lg shadow-lg p-6 hover:shadow-xl transition transform hover:-translate-y-1">
+                    <div class="flex items-center mb-4">
+                        <div class="w-12 h-12 bg-yellow-100 rounded-lg flex items-center justify-center">
+                            <span class="text-2xl">💼</span>
+                        </div>
+                        <h3 class="text-xl font-bold ml-4 text-gray-800">岗位画像</h3>
+                    </div>
+                    <p class="text-gray-600">管理招聘岗位的背景、职责、要求和理想人选画像</p>
+                </a>
+            </div>
+        </div>
+    </main>
+    
+    <!-- Footer -->
+    <footer class="bg-white border-t mt-12">
+        <div class="container mx-auto px-4 py-6">
+            <div class="text-center text-gray-600 text-sm">
+                <p>BOSS招聘助手 | Powered by FastAPI + Vercel</p>
+            </div>
+        </div>
+    </footer>
+    
+    <!-- Toast notification container -->
+    <div id="toast-container" class="fixed top-4 right-4 z-50 flex flex-col"></div>
+    
+    <!-- Stats page JavaScript -->
+    <script src="/stats.js"></script>
+</body>
+</html>
+

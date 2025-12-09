@@ -103,7 +103,7 @@ async def list_candidates(
         # Map modes to tab and status filters based on boss_service.py API
         if mode == "greet":
             tab_filter = "新招呼"
-            status_filter = "全部" #"未读"
+            status_filter = "未读"
         elif mode == "chat":
             tab_filter = "沟通中"
             status_filter = "未读"
@@ -435,7 +435,7 @@ async def generate_message(
                     new_messages.insert(0, {"content": content, "role": role})
         else:
             # No chat_id, use default message
-            chat_history = [default_user_message]
+            chat_history = []
             new_messages = [default_user_message]
     
     # generate message if there is new message from user(candidate)
@@ -472,6 +472,43 @@ async def generate_message(
     '''
     return HTMLResponse(content=html)
 
+@router.post("/should-reply")
+async def should_reply(
+    chat_id: Optional[str] = Body(None),
+    mode: Optional[str] = Body(None),
+) -> JSONResponse:
+    """Check if should generate message based on chat history.
+    If last message is an assistant message, return False, otherwise return True.
+    
+    Args:
+        chat_id: Chat ID to get chat history from browser
+        mode: Mode (recommend/chat/greet/followup), if recommend mode, return True
+    
+    Returns:
+        JSONResponse with {"should_reply": bool}
+    """
+    # For recommend mode, always return True (no chat history available)
+    if mode == "recommend":
+        return JSONResponse({"should_reply": True})
+    
+    # if chat_id is not provided, return True (default to reply)
+    if not chat_id:
+        return JSONResponse({"should_reply": True})
+    
+    # Get chat history from browser
+    page = await boss_service.service._ensure_browser_session()
+    chat_history = await chat_actions.get_chat_history_action(page, chat_id)
+    
+    # Check last message role
+    for msg in chat_history[::-1]:
+        role = msg.get("role")
+        if role == "assistant":
+            return JSONResponse({"should_reply": False})
+        elif role == "user":
+            return JSONResponse({"should_reply": True})
+    
+    # no message found, or only developer message, return True
+    return JSONResponse({"should_reply": True})
 
 @router.post("/send", response_class=HTMLResponse)
 async def send_message(

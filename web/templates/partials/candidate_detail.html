@@ -238,11 +238,16 @@ async function process_candidate() {
             }
             
             // Step 4b: Check borderline_threshold - try to get full resume and re-analyze
-            if (current_score >= borderline_threshold || skill_score >= seek_threshold || startup_fit_score >= seek_threshold || background_score >= seek_threshold) {
-                newStage = 'SEEK';
-                
+            // check if we should generate new message
+            const need_reply = !getCandidateData('viewed');
+            const should_seek = current_score >= borderline_threshold || skill_score >= seek_threshold || startup_fit_score >= seek_threshold || background_score >= seek_threshold;
+            if (need_reply || should_seek) {
+                if (should_seek) {
+                    newStage = 'SEEK';
+                }
                 // For chat mode, try to get full resume and re-analyze
                 if (mode !== 'recommend') {
+                    debugger;
                     let full_resume_text = document.getElementById('resume-textarea-full')?.value?.trim() || '';
                     if (full_resume_text.includes('⏳')) {
                         await fetchFullResume();
@@ -257,16 +262,15 @@ async function process_candidate() {
                         is_full_analysis = analysis.resume_type === 'full';
                         current_score = analysis?.overall || current_score;
                     }
-                    if (is_full_analysis && current_score >= borderline_threshold) {
+                    if (need_reply || is_full_analysis && current_score >= borderline_threshold ) {
                         // Step 4c: Send notification if analysis was updated
-                        debugger;
-                        await sendDingNotification(analysis, name, getCandidateData('job_applied'));
                         await generateMessage();
                         await greetAndSendMessage();
                     }
                     // Step 4d: Check seek_threshold - request contact if above
                     if (is_full_analysis && current_score >= seek_threshold) {
                         newStage = 'CONTACT';
+                        await sendDingNotification(analysis, name, getCandidateData('job_applied'));
                         await requestContact();
                     }
                 }else{
@@ -396,28 +400,14 @@ async function greetAndSendMessage() {
     const message = message_textarea.value.trim();
     const stage = getCandidateData('stage');
     const greeted = getCandidateData('greeted');
+    debugger;
     
-    // Check if already greeted (stage is CHAT, SEEK, or CONTACT, or greeted flag is true)
-    if (greeted) {
-        showToast('已经打招呼过了，不能重复打招呼', 'info');
-        return '已经打招呼过了';
+    need_reply = await shouldReply();
+    if (!need_reply) {
+        showToast('等待候选人回复后再发送消息', 'info');
+        return;
     }
-    
-    // Check if last message's role is "user" before sending
     const values = getCandidateData();
-    const metadata = values.metadata;
-    
-    if (metadata && metadata.history && Array.isArray(metadata.history) && metadata.history.length > 0) {
-        const lastMessage = metadata.history[metadata.history.length - 1];
-        const lastRole = lastMessage.role;
-        
-        if (lastRole !== 'user') {
-            showToast('等待候选人回复后再发送消息', 'info');
-            return '等待候选人回复';
-        }
-    }
-    
-
     values.message = message;
     
     await htmxAjaxPromise('POST', '/candidates/send', {
@@ -425,6 +415,7 @@ async function greetAndSendMessage() {
         swap: 'none',
         values: values
     });
+    showToast(`已发送消息: ${message}`, 'success');
     // Update to CHAT stage
     const currentStage = getCandidateData('stage');
     await updateCandidateData({
@@ -468,8 +459,33 @@ async function startAnalysis() {
     await updateCandidateData({score: analysis?.overall});
 }
 
+/**
+ * Check if we should reply based on chat history
+ * Returns true if last message is from user, false if from assistant
+ */
+async function shouldReply() {
+    const values = getCandidateData();
+    const chat_id = values.chat_id;
+    const mode = values.mode;
+    
+    // For recommend mode, always return true (no chat history)
+    if (mode === 'recommend' || !chat_id) {
+        return true;
+    }
+    
+    const response = await fetch('/candidates/should-reply', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ 
+            chat_id: chat_id,
+            mode: mode
+        })
+    });
+    const data = await window.handleApiResponse(response);
+    return data.should_reply === true;
+}
+
 async function requestContact() {
-    debugger;
     const values = getCandidateData();
     const chat_id = values.chat_id;
     const candidate_id = values.candidate_id;
@@ -773,8 +789,18 @@ function htmxAjaxPromise(method, url, options) {
     const viewMode = window.__candidate_detail_view_mode || 'interactive';
     if (viewMode === 'readonly') return;
     
-    // Use requestAnimationFrame to ensure DOM is ready
-    requestAnimationFrame(() => {
+    // Track if processing is in progress to avoid duplicate runs
+    let processingInProgress = false;
+    
+    // Function to run process_candidate with proper error handling
+    async function runProcessCandidate() {
+        if (processingInProgress) {
+            console.log('process_candidate already in progress, skipping...');
+            return;
+        }
+        
+        processingInProgress = true;
+        
         // Set initial tab state - show online tab if resume_text exists, otherwise show full tab
         const fullTextarea = document.getElementById('resume-textarea-full');
         
@@ -786,18 +812,44 @@ function htmxAjaxPromise(method, url, options) {
         }
         
         // Wrap process_candidate in error handling to ensure cards are re-enabled
-        (async () => {
-            try {
-                await process_candidate();
-            } catch (error) {
-                console.error('Unhandled error in process_candidate:', error);
-                showToast(`处理候选人时出错: ${error.message || error}`, 'error');
-            } finally {
-                // Always re-enable cards, even if process_candidate's finally didn't run
-                enableAllCards();
-            }
-        })();
-    });
+        try {
+            await process_candidate();
+        } catch (error) {
+            console.error('Unhandled error in process_candidate:', error);
+            showToast(`处理候选人时出错: ${error.message || error}`, 'error');
+        } finally {
+            // Always re-enable cards, even if process_candidate's finally didn't run
+            enableAllCards();
+            processingInProgress = false;
+        }
+    }
+    
+    // Use setTimeout instead of requestAnimationFrame to ensure it runs even in background tabs
+    // requestAnimationFrame is paused when the tab is not visible, but setTimeout is only throttled
+    setTimeout(() => {
+        runProcessCandidate();
+    }, 0);
+    
+    // Listen for visibility changes - if page becomes visible and processing hasn't started, trigger it
+    // This handles the case where the page loads in a background tab
+    let visibilityCheckDone = false;
+    function handleVisibilityChange() {
+        if (document.visibilityState === 'visible' && !visibilityCheckDone && !processingInProgress) {
+            visibilityCheckDone = true;
+            // Small delay to ensure DOM is ready
+            setTimeout(() => {
+                runProcessCandidate();
+            }, 100);
+        }
+    }
+    
+    // Check initial visibility state
+    if (document.visibilityState === 'visible') {
+        visibilityCheckDone = true;
+    } else {
+        // If page is hidden, wait for it to become visible
+        document.addEventListener('visibilitychange', handleVisibilityChange, { once: true });
+    }
 })();
 
 </script>
