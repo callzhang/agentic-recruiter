@@ -22,7 +22,7 @@ from .global_logger import logger
 
 # Stage order used for conversion calculations
 # Import from unified stage definition
-from .candidate_stages import STAGE_FLOW, STAGE_SEEK, STAGE_PASS, normalize_stage
+from .candidate_stages import STAGE_FLOW, STAGE_SEEK, STAGE_PASS, STAGE_CHAT, STAGE_CONTACT, normalize_stage
 HIGH_SCORE_THRESHOLD = 7
 
 
@@ -161,12 +161,12 @@ def conversion_table(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     
     # Calculate stage counts
     pass_count = stage_counts.get(STAGE_PASS, 0)
-    chat_count = stage_counts.get("CHAT", 0)
-    seek_count = stage_counts.get("SEEK", 0)
-    contact_count = stage_counts.get("CONTACT", 0)
+    chat_count = stage_counts.get(STAGE_CHAT, 0)
+    seek_count = stage_counts.get(STAGE_SEEK, 0)
+    contact_count = stage_counts.get(STAGE_CONTACT, 0)
     
     # Calculate total screened (all candidates except those without stage)
-    total_screened = pass_count + chat_count + seek_count + contact_count
+    total_screened = (pass_count + chat_count + seek_count + contact_count) or 1
     
     # PASS: First stage
     # 转化率 = (PASS + CHAT + SEEK + CONTACT) / 总筛选人数 = 100%
@@ -174,34 +174,34 @@ def conversion_table(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         "stage": STAGE_PASS,
         "count": pass_count,
         "previous": total_screened,  # Total screened is the "previous" for PASS
-        "rate": round(pass_count / (total_screened or 1), 3),
+        "rate": round(pass_count / total_screened, 3),
     })
     
     # CHAT: Second stage
     # 转化率 = (CHAT + SEEK + CONTACT) / 总筛选人数
     rows.append({
-        "stage": "CHAT",
+        "stage": STAGE_CHAT,
         "count": chat_count,
-        "previous": total_screened,  # From total screened
-        "rate": round((chat_count + seek_count + contact_count) / (total_screened or 1), 3),
+        "previous": pass_count,  # From total screened
+        "rate": round(chat_count / pass_count, 3),
     })
     
     # SEEK: Third stage
     # 转化率 = (SEEK + CONTACT) / CHAT人数
     rows.append({
-        "stage": "SEEK",
+        "stage": STAGE_SEEK,
         "count": seek_count,
         "previous": chat_count,  # From CHAT
-        "rate": round((seek_count + contact_count) / (chat_count or 1), 3),
+        "rate": round(seek_count / chat_count, 3),
     })
     
     # CONTACT: Fourth stage
     # 转化率 = CONTACT / SEEK人数
     rows.append({
-        "stage": "CONTACT",
+        "stage": STAGE_CONTACT,
         "count": contact_count,
         "previous": seek_count,  # From SEEK
-        "rate": round(contact_count / (seek_count or 1), 3),
+        "rate": round(contact_count / seek_count, 3),
     })
     
     return rows
@@ -224,6 +224,7 @@ def fetch_job_candidates(job_name: str, days: int | None = None) -> List[Dict[st
         updated_from = start_dt.isoformat()
     return search_candidates_advanced(
         job_applied=job_name,
+        limit=None,
         fields=["candidate_id", "job_applied", "stage", "analysis", "updated_at"],
         updated_from=updated_from,
         sort_by="updated_at",

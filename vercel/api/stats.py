@@ -34,62 +34,79 @@ STAGE_SEEK = "SEEK"
 STAGE_CONTACT = "CONTACT"
 HIGH_SCORE_THRESHOLD = 7
 
-# Initialize Zilliz clients
+# Initialize Zilliz clients - try to create on module load if credentials are available
+# This ensures connection is available early, similar to candidate_store.py
 _candidate_client = None
 _job_client = None
 
-def get_candidate_client():
-    """Get or create candidate collection Zilliz client"""
+def _create_candidate_client() -> MilvusClient:
+    """Create and return a MilvusClient instance.
+    
+    Raises:
+        ValueError: If credentials are missing or connection fails.
+    """
+    missing = []
+    if not ZILLIZ_ENDPOINT:
+        missing.append('ZILLIZ_ENDPOINT')
+    if not ZILLIZ_USER:
+        missing.append('ZILLIZ_USER')
+    if not ZILLIZ_PASSWORD:
+        missing.append('ZILLIZ_PASSWORD')
+    
+    if missing:
+        raise ValueError(f'Zilliz credentials not configured. Missing: {", ".join(missing)}. Please set these environment variables in Vercel.')
+    
+    # Create client - will raise exception if connection fails
+    # Match the exact pattern from main codebase: src/candidate_store.py
+    token_value = ZILLIZ_TOKEN if (ZILLIZ_TOKEN and ZILLIZ_TOKEN.strip()) else ''
+    print(f"Creating MilvusClient: uri={ZILLIZ_ENDPOINT[:50]}..., user={ZILLIZ_USER}, token={'***' if token_value else '(empty)'}", file=sys.stderr)
+    
+    client = MilvusClient(
+        uri=ZILLIZ_ENDPOINT,
+        token=token_value,  # Empty string if not provided, matching main codebase
+        user=ZILLIZ_USER,
+        password=ZILLIZ_PASSWORD,
+        secure=ZILLIZ_ENDPOINT.startswith('https://'),
+    )
+    
+    # Verify connection - will raise exception if verification fails
+    # This ensures the connection is actually established before returning
+    collections = client.list_collections()
+    print(f"Successfully connected to Zilliz. Available collections: {collections}", file=sys.stderr)
+    
+    return client
+
+# Try to create client on module load (if credentials are available)
+# This ensures connection is available early, similar to candidate_store.py
+# If it fails (e.g., env vars not set yet), we'll create it lazily on first use
+try:
+    if ZILLIZ_ENDPOINT and ZILLIZ_USER and ZILLIZ_PASSWORD:
+        _candidate_client = _create_candidate_client()
+except Exception as e:
+    # If initialization fails, we'll create it lazily on first use
+    # This allows the module to load even if credentials aren't set yet
+    print(f"Note: Zilliz client not initialized on module load: {e}", file=sys.stderr)
+
+def get_candidate_client() -> MilvusClient:
+    """Get candidate collection Zilliz client.
+    
+    Creates client on first call if not already created.
+    Raises exception if connection fails - ensures client is always valid when returned.
+    
+    Returns:
+        MilvusClient: Valid, connected client instance
+        
+    Raises:
+        ValueError: If credentials are missing or connection fails
+    """
     global _candidate_client
+    
+    # Lazy initialization: create client only if None
+    # This allows retry after connection failures (when reset to None)
     if _candidate_client is None:
-        missing = []
-        if not ZILLIZ_ENDPOINT:
-            missing.append('ZILLIZ_ENDPOINT')
-        if not ZILLIZ_USER:
-            missing.append('ZILLIZ_USER')
-        if not ZILLIZ_PASSWORD:
-            missing.append('ZILLIZ_PASSWORD')
-        
-        if missing:
-            raise ValueError(f'Zilliz credentials not configured. Missing: {", ".join(missing)}. Please set these environment variables in Vercel.')
-        
-        try:
-            # Create client - MilvusClient connects automatically on creation
-            # Match the exact pattern from main codebase: src/candidate_store.py
-            # It passes token=_zilliz_config.get("token", '') which is empty string
-            # and it works, so we do the same
-            print(f"Creating MilvusClient with endpoint: {ZILLIZ_ENDPOINT[:50]}...", file=sys.stderr)
-            print(f"User: {ZILLIZ_USER}, Token provided: {bool(ZILLIZ_TOKEN and ZILLIZ_TOKEN.strip())}", file=sys.stderr)
-            
-            # Match main codebase exactly: pass token (empty string if not provided), user, and password
-            # Main codebase: token=_zilliz_config.get("token", ''), user=..., password=...
-            token_value = ZILLIZ_TOKEN if (ZILLIZ_TOKEN and ZILLIZ_TOKEN.strip()) else ''
-            print(f"Creating MilvusClient: uri={ZILLIZ_ENDPOINT[:50]}..., user={ZILLIZ_USER}, token={'***' if token_value else '(empty)'}", file=sys.stderr)
-            
-            _candidate_client = MilvusClient(
-                uri=ZILLIZ_ENDPOINT,
-                token=token_value,  # Empty string if not provided, matching main codebase
-                user=ZILLIZ_USER,
-                password=ZILLIZ_PASSWORD,
-                secure=ZILLIZ_ENDPOINT.startswith('https://'),
-            )
-            # Verify connection by checking if we can list collections
-            # This ensures the connection is actually established
-            try:
-                collections = _candidate_client.list_collections()
-                print(f"Successfully connected to Zilliz. Available collections: {collections}", file=sys.stderr)
-            except Exception as conn_err:
-                print(f"Error: Connection verification failed: {conn_err}", file=sys.stderr)
-                import traceback
-                traceback.print_exc(file=sys.stderr)
-                # Reset client to None so it will be recreated on next attempt
-                _candidate_client = None
-                raise ValueError(f'Failed to verify Zilliz connection: {str(conn_err)}')
-        except Exception as e:
-            print(f"Failed to create Zilliz client: {e}", file=sys.stderr)
-            import traceback
-            traceback.print_exc(file=sys.stderr)
-            raise ValueError(f'Failed to connect to Zilliz: {str(e)}')
+        _candidate_client = _create_candidate_client()
+    
+    # If we reach here, client is guaranteed to be valid
     return _candidate_client
 
 def get_job_client():
