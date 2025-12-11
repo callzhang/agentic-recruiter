@@ -264,7 +264,8 @@ async function process_candidate() {
                     if (need_reply || is_full_analysis && current_score >= borderline_threshold ) {
                         // Step 4c: Send notification if analysis was updated
                         await generateMessage();
-                        await greetAndSendMessage();
+                        const autoSend = document.getElementById('auto-send-checkbox')?.checked ?? true;
+                        await greetAndSendMessage(autoSend);
                     }
                     // Step 4d: Check seek_threshold - request contact if above
                     if (is_full_analysis && current_score >= seek_threshold) {
@@ -274,7 +275,8 @@ async function process_candidate() {
                     }
                 }else{
                     // For recommend mode, greet and send message
-                    await greetAndSendMessage();
+                    const autoSend = document.getElementById('auto-send-checkbox')?.checked ?? false;
+                    await greetAndSendMessage(autoSend);
                     // await sendDingNotification(analysis, name, getCandidateData('job_applied'));
                 }
             }
@@ -394,20 +396,32 @@ async function generateMessage() {
     await updateCandidateData({generated_message: result});
 }
 
-async function greetAndSendMessage() {
+async function greetAndSendMessage(autoSend = true) {
     const message_textarea = document.getElementById('message-text');
-    const message = message_textarea.value.trim();
+    const message = autoSend ? message_textarea.value.trim() : '';
     const stage = getCandidateData('stage');
     const greeted = getCandidateData('greeted');
+    
     const need_reply = await shouldReply();
     debugger;
     if (!need_reply || greeted) {
         showToast('等待候选人回复后再发送消息', 'info');
         return;
     }
-    const values = getCandidateData();
-    values.message = message;
-    
+    const mode = getCandidateData('mode');
+    const chat_id = getCandidateData('chat_id');
+    const index = getCandidateData('index');
+    const values = {
+        mode,
+        chat_id,
+        index,
+        message,
+    };
+    // if not auto send and not recommend mode, skip sending message
+    debugger;
+    if (!autoSend && mode !== 'recommend') {
+        return;
+    }
     await htmxAjaxPromise('POST', '/candidates/send', {
         target: '#message-content',
         swap: 'none',

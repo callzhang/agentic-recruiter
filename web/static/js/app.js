@@ -1875,7 +1875,7 @@ function renderQuickStats(data) {
             <p class="text-3xl font-bold text-blue-600 mb-4">${stats.total_candidates || 0}</p>
             <div class="daily-candidate-chart-container" data-daily='${JSON.stringify(dailyData)}' style="min-height: 250px;">
                 <!-- Chart.js canvas will be inserted here -->
-            </div>
+        </div>
         </div>
     `;
     
@@ -2022,42 +2022,42 @@ async function loadStatsPage() {
         return; // Not on stats page
     }
     
-    const response = await fetch('/stats', {
-        method: 'GET',
-        headers: { 'Accept': 'application/json' }
-    });
-    
-    if (!response.ok) {
+        const response = await fetch('/stats', {
+            method: 'GET',
+            headers: { 'Accept': 'application/json' }
+        });
+        
+        if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-    }
-    
-    const data = await response.json();
-    
+        }
+        
+        const data = await response.json();
+        
     if (!data.success) {
         throw new Error(data.error || 'Stats API returned success=false');
     }
     
-    if (quickStatsContainer) {
-        renderQuickStats(data);
-    }
-    if (jobStatsContainer) {
-        renderJobStats(data);
-    }
+            if (quickStatsContainer) {
+                renderQuickStats(data);
+            }
+            if (jobStatsContainer) {
+                renderJobStats(data);
+            }
 }
 
 // Load stats on page load (for index page)
 document.addEventListener('DOMContentLoaded', function() {
     if (document.getElementById('quick-stats') || document.getElementById('job-stats')) {
         loadStatsPage().catch(error => {
-            console.error('Failed to load stats:', error);
+        console.error('Failed to load stats:', error);
             const quickStatsContainer = document.getElementById('quick-stats');
             const jobStatsContainer = document.getElementById('job-stats');
-            if (quickStatsContainer) {
+        if (quickStatsContainer) {
                 quickStatsContainer.innerHTML = '<div class="text-red-600 p-4">加载统计数据失败: ' + error.message + '</div>';
-            }
-            if (jobStatsContainer) {
+        }
+        if (jobStatsContainer) {
                 jobStatsContainer.innerHTML = '<div class="text-red-600 p-4">加载统计数据失败: ' + error.message + '</div>';
-            }
+        }
         });
     }
 });

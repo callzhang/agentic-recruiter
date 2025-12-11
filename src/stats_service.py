@@ -178,30 +178,30 @@ def conversion_table(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     })
     
     # CHAT: Second stage
-    # 转化率 = (CHAT + SEEK + CONTACT) / 总筛选人数
+    # 转化率 = CHAT / PASS人数 (从PASS阶段转化到CHAT阶段的比例)
     rows.append({
         "stage": STAGE_CHAT,
         "count": chat_count,
-        "previous": pass_count,  # From total screened
-        "rate": round(chat_count / pass_count, 3),
+        "previous": pass_count,  # From PASS
+        "rate": round(chat_count / (pass_count or 1), 3),
     })
     
     # SEEK: Third stage
-    # 转化率 = (SEEK + CONTACT) / CHAT人数
+    # 转化率 = SEEK / CHAT人数 (从CHAT阶段转化到SEEK阶段的比例)
     rows.append({
         "stage": STAGE_SEEK,
         "count": seek_count,
         "previous": chat_count,  # From CHAT
-        "rate": round(seek_count / chat_count, 3),
+        "rate": round(seek_count / (chat_count or 1), 3),
     })
     
     # CONTACT: Fourth stage
-    # 转化率 = CONTACT / SEEK人数
+    # 转化率 = CONTACT / SEEK人数 (从SEEK阶段转化到CONTACT阶段的比例)
     rows.append({
         "stage": STAGE_CONTACT,
         "count": contact_count,
         "previous": seek_count,  # From SEEK
-        "rate": round(contact_count / seek_count, 3),
+        "rate": round(contact_count / (seek_count or 1), 3),
     })
     
     return rows

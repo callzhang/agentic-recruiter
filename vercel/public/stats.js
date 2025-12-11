@@ -352,7 +352,7 @@ function renderQuickStats(data) {
             <p class="text-3xl font-bold text-blue-600 mb-4">${stats.total_candidates || 0}</p>
             <div class="daily-candidate-chart-container" data-daily='${JSON.stringify(dailyData)}' style="min-height: 250px;">
                 <!-- Chart.js canvas will be inserted here -->
-            </div>
+        </div>
         </div>
     `;
     

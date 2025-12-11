@@ -170,6 +170,8 @@ async def get_chat_stats_action(page: Page) -> Dict[str, Any]:
 
 async def send_message_action(page: Page, chat_id: str, message: str) -> bool:
     """Send message to candidate. Returns True on success, raises ValueError on failure."""
+    if not message:
+        return False
     await _prepare_chat_page(page)
     dialog = await _go_to_chat_dialog(page, chat_id)
     if not dialog:
