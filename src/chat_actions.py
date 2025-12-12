@@ -197,6 +197,7 @@ async def send_message_action(page: Page, chat_id: str, message: str) -> bool:
     remaining = await input_field.evaluate("el => (el.value || el.innerText || '').trim()")
     if remaining:
         logger.warning("消息可能未发送成功，输入框仍有内容")
+        return False
     
     return True
 

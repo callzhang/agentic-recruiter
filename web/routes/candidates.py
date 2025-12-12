@@ -6,6 +6,7 @@
 `job_applied` is the job position title that candidate is applying for, used consistently throughout
 """
 
+import asyncio
 from datetime import datetime
 import json
 from typing import Any, Dict, Optional
@@ -76,8 +77,8 @@ async def list_candidates(
     - followup: Get follow-up candidates (沟通中, 牛人已读未回)
     """
     if mode == "recommend":
-        # Get job to retrieve candidate_filters
-        job = get_job_by_id(job_id)
+        # Get job to retrieve candidate_filters (run in thread pool to avoid blocking)
+        job = await asyncio.to_thread(get_job_by_id, job_id)
         
         # Get candidate_filters from job
         candidate_filters = job.get("candidate_filters") if job else None
@@ -153,7 +154,9 @@ async def list_candidates(
             conversation_ids.append(c["conversation_id"])
         if c.get("name"):
             names.append(c["name"])
-    stored_candidates = search_candidates_advanced(
+    # Run database query in thread pool to avoid blocking event loop
+    stored_candidates = await asyncio.to_thread(
+        search_candidates_advanced,
         candidate_ids=list({cid for cid in candidate_ids}),
         chat_ids=list({cid for cid in chat_ids}),
         conversation_ids=list({cid for cid in conversation_ids}),
@@ -190,15 +193,27 @@ async def list_candidates(
             restored += 1
 
         # Extract resume_text and full_resume from candidate
-        html += templates.get_template("partials/candidate_card.html").render({
-            "analysis": candidate.pop("analysis", ''),
-            "resume_text": candidate.pop("resume_text", ''),
-            "full_resume": candidate.pop("full_resume", ''),
-            "metadata": candidate.pop("metadata", {}),
-            "generated_message": candidate.pop("generated_message", ''),
-            "candidate": candidate,
-            "selected": False
-        })
+        # Prepare template context (pop values before rendering)
+        analysis = candidate.pop("analysis", '')
+        resume_text = candidate.pop("resume_text", '')
+        full_resume = candidate.pop("full_resume", '')
+        metadata = candidate.pop("metadata", {})
+        generated_message = candidate.pop("generated_message", '')
+        
+        # Render template in thread pool to avoid blocking event loop
+        def _render_card():
+            template = templates.get_template("partials/candidate_card.html")
+            return template.render({
+                "analysis": analysis,
+                "resume_text": resume_text,
+                "full_resume": full_resume,
+                "metadata": metadata,
+                "generated_message": generated_message,
+                "candidate": candidate,
+                "selected": False
+            })
+        
+        html += await asyncio.to_thread(_render_card)
     logger.info(f"Restored {restored}/{len(candidates)} candidates from cloud store")
     return HTMLResponse(content=html)
 
@@ -215,24 +230,39 @@ async def get_candidate_detail(request: Request):
     # candidate = dict(request.query_params)
     # candidate = {k:str2bool(v) for k, v in candidate.items() if v}
     candidate = json.loads(request.query_params.get('candidate', '{}'))
-    # Try to find existing candidate
-    stored_candidate = get_candidate_by_dict(candidate, strict=False)
+    
+    # Try to find existing candidate (run in thread pool to avoid blocking event loop)
+    stored_candidate = await asyncio.to_thread(get_candidate_by_dict, candidate, strict=False)
+    
     if stored_candidate and candidate['name'] != stored_candidate.get('name'):
         logger.warning(f"name mismatch: {candidate.get('name')} != {stored_candidate.get('name')}")
     if candidate.get('chat_id') and stored_candidate.get('chat_id') and candidate.get('chat_id') != stored_candidate.get('chat_id'):
         logger.warning(f"chat_id mismatch: {candidate.get('chat_id')} != {stored_candidate.get('chat_id')}")
     else:
         candidate.update(stored_candidate)
-    candidate['score'] = stored_candidate.get("analysis", {}).get("overall")
-    return templates.TemplateResponse("partials/candidate_detail.html", {
-        "request": request,
-        "analysis": candidate.pop("analysis", {}),
-        "generated_message": candidate.pop("generated_message", ''),
-        "resume_text": candidate.pop("resume_text", ''),
-        "full_resume": candidate.pop("full_resume", ''),
-        "candidate": candidate,
-        "view_mode": "interactive",
-    })
+    candidate['score'] = stored_candidate.get("analysis", {}).get("overall") if stored_candidate else None
+    
+    # Prepare template context (pop values before rendering to avoid issues)
+    analysis = candidate.pop("analysis", {}) if stored_candidate else {}
+    generated_message = candidate.pop("generated_message", '') if stored_candidate else ''
+    resume_text = candidate.pop("resume_text", '') if stored_candidate else ''
+    full_resume = candidate.pop("full_resume", '') if stored_candidate else ''
+    
+    # Render template content in thread pool to avoid blocking event loop
+    def _render_template():
+        template = templates.get_template("partials/candidate_detail.html")
+        return template.render({
+            "request": request,
+            "analysis": analysis,
+            "generated_message": generated_message,
+            "resume_text": resume_text,
+            "full_resume": full_resume,
+            "candidate": candidate,
+            "view_mode": "interactive",
+        })
+    
+    html_content = await asyncio.to_thread(_render_template)
+    return HTMLResponse(content=html_content)
 
 
 @router.get("/history/{candidate_id}", response_class=HTMLResponse)
@@ -299,16 +329,20 @@ async def init_chat(
     2. If not found, create a new candidate record with history or last_message
     """
 
-    job_info = get_job_by_id(job_id)
+    # Get job info in thread pool to avoid blocking event loop
+    job_info = await asyncio.to_thread(get_job_by_id, job_id)
     # check if existing candidate has been saved before by using semantic search
     if not chat_id and resume_text:
-        candidate = get_candidate_by_dict({"name": name, "job_applied": job_applied, "resume_text": resume_text})
+        candidate = await asyncio.to_thread(
+            get_candidate_by_dict,
+            {"name": name, "job_applied": job_applied, "resume_text": resume_text}
+        )
         if candidate:
             logger.info(f"Found existing candidate when initializing chat: {candidate.get('candidate_id')} for name: {candidate.get('name')}")
             current = {'chat_id': chat_id, 'job_applied': job_applied, 'resume_text': resume_text}
             updates = {k:v for k, v in candidate.items() if current.get(k) and v != current.get(k)}
             if updates:
-                upsert_candidate(candidate_id=candidate.get('candidate_id'), **updates)
+                await asyncio.to_thread(upsert_candidate, candidate_id=candidate.get('candidate_id'), **updates)
             return candidate
     
     if mode == "recommend":
@@ -318,7 +352,9 @@ async def init_chat(
         page = await boss_service.service._ensure_browser_session()
         history = await chat_actions.get_chat_history_action(page, chat_id)
         
-    result = assistant_actions.init_chat(
+    # Init chat in thread pool to avoid blocking event loop (OpenAI API call)
+    result = await asyncio.to_thread(
+        assistant_actions.init_chat,
         mode=mode,
         chat_id=chat_id,
         job_info=job_info,
@@ -353,8 +389,9 @@ async def analyze_candidate(
         logger.debug("Analyzing online resume")
         input_message=f'招聘顾问您好，你帮我分析一下我是否匹配{job_applied}这个岗位？以下是我的在线简历：\n{resume_text}'
     
-    # start analyze
-    analysis_result = assistant_actions.generate_message(
+    # start analyze - run in thread pool to avoid blocking event loop (OpenAI API call)
+    analysis_result = await asyncio.to_thread(
+        assistant_actions.generate_message,
         input_message=input_message,
         conversation_id=conversation_id,
         purpose="ANALYZE_ACTION"
@@ -362,8 +399,9 @@ async def analyze_candidate(
     resume_type = "online" if not full_resume else "full"
     analysis_result["resume_type"] = resume_type
     
-    # Save analysis in background
-    upsert_candidate(
+    # Save analysis in thread pool to avoid blocking event loop
+    await asyncio.to_thread(
+        upsert_candidate,
         analysis=analysis_result,
         candidate_id=candidate_id,
         chat_id=chat_id,
@@ -394,8 +432,8 @@ async def save_candidate_to_cloud(request: Request):
     # Parse form data
     kwargs = await request.json()
     assert kwargs, "kwargs is empty"
-    # update candidate passes all relevant kwargs
-    candidate_id = upsert_candidate(**kwargs)
+    # update candidate passes all relevant kwargs - run in thread pool to avoid blocking event loop
+    candidate_id = await asyncio.to_thread(upsert_candidate, **kwargs)
     return candidate_id
 
 
@@ -440,8 +478,9 @@ async def generate_message(
     
     # generate message if there is new message from user(candidate)
     if [m for m in new_messages if m.get('role') == 'user']:
-        # Generate message
-        message = assistant_actions.generate_message(
+        # Generate message in thread pool to avoid blocking event loop (OpenAI API call)
+        message = await asyncio.to_thread(
+            assistant_actions.generate_message,
             input_message=new_messages,
             conversation_id=conversation_id,
             purpose=purpose
@@ -450,7 +489,9 @@ async def generate_message(
         
         # append the new message to the chat_history from DOM
         new_message = {"role": "assistant", "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "content": message}
-        upsert_candidate(
+        # Save to database in thread pool to avoid blocking event loop
+        await asyncio.to_thread(
+            upsert_candidate,
             candidate_id=candidate_id,
             last_message=message,
             chat_id=chat_id,

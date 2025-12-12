@@ -424,14 +424,14 @@ def start_service(*, scheduler_options: Optional[Dict[str, Any]] | None = None):
         browser_thread.start()
         
         # Start uvicorn directly with reload_excludes
-        # Only watch src/ directory + boss_service.py, exclude everything else
+        # Watch src/, web/routes/, web/utils/, and root for boss_service.py
         # Note: uvicorn.run() blocks here until server stops (Ctrl+C or error)
         uvicorn.run(
             "boss_service:app",
             host=host,
             port=int(port),
             reload=True,
-            reload_dirs=["src", "web/routes/"],  # Watch src/, web/routes/, and root for boss_service.py
+            reload_dirs=["src", "web"],  # Watch src/ and entire web/ directory (includes web/routes/, web/utils/, etc.)
             reload_includes=["boss_service.py"],  # Explicitly include boss_service.py
             reload_excludes=[
                 "pages/**",
@@ -442,7 +442,8 @@ def start_service(*, scheduler_options: Optional[Dict[str, Any]] | None = None):
                 "docs/**",
                 "examples/**",
                 "wasm/**",
-                "web/templates/**",  # Exclude web UI files to prevent unnecessary reloads
+                "web/templates/**",  # Exclude web UI template files (HTML) to prevent unnecessary reloads
+                "web/static/**",  # Exclude web static files (JS/CSS) to prevent unnecessary reloads
                 "streamlit_shared.py",
                 "boss_app.py",
                 "start_service.py",

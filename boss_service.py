@@ -254,8 +254,17 @@ class BossServiceAsync:
         continue to serve status information.
         
         """
+        import time
+        lock_wait_start = time.perf_counter()
+        
         while True:
+            # Monitor browser lock wait time
+            lock_acquire_start = time.perf_counter()
             async with self.browser_lock:
+                lock_wait_ms = (time.perf_counter() - lock_acquire_start) * 1000
+                if lock_wait_ms > 50.0:  # Log if waited more than 50ms for lock
+                    logger.warning(f"[PERF] Browser lock wait: {lock_wait_ms:.2f}ms (total wait: {(time.perf_counter() - lock_wait_start) * 1000:.2f}ms)")
+                
                 page = await self._prepare_browser_session()
                 login_needed = not self.is_logged_in
 
@@ -1056,8 +1065,34 @@ class BossServiceAsync:
         @self.app.middleware("http")
         @self.app.middleware("https")
         async def ensure_startup(request: Request, call_next):
+            import time
+            middleware_start = time.perf_counter()
+            
+            # Record request arrival time for queue detection
+            request.state.request_arrival_time = middleware_start
+            
+            # Wait for startup to complete (should be instant after first request)
+            startup_wait_start = time.perf_counter()
             await self.startup_complete.wait()
-            return await call_next(request)
+            startup_wait_ms = (time.perf_counter() - startup_wait_start) * 1000
+            if startup_wait_ms > 10.0:
+                logger.warning(f"[PERF] Middleware startup wait: {startup_wait_ms:.2f}ms for {request.url.path}")
+            
+            # Process request and measure handler time separately
+            handler_start = time.perf_counter()
+            response = await call_next(request)
+            handler_time_ms = (time.perf_counter() - handler_start) * 1000
+            
+            # Log total middleware time if significant
+            middleware_time_ms = (time.perf_counter() - middleware_start) * 1000
+            if middleware_time_ms > 50.0:
+                logger.warning(
+                    f"[PERF] Middleware total: {middleware_time_ms:.2f}ms "
+                    f"(startup_wait={startup_wait_ms:.2f}ms, handler={handler_time_ms:.2f}ms) "
+                    f"for {request.url.path}"
+                )
+            
+            return response
 
 
 service = BossServiceAsync()
@@ -1127,13 +1162,23 @@ async def web_stats():
         JSONResponse: Statistics data including jobs, best job, and quick stats
     """
     # Get quick stats (candidate count, message counts)
+    # Note: Chat stats require Playwright, but we don't want to block this endpoint
+    # if other Playwright operations are in progress. Use a short timeout to avoid blocking.
     new_messages = 0
     new_greets = 0
     try:
-        page = await service._ensure_browser_session()
+        # Use a short timeout (0.5s) to avoid blocking if browser is busy
+        # If we can't get the browser session quickly, skip chat stats and return defaults
+        page = await asyncio.wait_for(
+            service._ensure_browser_session(),
+            timeout=0.5
+        )
         stats = await chat_actions.get_chat_stats_action(page)
         new_messages = stats.get("new_message_count", 0)
         new_greets = stats.get("new_greet_count", 0)
+    except asyncio.TimeoutError:
+        # Browser is busy with other operations, skip chat stats
+        logger.debug("Browser busy, skipping chat stats to avoid blocking /stats endpoint")
     except Exception as e:
         logger.warning(f"Failed to get chat stats: {e}")
     

@@ -34,6 +34,46 @@ function showToast(message, type = 'info') {
 window.showToast = showToast;
 
 /**
+ * Browser notification helper using Chrome's Web Notifications API
+ * Shows system-level notifications to alert HR when messages are sent
+ */
+async function showBrowserNotification(title, body, icon = null) {
+    // Request permission if not already granted
+    if (Notification.permission === 'default') {
+        await Notification.requestPermission();
+    }
+    
+    // Only show notification if permission is granted
+    if (Notification.permission === 'granted') {
+        const notification = new Notification(title, {
+            body: body,
+            icon: icon || 'https://www.zhipin.com/favicon.ico',
+            badge: icon || 'https://www.zhipin.com/favicon.ico',
+            tag: 'bosszhipin-message', // Use tag to replace previous notifications
+            requireInteraction: false, // Auto-close after a few seconds
+        });
+        
+        // Auto-close after 5 seconds
+        setTimeout(() => {
+            notification.close();
+        }, 5000);
+        
+        // Handle click to focus window
+        notification.onclick = () => {
+            window.focus();
+            notification.close();
+        };
+        
+        return true;
+    }
+    
+    return false;
+}
+
+// Expose showBrowserNotification globally
+window.showBrowserNotification = showBrowserNotification;
+
+/**
  * Confirm modal helper using Alpine.js store (minimal JS, matching index.html pattern)
  * Returns a Promise that resolves to true/false
  */

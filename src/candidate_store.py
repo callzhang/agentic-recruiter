@@ -214,6 +214,8 @@ def search_candidates_advanced(
     strict = True
 ) -> List[Dict[str, Any]]:
     """Advanced candidate search supporting multiple filters, identifiers and semantic queries."""
+    import time
+    perf_start = time.perf_counter()
 
     _quote = lambda value: f"'{value.strip()}'" if value else ''
     _build_in_clause = lambda field, values: f"{field} in [{', '.join(_quote(v) for v in values if v and v.strip())}]" if values else None
@@ -264,6 +266,7 @@ def search_candidates_advanced(
     order_clause = f"{sort_by_normalized} {sort_dir}"
 
     try:
+        perf_before_query = time.perf_counter()
         # Cap the limit to stay within Milvus's max query result window of 16384
         # The function multiplies limit by 3, so we cap the effective limit
         effective_limit = limit * 3 if limit else None
@@ -279,6 +282,7 @@ def search_candidates_advanced(
                 similarity_threshold=0.5,
             )
         else:
+            perf_before_db = time.perf_counter()
             results = _client.query(
                 collection_name=_collection_name,
                 filter=filter_expr,
@@ -286,18 +290,35 @@ def search_candidates_advanced(
                 limit=effective_limit,
                 output_fields_order=order_clause,
             )
+            perf_after_db = time.perf_counter()
+            db_time_ms = (perf_after_db - perf_before_db) * 1000
+            if db_time_ms > 50.0:  # Log if DB query takes more than 50ms
+                logger.info(f"[PERF] search_candidates_advanced DB query: {db_time_ms:.2f}ms (filter={filter_expr[:100] if filter_expr else 'None'}, limit={effective_limit})")
+        
+        perf_after_query = time.perf_counter()
+        query_time_ms = (perf_after_query - perf_before_query) * 1000
+        
+        candidates = [{k: v for k, v in result.items() if v or v == 0} for result in results or []]
+        perf_after_process = time.perf_counter()
+        
+        for candidate in candidates:
+            candidate["score"] = candidate.get("analysis", {}).get("overall")
+
+        reverse = sort_direction.lower() != "asc"
+        candidates.sort(key=lambda c: c.get(sort_by_normalized) or "", reverse=reverse)
+        
+        perf_end = time.perf_counter()
+        total_time_ms = (perf_end - perf_start) * 1000
+        
+        if total_time_ms > 100.0:  # Log if total function takes more than 100ms
+            logger.info(f"[PERF] search_candidates_advanced total: {total_time_ms:.2f}ms (query={query_time_ms:.2f}ms, process={(perf_after_process-perf_after_query)*1000:.2f}ms, sort={(perf_end-perf_after_process)*1000:.2f}ms, results={len(candidates)})")
+
+        return candidates[:limit] if limit else candidates
     except Exception as exc:
-        logger.exception("Failed advanced candidate search: %s", exc)
+        perf_end = time.perf_counter()
+        total_time_ms = (perf_end - perf_start) * 1000
+        logger.exception("Failed advanced candidate search: %s (took %.2fms)", exc, total_time_ms)
         return []
-
-    candidates = [{k: v for k, v in result.items() if v or v == 0} for result in results or []]
-    for candidate in candidates:
-        candidate["score"] = candidate.get("analysis", {}).get("overall")
-
-    reverse = sort_direction.lower() != "asc"
-    candidates.sort(key=lambda c: c.get(sort_by_normalized) or "", reverse=reverse)
-
-    return candidates[:limit] if limit else candidates
         
 
 truncate_field = lambda string, length: string.encode('utf-8')[:length].decode('utf-8', errors='ignore').strip()

@@ -428,6 +428,13 @@ async function greetAndSendMessage(autoSend = true) {
         values: values
     });
     showToast(`已发送消息: ${message}`, 'success');
+    
+    // Show browser notification after successful message send
+    const candidateName = getCandidateData('name') || '候选人';
+    const notificationTitle = '消息已发送';
+    const notificationBody = `已向 ${candidateName} 发送消息`;
+    await showBrowserNotification(notificationTitle, notificationBody);
+    
     // Update to CHAT stage
     const currentStage = getCandidateData('stage');
     await updateCandidateData({
