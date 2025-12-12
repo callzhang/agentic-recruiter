@@ -10,6 +10,14 @@
       "destination": "/api/stats.py"
     },
     {
+      "source": "/api/send-daily-report",
+      "destination": "/api/stats.py"
+    },
+    {
+      "source": "/api/send-report",
+      "destination": "/api/stats.py"
+    },
+    {
       "source": "/jobs",
       "destination": "/jobs.html"
     }
@@ -23,6 +31,12 @@
           "value": "*"
         }
       ]
+    }
+  ],
+  "crons": [
+    {
+      "path": "/api/send-daily-report",
+      "schedule": "0 23 * * *"
     }
   ]
 }

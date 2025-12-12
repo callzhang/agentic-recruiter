@@ -38,9 +38,13 @@ ZILLIZ_CANDIDATE_COLLECTION_NAME=CN_candidates
 ZILLIZ_JOB_COLLECTION_NAME=CN_jobs
 ZILLIZ_EMBEDDING_DIM=1536
 ZILLIZ_TOKEN=  (leave empty or set if using API key authentication)
+DINGTALK_WEBHOOK=https://oapi.dingtalk.com/robot/send?access_token=...
+DINGTALK_SECRET=SEC...
 ```
 
-**Note:** These credentials are from your `config/secrets.yaml` file. The pages use the same Zilliz database as your FastAPI service.
+**Note:** 
+- Zilliz credentials are from your `config/secrets.yaml` file. The pages use the same Zilliz database as your FastAPI service.
+- DingTalk credentials are for daily report notifications (see "Daily Reports" section below).
 
 ### 2. Deploy to Vercel
 
@@ -96,7 +100,13 @@ The pages will be available at:
 The pages use Vercel serverless functions that connect directly to Zilliz:
 
 ### Statistics API (`api/stats.py`)
-- `GET /api/stats` - Calculate and return statistics from Zilliz database
+- `GET /api/stats` - Calculate and return statistics from Zilliz database (JSON format)
+- `GET /api/stats?format=report` - Return formatted Markdown report for DingTalk
+
+### Daily Reports API (`api/send-daily-report.py`)
+- `GET /api/send-daily-report` - Send daily reports to DingTalk (called by Vercel Cron Jobs)
+  - Sends 1 overall report (all jobs summary) to default DingTalk webhook
+  - Sends N individual job reports (one per job) to job-specific or default DingTalk webhook
 
 ### Jobs API (`api/jobs.py`)
 - `GET /api/jobs/list` - List all jobs
@@ -142,21 +152,88 @@ If jobs operations fail:
 3. Check that job_id format is correct (base_job_id or versioned_job_id)
 4. Verify all required fields are provided in API requests
 
+## Daily Reports (Vercel Cron Jobs)
+
+The deployment includes a daily report feature that automatically sends statistics to DingTalk every day at 7:00 AM (Beijing time).
+
+### How It Works
+
+1. **Vercel Cron Jobs** automatically calls `/api/send-daily-report` daily at UTC 23:00 (7:00 AM Beijing time)
+2. The function generates and sends:
+   - **1 overall report**: Summary of all jobs, sent to default DingTalk webhook (from `DINGTALK_WEBHOOK` environment variable)
+   - **N job reports**: Individual report for each job, sent to:
+     - Job-specific DingTalk webhook (if configured in job's `notification` field)
+     - Default DingTalk webhook (fallback if job doesn't have notification config)
+
+### Configuration
+
+1. **Environment Variables** (required):
+   - `DINGTALK_WEBHOOK`: Default DingTalk webhook URL (from `config/secrets.yaml`)
+   - `DINGTALK_SECRET`: Default DingTalk secret (from `config/secrets.yaml`)
+
+2. **Job-specific Configuration** (optional):
+   - Each job can have its own `notification` field in the job collection:
+     ```json
+     {
+       "notification": {
+         "url": "https://oapi.dingtalk.com/robot/send?access_token=...",
+         "secret": "SEC..."
+       }
+     }
+     ```
+   - If a job has `notification` configured, its report will be sent to that webhook
+   - Otherwise, it falls back to the default webhook
+
+3. **Cron Schedule**:
+   - Configured in `vercel.json`:
+     ```json
+     {
+       "crons": [
+         {
+           "path": "/api/send-daily-report",
+           "schedule": "0 23 * * *"
+         }
+       ]
+     }
+     ```
+   - `0 23 * * *` = UTC 23:00 = 7:00 AM Beijing time
+
+### Requirements
+
+- **Vercel Pro or Enterprise plan** (Cron Jobs are not available on the free plan)
+- See [Vercel Cron Jobs documentation](https://vercel.com/docs/cron-jobs/usage-and-pricing) for details
+
+### Report Format
+
+**Overall Report** includes:
+- Total candidate count
+- Today's new candidates
+- Last 7 days / 30 days totals
+- Growth rates (vs yesterday, vs last week)
+- Job statistics table (all jobs with today's metrics)
+
+**Individual Job Report** includes:
+- Job name
+- Today's new candidates and SEEK count
+- Total count, quality score, progress score
+- Last 7 days trend
+
 ## File Structure
 
 ```
 vercel/
 ├── api/
-│   ├── jobs.py          # Jobs API serverless function
-│   └── stats.py          # Statistics API serverless function
+│   ├── jobs.py              # Jobs API serverless function
+│   ├── stats.py             # Statistics API serverless function
+│   └── send-daily-report.py # Daily report sender (Cron Jobs)
 ├── public/
-│   ├── index.html        # Homepage (statistics dashboard)
-│   ├── jobs.html         # Jobs editor page
-│   └── stats.js          # Statistics JavaScript
-├── vercel.json           # Vercel configuration
-├── package.json          # Node.js package file
-├── requirements.txt      # Python dependencies
-└── README.md            # This file
+│   ├── index.html           # Homepage (statistics dashboard)
+│   ├── jobs.html            # Jobs editor page
+│   └── stats.js             # Statistics JavaScript
+├── vercel.json              # Vercel configuration (includes crons)
+├── package.json             # Node.js package file
+├── requirements.txt         # Python dependencies
+└── README.md               # This file
 ```
 
 ## Security Notes

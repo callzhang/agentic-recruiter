@@ -1,4 +1,6 @@
 pymilvus>=2.6.2
 numpy>=1.24.0
 PyYAML>=6.0.2
+requests>=2.31.0
+fastapi>=0.104.0
 

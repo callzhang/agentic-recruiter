@@ -1,5 +1,31 @@
 # 更新日志
 
+## v2.4.9 (2025-12-12) - Vercel 定时钉钉日报与统计 API 稳定性增强
+
+### ✨ 新功能
+
+#### Vercel 钉钉日报（定时任务）
+- **Cron Job 支持**
+  - 通过 Vercel Cron 每天北京时间 07:00（UTC 23:00）触发发送日报
+- **1 + N 通知策略**
+  - 发送 1 份首页总览到默认群（`DINGTALK_WEBHOOK` / `DINGTALK_SECRET`）
+  - 发送 N 份岗位日报到岗位自定义群（岗位 `notification.url/secret`），未配置时回退到默认群
+- **HR 可见提醒**
+  - 当岗位使用默认群回退发送时，岗位日报正文顶部会提示 HR 在岗位 profile 中补充 `notification.url`（以及需要时的 `secret`）
+
+#### 统计与报告 API（Vercel Serverless）
+- **FastAPI 统一入口**
+  - `vercel/api/stats.py` 集中提供统计、报表文本与发送接口：
+    - `/api/stats`：支持 `format=report`（总览）与 `format=job_report`（单岗位）
+    - `/api/send-report`：手动发送（overall / job）
+    - `/api/send-daily-report`：供 Cron 批量发送（overall + all jobs）
+
+### 🐛 Bug 修复
+- 修复因候选人数据中存在非法 `updated_at`（非 ISO 时间串）导致统计接口报错的问题：解析失败时跳过该记录，避免整页/整接口崩溃
+
+### 🔧 技术改进
+- 移除临时调试用 `_dbg()` 与相关调试中间件/生命周期钩子，恢复为更干净的生产实现（在完成验证后移除）
+
 ## v2.4.8 (2025-12-09) - 首页统计图表优化与代码清理
 
 ### ✨ 新功能

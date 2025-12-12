@@ -77,7 +77,7 @@ def get_all_jobs() -> List[Dict[str, Any]]:
         output_fields=[
             'job_id', 'position', 'background', 'description', 'responsibilities',
             'requirements', 'target_profile', 'keywords', 'drill_down_questions',
-            'candidate_filters', 'version', 'current', 'created_at', 'updated_at'
+            'candidate_filters', 'version', 'current', 'created_at', 'updated_at', 'notification'
         ],
         limit=1000
     )

@@ -6,26 +6,44 @@ Connects directly to Zilliz and calculates statistics without backend dependency
 import os
 import sys
 import json
+import time
+import hmac
+import hashlib
+import base64
+import urllib.parse
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Iterable
 from collections import Counter, defaultdict
 from dataclasses import dataclass, asdict
 
-# Import Milvus client
-try:
-    from pymilvus import MilvusClient
-except ImportError as e:
-    print(f"ERROR: Failed to import MilvusClient: {e}", file=sys.stderr)
-    raise
+import requests
+from pymilvus import MilvusClient
+
+def _env_str(name: str, default: Optional[str] = None) -> Optional[str]:
+    """Read env var as string, stripping whitespace and optional surrounding quotes."""
+    value = os.environ.get(name, default)
+    if value is None:
+        return None
+    s = str(value).strip()
+    if len(s) >= 2 and ((s[0] == s[-1] == '"') or (s[0] == s[-1] == "'")):
+        s = s[1:-1]
+    return s
+
+
+def _env_int(name: str, default: int) -> int:
+    """Read env var as int, supporting values wrapped in quotes."""
+    raw = _env_str(name, str(default))
+    return int(str(raw).strip())
+
 
 # Configuration from environment variables
-ZILLIZ_ENDPOINT = os.environ.get('ZILLIZ_ENDPOINT')
-ZILLIZ_TOKEN = os.environ.get('ZILLIZ_TOKEN', '')
-ZILLIZ_USER = os.environ.get('ZILLIZ_USER')
-ZILLIZ_PASSWORD = os.environ.get('ZILLIZ_PASSWORD')
-CANDIDATE_COLLECTION_NAME = os.environ.get('ZILLIZ_CANDIDATE_COLLECTION_NAME', 'CN_candidates')
-JOB_COLLECTION_NAME = os.environ.get('ZILLIZ_JOB_COLLECTION_NAME', 'CN_jobs')
-EMBEDDING_DIM = int(os.environ.get('ZILLIZ_EMBEDDING_DIM', '1536'))
+ZILLIZ_ENDPOINT = _env_str("ZILLIZ_ENDPOINT")
+ZILLIZ_TOKEN = _env_str("ZILLIZ_TOKEN", "") or ""
+ZILLIZ_USER = _env_str("ZILLIZ_USER")
+ZILLIZ_PASSWORD = _env_str("ZILLIZ_PASSWORD")
+CANDIDATE_COLLECTION_NAME = _env_str("ZILLIZ_CANDIDATE_COLLECTION_NAME", "CN_candidates") or "CN_candidates"
+JOB_COLLECTION_NAME = _env_str("ZILLIZ_JOB_COLLECTION_NAME", "CN_jobs") or "CN_jobs"
+EMBEDDING_DIM = _env_int("ZILLIZ_EMBEDDING_DIM", 1536)
 
 # Stage definitions (from candidate_stages.py)
 STAGE_PASS = "PASS"
@@ -60,7 +78,6 @@ def _create_candidate_client() -> MilvusClient:
     # Only pass token if it's provided and not empty
     # When using user/password auth, token should not be passed
     token_value = ZILLIZ_TOKEN if (ZILLIZ_TOKEN and ZILLIZ_TOKEN.strip()) else None
-    print(f"Creating MilvusClient: uri={ZILLIZ_ENDPOINT[:50]}..., user={ZILLIZ_USER}, token={'***' if token_value else '(not provided)'}", file=sys.stderr)
     
     client_kwargs = {
         'uri': ZILLIZ_ENDPOINT,
@@ -76,21 +93,14 @@ def _create_candidate_client() -> MilvusClient:
     
     # Verify connection - will raise exception if verification fails
     # This ensures the connection is actually established before returning
-    collections = client.list_collections()
-    print(f"Successfully connected to Zilliz. Available collections: {collections}", file=sys.stderr)
+    client.list_collections()
     
     return client
 
-# Try to create client on module load (if credentials are available)
-# This ensures connection is available early, similar to candidate_store.py
-# If it fails (e.g., env vars not set yet), we'll create it lazily on first use
-try:
-    if ZILLIZ_ENDPOINT and ZILLIZ_USER and ZILLIZ_PASSWORD:
-        _candidate_client = _create_candidate_client()
-except Exception as e:
-    # If initialization fails, we'll create it lazily on first use
-    # This allows the module to load even if credentials aren't set yet
-    print(f"Note: Zilliz client not initialized on module load: {e}", file=sys.stderr)
+# Lazy init: do not connect to Zilliz at module import time.
+# This prevents Vercel/ASGI runtime init from crashing before we can serve requests.
+# We still fail fast on first use (get_candidate_client()).
+_candidate_client = None
 
 def get_candidate_client() -> MilvusClient:
     """Get candidate collection Zilliz client.
@@ -136,11 +146,13 @@ def _parse_dt(value: str) -> Optional[datetime]:
     """Parse ISO timestamp stored in Milvus records."""
     if not value:
         return None
+    if value.endswith("Z"):
+        value = value.replace("Z", "+00:00")
     try:
-        if value.endswith("Z"):
-            value = value.replace("Z", "+00:00")
         return datetime.fromisoformat(value)
-    except Exception:
+    except Exception as e:
+        # Data quality issue: some records may contain non-ISO timestamps (e.g. "guzgc80j5h").
+        # We skip those records instead of crashing the whole endpoint.
         return None
 
 @dataclass
@@ -195,9 +207,11 @@ def _score_quality(scores: List[int]) -> ScoreAnalysis:
     )
 
 def dist_count(items: Iterable[int], predicate) -> int:
+    """Count how many items satisfy a predicate."""
     return sum(1 for i in items if predicate(i))
 
 def build_daily_series(candidates: List[Dict[str, Any]], days: int = 7) -> List[Dict[str, Any]]:
+    """Build a per-day series for the last N days for a job: new candidates and SEEK stage counts."""
     today = datetime.now().date()
     start = today - timedelta(days=days - 1)
 
@@ -255,7 +269,7 @@ def build_daily_candidate_counts(candidates: List[Dict[str, Any]], total_count: 
     # total_count - candidates_in_period - candidates_without_date = candidates_before_start
     candidates_before_start = max(0, total_count - candidates_in_period - candidates_without_date)
     
-    print(f"build_daily_candidate_counts: total_fetched={len(candidates)}, total_in_db={total_count}, in_period={candidates_in_period}, without_date={candidates_without_date}, before_start={candidates_before_start}", file=sys.stderr)
+    # NOTE: Keep this function quiet; it runs on many requests.
     
     # Build cumulative series starting from candidates before the period
     series = []
@@ -341,93 +355,63 @@ def search_candidates_advanced(
     sort_dir = "DESC" if sort_direction.lower() != "asc" else "ASC"
     order_clause = f"{sort_by_normalized} {sort_dir}"
     
-    try:
-        results = client.query(
-            collection_name=CANDIDATE_COLLECTION_NAME,
-            filter=filter_expr,
-            output_fields=fields,
-            limit=limit,
-            order_by=order_clause,
-        )
-        return results or []
-    except Exception as e:
-        print(f"Error querying candidates: {e}", file=sys.stderr)
-        return []
+    results = client.query(
+        collection_name=CANDIDATE_COLLECTION_NAME,
+        filter=filter_expr,
+        output_fields=fields,
+        limit=limit,
+        order_by=order_clause,
+    )
+    return results or []
 
 def get_all_jobs() -> List[Dict[str, Any]]:
     """Get all current jobs from Zilliz."""
-    try:
-        client = get_job_client()
-        
-        # First, verify the collection exists
-        collections = client.list_collections()
-        print(f"Available collections for jobs: {collections}", file=sys.stderr)
-        
-        if JOB_COLLECTION_NAME not in collections:
-            print(f"Warning: Collection {JOB_COLLECTION_NAME} not found. Available: {collections}", file=sys.stderr)
-            return []
-        
-        results = client.query(
-            collection_name=JOB_COLLECTION_NAME,
-            filter='current == true',
-            output_fields=["job_id", "position"],
-            limit=1000
-        )
-        
-        jobs = []
-        for job in results:
-            job_dict = {k: v for k, v in job.items() if v or v == 0}
-            jobs.append(job_dict)
-        
-        jobs.sort(key=lambda x: x.get("updated_at", ""), reverse=True)
-        print(f"Found {len(jobs)} jobs", file=sys.stderr)
-        return jobs
-    except Exception as e:
-        print(f"Error querying jobs: {e}", file=sys.stderr)
-        import traceback
-        traceback.print_exc(file=sys.stderr)
-        # Reset clients to force reconnection on next call
-        global _candidate_client, _job_client
-        _candidate_client = None
-        _job_client = None
-        return []
+    client = get_job_client()
+
+    # First, verify the collection exists
+    collections = client.list_collections()
+
+    if JOB_COLLECTION_NAME not in collections:
+        raise ValueError(f"Collection {JOB_COLLECTION_NAME} not found. Available: {collections}")
+
+    results = client.query(
+        collection_name=JOB_COLLECTION_NAME,
+        filter="current == true",
+        output_fields=["job_id", "position", "notification"],
+        limit=1000,
+    )
+
+    jobs: List[Dict[str, Any]] = []
+    for job in results:
+        job_dict = {k: v for k, v in job.items() if v or v == 0}
+        jobs.append(job_dict)
+
+    jobs.sort(key=lambda x: x.get("updated_at", ""), reverse=True)
+    # Intentionally no verbose logging here.
+    return jobs
 
 def get_candidate_count() -> int:
     """Get total candidate count."""
-    try:
-        client = get_candidate_client()
-        
-        # First, verify the collection exists
-        collections = client.list_collections()
-        print(f"Available collections: {collections}", file=sys.stderr)
-        
-        if CANDIDATE_COLLECTION_NAME not in collections:
-            print(f"Warning: Collection {CANDIDATE_COLLECTION_NAME} not found. Available: {collections}", file=sys.stderr)
-            return 0
-        
-        # Get collection stats
-        stats = client.get_collection_stats(collection_name=CANDIDATE_COLLECTION_NAME)
-        print(f"Collection stats response: {stats}, type: {type(stats)}", file=sys.stderr)
-        
-        # Handle different response formats
-        if isinstance(stats, dict):
-            row_count = stats.get('row_count', 0)
-        elif isinstance(stats, (int, str)):
-            row_count = int(stats) if isinstance(stats, str) else stats
-        else:
-            # Try to get from nested structure
-            row_count = stats.get('row_count', 0) if hasattr(stats, 'get') else 0
-        
-        print(f"Extracted row_count: {row_count}", file=sys.stderr)
-        return row_count
-    except Exception as e:
-        print(f"Error getting candidate count: {e}", file=sys.stderr)
-        import traceback
-        traceback.print_exc(file=sys.stderr)
-        # Reset client to force reconnection on next call
-        global _candidate_client
-        _candidate_client = None
-        return 0
+    client = get_candidate_client()
+
+    # First, verify the collection exists
+    collections = client.list_collections()
+
+    if CANDIDATE_COLLECTION_NAME not in collections:
+        raise ValueError(f"Collection {CANDIDATE_COLLECTION_NAME} not found. Available: {collections}")
+
+    # Get collection stats
+    stats = client.get_collection_stats(collection_name=CANDIDATE_COLLECTION_NAME)
+
+    # Handle different response formats
+    if isinstance(stats, dict):
+        row_count = stats.get("row_count", 0)
+    elif isinstance(stats, (int, str)):
+        row_count = int(stats) if isinstance(stats, str) else stats
+    else:
+        row_count = stats.get("row_count", 0) if hasattr(stats, "get") else 0
+
+    return int(row_count)
 
 def fetch_job_candidates(job_name: str, days: Optional[int] = None) -> List[Dict[str, Any]]:
     """Fetch candidates for a job with optional time range."""
@@ -491,10 +475,7 @@ def compile_all_jobs() -> Dict[str, Any]:
         position = job.get("position") or job.get("job_id")
         if not position:
             continue
-        try:
-            stats.append(compile_job_stats(position))
-        except Exception as exc:
-            print(f"统计岗位 {position} 失败: {exc}", file=sys.stderr)
+        stats.append(compile_job_stats(position))
     best = max(stats, key=lambda s: s["today"]["metric"], default=None)
     return {"jobs": stats, "best": best}
 
@@ -508,98 +489,576 @@ def convert_score_analysis(obj):
         return [convert_score_analysis(item) for item in obj]
     return obj
 
-# Vercel handler
-from http.server import BaseHTTPRequestHandler
+def format_homepage_stats_report(
+    total_candidates: int,
+    daily_candidate_counts: List[Dict[str, Any]],
+    jobs: List[Dict[str, Any]],
+    best: Optional[Dict[str, Any]] = None
+) -> Dict[str, str]:
+    """Format homepage statistics as Markdown report.
+    
+    Args:
+        total_candidates: Total number of candidates
+        daily_candidate_counts: List of daily candidate counts (last 30 days)
+        jobs: List of job statistics
+        best: Best performing job (optional)
+        
+    Returns:
+        Dict with 'title' and 'message' keys
+    """
+    today = datetime.now().date()
+    today_str = today.isoformat()
+    
+    # Calculate today's new candidates
+    today_new = 0
+    if daily_candidate_counts:
+        last_day = daily_candidate_counts[-1]
+        today_new = last_day.get("new", 0)
+    
+    # Calculate 7-day and 30-day totals
+    last_7_days = daily_candidate_counts[-7:] if len(daily_candidate_counts) >= 7 else daily_candidate_counts
+    last_30_days = daily_candidate_counts[-30:] if len(daily_candidate_counts) >= 30 else daily_candidate_counts
+    
+    new_7days = sum(d.get("new", 0) for d in last_7_days)
+    new_30days = sum(d.get("new", 0) for d in last_30_days)
+    
+    # Calculate growth rates
+    yesterday_new = 0
+    last_week_same_day_new = 0
+    if len(daily_candidate_counts) >= 2:
+        yesterday_new = daily_candidate_counts[-2].get("new", 0)
+    if len(daily_candidate_counts) >= 8:
+        last_week_same_day_new = daily_candidate_counts[-8].get("new", 0)
+    
+    growth_yesterday = ((today_new - yesterday_new) / (yesterday_new or 1)) * 100 if yesterday_new > 0 else 0.0
+    growth_last_week = ((today_new - last_week_same_day_new) / (last_week_same_day_new or 1)) * 100 if last_week_same_day_new > 0 else 0.0
+    
+    # Calculate average daily new in last 7 days
+    avg_daily = new_7days / 7 if new_7days > 0 else 0.0
+    
+    # Build job statistics table
+    job_rows = []
+    for job in jobs:
+        job_name = job.get("job", "未知岗位")
+        daily = job.get("daily", [])
+        
+        # Get today's data from daily series
+        today_job_new = 0
+        today_job_seek = 0
+        if daily:
+            last_day = daily[-1]
+            today_job_new = last_day.get("new", 0)
+            today_job_seek = last_day.get("seek", 0)
+        
+        total = job.get("total", 0)
+        score_summary = job.get("score_summary", {})
+        quality_score = score_summary.get("quality_score", 0.0)
+        
+        # Calculate progress score (similar to compile_job_stats)
+        metric = (today_job_new + today_job_seek) * quality_score / 10
+        
+        job_rows.append({
+            "name": job_name,
+            "today_new": today_job_new,
+            "today_seek": today_job_seek,
+            "total": total,
+            "quality": quality_score,
+            "metric": round(metric, 2)
+        })
+    
+    # Sort by metric descending
+    job_rows.sort(key=lambda x: x["metric"], reverse=True)
+    
+    # Mark best job
+    if best and job_rows:
+        best_job_name = best.get("job", "")
+        for row in job_rows:
+            if row["name"] == best_job_name:
+                row["name"] = f"🏆 {row['name']}"
+                break
+    
+    # Build markdown message
+    lines = []
+    lines.append("### 📊 总体数据\n")
+    lines.append(f"**候选人总数**: {total_candidates:,} 人\n")
+    lines.append(f"**📈 今日新增**: {today_new} 人  ")
+    lines.append(f"**📈 最近7天新增**: {new_7days} 人  ")
+    lines.append(f"**📈 最近30天新增**: {new_30days} 人\n")
+    lines.append(f"**📉 增长率**:")
+    lines.append(f"- 较昨日: {growth_yesterday:+.1f}% (昨日新增 {yesterday_new} 人)")
+    lines.append(f"- 较上周同期: {growth_last_week:+.1f}% (上周同期新增 {last_week_same_day_new} 人)\n")
+    lines.append(f"**💡 趋势**: 候选人数量{'稳步增长' if avg_daily > 0 else '保持稳定'}，近7天平均每日新增约 {avg_daily:.1f} 人\n")
+    lines.append("---\n")
+    lines.append("### 💼 各岗位今日统计\n")
+    lines.append("| 岗位 | 今日新增 | 今日SEEK | 总数 | 画像质量 | 进展分 |")
+    lines.append("|------|---------|----------|------|----------|--------|")
+    
+    for row in job_rows:
+        lines.append(f"| {row['name']} | {row['today_new']} | {row['today_seek']} | {row['total']} | {row['quality']}/10 | {row['metric']} |")
+    
+    lines.append("\n---\n")
+    
+    # Add detailed data
+    if daily_candidate_counts:
+        first_day = daily_candidate_counts[0]
+        first_count = first_day.get("count", 0) - first_day.get("new", 0)  # Count before the period
+        lines.append("**详细数据**:")
+        lines.append(f"- 30天前累计: {first_count:,} 人")
+        lines.append(f"- 当前累计: {total_candidates:,} 人")
+        lines.append(f"- 30天净增长: {new_30days:,} 人")
+    
+    message = "\n".join(lines)
+    title = f"每日首页统计 - {today_str}"
+    
+    return {"success": True, "title": title, "message": message}
 
-class handler(BaseHTTPRequestHandler):
-    """Vercel serverless function handler for /api/stats."""
+def format_job_stats_report(job_stats: Dict[str, Any]) -> Dict[str, str]:
+    """Format single job statistics as Markdown report.
     
-    def _send_json_response(self, status_code, data):
-        """Helper to send JSON response"""
-        response_body = json.dumps(data, ensure_ascii=False).encode('utf-8')
-        self.send_response(status_code)
-        self.send_header('Content-type', 'application/json')
-        self.send_header('Access-Control-Allow-Origin', '*')
-        self.send_header('Content-Length', str(len(response_body)))
-        self.end_headers()
-        self.wfile.write(response_body)
+    Args:
+        job_stats: Job statistics dictionary
+        
+    Returns:
+        Dict with 'title' and 'message' keys
+    """
+    job_name = job_stats.get("job", "未知岗位")
+    today = datetime.now().date()
+    today_str = today.isoformat()
     
-    def do_GET(self):
-        """Handle GET request to /api/stats."""
+    daily = job_stats.get("daily", [])
+    today_new = 0
+    today_seek = 0
+    if daily:
+        last_day = daily[-1]
+        today_new = last_day.get("new", 0)
+        today_seek = last_day.get("seek", 0)
+    
+    total = job_stats.get("total", 0)
+    score_summary = job_stats.get("score_summary", {})
+    quality_score = score_summary.get("quality_score", 0.0)
+    average_score = score_summary.get("average", 0.0)
+    high_share = score_summary.get("high_share", 0.0)
+    
+    # Calculate progress score
+    metric = (today_new + today_seek) * quality_score / 10
+    
+    # Calculate 7-day trend
+    new_7days = sum(d.get("new", 0) for d in daily[-7:]) if len(daily) >= 7 else sum(d.get("new", 0) for d in daily)
+    seek_7days = sum(d.get("seek", 0) for d in daily[-7:]) if len(daily) >= 7 else sum(d.get("seek", 0) for d in daily)
+    
+    lines = []
+    lines.append(f"### 💼 {job_name} - 今日统计\n")
+    lines.append(f"**📈 今日新增**: {today_new} 人")
+    lines.append(f"**📈 今日SEEK**: {today_seek} 人\n")
+    lines.append(f"**总数**: {total} 人")
+    lines.append(f"**画像质量**: {quality_score}/10")
+    lines.append(f"**平均得分**: {average_score:.2f}")
+    lines.append(f"**高分占比**: {high_share*100:.1f}%")
+    lines.append(f"**进展分**: {metric:.2f}\n")
+    lines.append(f"**最近7天**: 新增 {new_7days} 人，SEEK {seek_7days} 人")
+    
+    message = "\n".join(lines)
+    title = f"{job_name} - 每日统计 - {today_str}"
+    
+    return {"success": True, "title": title, "message": message}
+
+# Helper functions for statistics and notifications
+def _get_statistics_data() -> Dict[str, Any]:
+    """Get all statistics data (candidates, jobs, daily counts).
+    
+    Returns:
+        Dict with 'total_candidates', 'jobs_serialized', 'best_serialized', 'daily_candidate_counts'
+    """
+    total_candidates = get_candidate_count()
+    stats_data = compile_all_jobs()
+    jobs = stats_data.get("jobs", [])
+    best = stats_data.get("best")
+    
+    # Get daily candidate counts
+    all_candidates = search_candidates_advanced(
+        fields=["candidate_id", "updated_at"],
+        limit=16384,  # Milvus max limit
+        sort_by="updated_at",
+        sort_direction="desc"
+    )
+    daily_candidate_counts = build_daily_candidate_counts(all_candidates, total_candidates, days=30)
+    
+    # Convert ScoreAnalysis objects to dictionaries
+    jobs_serialized = convert_score_analysis(jobs)
+    best_serialized = convert_score_analysis(best) if best else None
+    
+    return {
+        "total_candidates": total_candidates,
+        "jobs_serialized": jobs_serialized,
+        "best_serialized": best_serialized,
+        "daily_candidate_counts": daily_candidate_counts
+    }
+
+def _get_job_notification_config(job_name: str, default_url: str, default_secret: str) -> Dict[str, Any]:
+    """Get notification configuration for a job (job-specific or fallback).
+    
+    Args:
+        job_name: Name of the job
+        default_url: Fallback webhook URL from environment
+        default_secret: Fallback secret from environment
+        
+    Returns:
+        Dict with:
+        - 'url': webhook url
+        - 'secret': webhook secret
+        - 'using_fallback': whether default env webhook is used
+        - 'warning': optional human-readable reminder when fallback is used
+    """
+    # Get job notification config
+    all_jobs = get_all_jobs()
+    job_data = None
+    for job in all_jobs:
+        if (job.get("position") or job.get("job_id")) == job_name:
+            job_data = job
+            break
+    
+    # Determine webhook URL (priority: job.notification > default)
+    job_dingtalk_url = None
+    job_dingtalk_secret = None
+    using_fallback = False
+    warning: Optional[str] = None
+    
+    if job_data:
+        notification = job_data.get("notification")
+        if notification and isinstance(notification, dict):
+            job_dingtalk_url = notification.get("url")
+            job_dingtalk_secret = notification.get("secret")
+    
+    # Fallback to default config from environment variables
+    if not job_dingtalk_url:
+        job_dingtalk_url = default_url
+        job_dingtalk_secret = default_secret
+        using_fallback = True
+        warning = (
+            f"⚠️ 岗位「{job_name}」未在岗位配置(notification.url)中设置独立的钉钉通知地址，"
+            f"本次已使用默认群(DINGTALK_WEBHOOK)发送。请HR在该岗位 profile 的 notification 字段里补充 url"
+            f"（以及需要加签时的 secret），以便分岗位通知。"
+        )
+    
+    return {
+        "url": job_dingtalk_url,
+        "secret": job_dingtalk_secret,
+        "using_fallback": using_fallback,
+        "warning": warning,
+        "job_data": job_data
+    }
+
+
+def _prepend_job_fallback_notice(message: str, warning: Optional[str]) -> str:
+    """Prepend a visible fallback reminder to job report message so HR sees it in DingTalk."""
+    if not warning:
+        return message
+    # Keep this inside the markdown body (send_dingtalk_notification already renders title).
+    return f"> {warning}\n\n{message}"
+
+# DingTalk notification functions
+def send_dingtalk_notification(
+    title: str,
+    message: str,
+    webhook_url: str,
+    secret: Optional[str] = None
+) -> Dict[str, Any]:
+    """Send notification to DingTalk group chat using webhook.
+    
+    Args:
+        title: Title of the notification
+        message: Message content to send
+        webhook_url: DingTalk webhook URL
+        secret: Optional secret for signature
+        
+    Returns:
+        Dict with 'success' (bool) and 'result' (DingTalk API response or error message)
+    """
+    if not webhook_url:
+        raise ValueError("DingTalk webhook URL is not configured")
+    
+    # Generate signature if secret is provided
+    url = webhook_url
+    if secret:
+        timestamp = str(round(time.time() * 1000))
+        string_to_sign = f"{timestamp}\n{secret}"
+        hmac_code = hmac.new(
+            secret.encode('utf-8'),
+            string_to_sign.encode('utf-8'),
+            digestmod=hashlib.sha256
+        ).digest()
+        sign = urllib.parse.quote_plus(base64.b64encode(hmac_code).decode('utf-8'))
+        
+        # Append timestamp and signature to webhook URL
+        separator = '&' if '?' in url else '?'
+        url = f"{url}{separator}timestamp={timestamp}&sign={sign}"
+    
+    payload = {
+        "msgtype": "markdown",
+        "markdown": {
+            "title": title,
+            "text": f"## {title}\n\n{message}"
+        }
+    }
+    
+    response = requests.post(url, json=payload, timeout=10.0)
+    response.raise_for_status()
+
+    result = response.json()
+    if result.get("errcode") != 0:
+        errmsg = result.get("errmsg", "Unknown error")
+        errcode = result.get("errcode", "Unknown")
+        # Log minimal debug info on failure (masked webhook) to help diagnose token issues.
         try:
-            print("Starting stats API request...", file=sys.stderr)
-            
-            # Check environment variables
-            print(f"ZILLIZ_ENDPOINT: {ZILLIZ_ENDPOINT[:50] if ZILLIZ_ENDPOINT else 'NOT SET'}...", file=sys.stderr)
-            print(f"ZILLIZ_USER: {ZILLIZ_USER if ZILLIZ_USER else 'NOT SET'}", file=sys.stderr)
-            print(f"CANDIDATE_COLLECTION_NAME: {CANDIDATE_COLLECTION_NAME}", file=sys.stderr)
-            
-            # Get candidate count
-            print("Getting candidate count...", file=sys.stderr)
-            total_candidates = get_candidate_count()
-            print(f"Total candidates: {total_candidates}", file=sys.stderr)
-            
-            # Get job statistics
-            print("Compiling job statistics...", file=sys.stderr)
-            stats_data = compile_all_jobs()
-            jobs = stats_data.get("jobs", [])
-            best = stats_data.get("best")
-            print(f"Found {len(jobs)} jobs", file=sys.stderr)
-            
-            # Convert ScoreAnalysis objects to dictionaries
-            jobs_serialized = convert_score_analysis(jobs)
-            best_serialized = convert_score_analysis(best) if best else None
-            
-            # Get daily candidate counts for historical chart
-            print("Getting daily candidate counts...", file=sys.stderr)
-            # Get candidates for historical chart
-            # Note: Milvus has a max query limit of 16384, so we'll get the most recent ones
-            # and calculate cumulative from there
-            # Note: candidate collection only has updated_at, not created_at
-            all_candidates = search_candidates_advanced(
-                fields=["candidate_id", "updated_at"],
-                limit=16384,  # Milvus max limit
-                sort_by="updated_at",
-                sort_direction="desc"  # Get most recent first, then we'll reverse for cumulative
+            import re
+            masked_url = re.sub(r"access_token=[^&]+", "access_token=***", webhook_url)
+            print(
+                f"ERROR: DingTalk send failed: errcode={errcode}, errmsg={errmsg}; webhook={masked_url}",
+                file=sys.stderr,
             )
-            print(f"Fetched {len(all_candidates)} candidates for historical chart (total in DB: {total_candidates})", file=sys.stderr)
-            if len(all_candidates) > 0:
-                # Debug: check first few candidates
-                sample = all_candidates[:3]
-                for i, cand in enumerate(sample):
-                    print(f"Sample candidate {i}: updated_at={cand.get('updated_at')}", file=sys.stderr)
-            daily_candidate_counts = build_daily_candidate_counts(all_candidates, total_candidates, days=30)
-            if daily_candidate_counts:
-                print(f"Built daily counts: {len(daily_candidate_counts)} days", file=sys.stderr)
-                print(f"First day: {daily_candidate_counts[0]}", file=sys.stderr)
-                print(f"Last day: {daily_candidate_counts[-1]}", file=sys.stderr)
-            else:
-                print("WARNING: daily_candidate_counts is empty!", file=sys.stderr)
-            
-            response_data = {
-                "success": True,
-                "quick_stats": {
-                    "total_candidates": total_candidates,
-                    "daily_candidate_counts": daily_candidate_counts,
-                },
-                "best": best_serialized,
-                "jobs": jobs_serialized,
-            }
-            
-            print("Sending response...", file=sys.stderr)
-            self._send_json_response(200, response_data)
-            
-        except Exception as e:
-            error_response = {
-                "success": False,
-                "error": str(e),
-                "error_type": type(e).__name__
-            }
-            print(f"Error in stats API: {e}", file=sys.stderr)
-            import traceback
-            traceback.print_exc(file=sys.stderr)
-            self._send_json_response(500, error_response)
+        except Exception:
+            print(
+                f"ERROR: DingTalk send failed: errcode={errcode}, errmsg={errmsg}",
+                file=sys.stderr,
+            )
+        raise RuntimeError(f"DingTalk API error: errcode={errcode}, errmsg={errmsg}")
+
+    # Success: stay quiet to reduce log noise.
+    return {"success": True, "result": result}
+
+def send_overall_report(stats: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Send overall homepage statistics report to default DingTalk webhook.
     
-    def log_message(self, format, *args):
-        """Suppress default logging."""
-        pass
+    Args:
+        stats: Optional pre-fetched statistics data. If None, will fetch it.
+    
+    Returns:
+        Dict with 'success', 'type'='overall', 'sent', 'result', and optional 'warning'
+    """
+    # Get fallback URL and secret from environment variables
+    default_dingtalk_url = _env_str("DINGTALK_WEBHOOK", "") or ""
+    default_dingtalk_secret = _env_str("DINGTALK_SECRET", "") or ""
+    
+    if not default_dingtalk_url:
+        raise ValueError("DINGTALK_WEBHOOK environment variable is not set")
+
+    # Get statistics (reuse if provided, otherwise fetch)
+    if stats is None:
+        stats = _get_statistics_data()
+
+    # Format report
+    overall_report = format_homepage_stats_report(
+        total_candidates=stats["total_candidates"],
+        daily_candidate_counts=stats["daily_candidate_counts"],
+        jobs=stats["jobs_serialized"],
+        best=stats["best_serialized"],
+    )
+
+    # Send to DingTalk (raises on failure)
+    send_result = send_dingtalk_notification(
+        title=overall_report["title"],
+        message=overall_report["message"],
+        webhook_url=default_dingtalk_url,
+        secret=default_dingtalk_secret,
+    )
+
+    return {
+        "success": True,
+        "type": "overall",
+        "sent": send_result["success"],
+        "result": send_result["result"],
+    }
+
+def send_job_report(job_index: int, stats: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Send job-specific report to DingTalk.
+    
+    Args:
+        job_index: Index of the job (0-based)
+        stats: Optional pre-fetched statistics data. If None, will fetch it.
+        
+    Returns:
+        Dict with 'success', 'type'='job', 'job_index', 'job_name', 'sent', 'result', 
+        'using_fallback' (bool), and optional 'warning'
+    """
+    # Get fallback URL and secret from environment variables
+    default_dingtalk_url = _env_str("DINGTALK_WEBHOOK", "") or ""
+    default_dingtalk_secret = _env_str("DINGTALK_SECRET", "") or ""
+    
+    # Get job statistics (reuse if provided, otherwise fetch)
+    if stats is None:
+        stats = _get_statistics_data()
+    jobs_serialized = stats["jobs_serialized"]
+
+    if job_index < 0 or job_index >= len(jobs_serialized):
+        raise ValueError(f"Job index {job_index} out of range (0-{len(jobs_serialized)-1})")
+
+    job_stat = jobs_serialized[job_index]
+    job_name = job_stat.get("job", "未知岗位")
+
+    # Get job notification config (reuse common function)
+    notification_config = _get_job_notification_config(
+        job_name, default_dingtalk_url, default_dingtalk_secret
+    )
+    job_dingtalk_url = notification_config["url"]
+    job_dingtalk_secret = notification_config["secret"]
+    using_fallback = notification_config["using_fallback"]
+    warning = notification_config.get("warning")
+
+    if not job_dingtalk_url:
+        raise ValueError("No DingTalk webhook configured (neither job-specific nor default)")
+
+    # Format job report
+    job_report = format_job_stats_report(job_stat)
+    job_report["message"] = _prepend_job_fallback_notice(job_report["message"], warning)
+
+    # Send to DingTalk (raises on failure)
+    send_result = send_dingtalk_notification(
+        title=job_report["title"],
+        message=job_report["message"],
+        webhook_url=job_dingtalk_url,
+        secret=job_dingtalk_secret,
+    )
+
+    response = {
+        "success": True,
+        "type": "job",
+        "job_index": job_index,
+        "job_name": job_name,
+        "sent": send_result["success"],
+        "result": send_result["result"],
+        "using_fallback": using_fallback,
+    }
+
+    if using_fallback:
+        response["warning"] = warning or "⚠️ This job report used the default DingTalk webhook fallback."
+
+    return response
+
+def send_daily_reports() -> Dict[str, Any]:
+    """Send daily reports: 1 overall report + N job reports.
+    
+    Returns:
+        Dict with success count and error messages
+    """
+    results = {
+        "overall_sent": False,
+        "job_reports_sent": 0,
+        "job_reports_failed": 0,
+        "errors": []
+    }
+    
+    # Get default DingTalk configuration from environment variables (fallback)
+    default_dingtalk_url = _env_str("DINGTALK_WEBHOOK", "") or ""
+    default_dingtalk_secret = _env_str("DINGTALK_SECRET", "") or ""
+
+    if not default_dingtalk_url:
+        raise ValueError("DINGTALK_WEBHOOK environment variable is not set or empty")
+
+    # Get statistics once
+    stats = _get_statistics_data()
+
+    # 1. Send overall report (raises on failure)
+    overall_result = send_overall_report(stats=stats)
+    results["overall_sent"] = overall_result["sent"]
+
+    # 2. Send individual job reports (raises on first failure)
+    for job_index, job_stat in enumerate(stats["jobs_serialized"]):
+        # Keep quiet per-job; failures will raise with context.
+        job_result = send_job_report(job_index, stats=stats)
+        results["job_reports_sent"] += 1 if job_result["sent"] else 0
+
+    print(
+        f"Daily reports completed. overall_sent={results['overall_sent']}, job_reports_sent={results['job_reports_sent']}",
+        file=sys.stderr,
+    )
+
+    return results
+
+# FastAPI application
+from fastapi import FastAPI, Query, HTTPException
+from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
+app = FastAPI(
+    title="BossZhipin Statistics API",
+    description="Statistics and reporting API for BossZhipin bot",
+    version="1.0.0",
+)
+
+# CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@app.get("/api/stats")
+async def get_stats(
+    format: Optional[str] = Query(None, description="Response format: 'report' for markdown, 'job_report' for single job"),
+    job_index: Optional[int] = Query(None, description="Job index (0-based) when format=job_report")
+):
+    """Get statistics data or formatted reports."""
+    stats = _get_statistics_data()
+
+    if format in ("report", "text"):
+        report = format_homepage_stats_report(
+            total_candidates=stats["total_candidates"],
+            daily_candidate_counts=stats["daily_candidate_counts"],
+            jobs=stats["jobs_serialized"],
+            best=stats["best_serialized"],
+        )
+        return report
+
+    if format == "job_report":
+        if job_index is None:
+            raise HTTPException(status_code=400, detail="job_index parameter is required when format=job_report")
+        if job_index < 0 or job_index >= len(stats["jobs_serialized"]):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Job index {job_index} out of range (0-{len(stats['jobs_serialized'])-1})",
+            )
+        job_stat = stats["jobs_serialized"][job_index]
+        return format_job_stats_report(job_stat)
+
+    return {
+        "success": True,
+        "quick_stats": {
+            "total_candidates": stats["total_candidates"],
+            "daily_candidate_counts": stats["daily_candidate_counts"],
+        },
+        "best": stats["best_serialized"],
+        "jobs": stats["jobs_serialized"],
+    }
+
+@app.get("/api/send-report")
+async def send_report(
+    type: str = Query(..., description="Report type: 'overall' or 'job'"),
+    job_index: Optional[int] = Query(None, description="Job index (0-based) when type=job")
+):
+    """Send a single report (overall or job-specific) to DingTalk."""
+    if type == "overall":
+        return send_overall_report()
+
+    if type == "job":
+        if job_index is None:
+            raise HTTPException(status_code=400, detail="job_index parameter is required when type=job")
+        return send_job_report(job_index)
+
+    raise HTTPException(status_code=400, detail="Invalid 'type' parameter. Use 'overall' or 'job'")
+
+@app.get("/api/send-daily-report")
+async def send_daily_report():
+    """Send daily reports: 1 overall report + N job reports (called by cron)."""
+    print("Daily report cron triggered", file=sys.stderr)
+    results = send_daily_reports()
+    return {
+        "success": True,
+        "overall_sent": results["overall_sent"],
+        "job_reports_sent": results["job_reports_sent"],
+        "job_reports_failed": results["job_reports_failed"],
+        "errors": results["errors"],
+    }
+
+
+ 
