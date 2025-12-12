@@ -146,7 +146,7 @@
             <h3 class="font-bold text-gray-800">✨ 自动生成消息</h3>
         </div>
         <div id="message-content" class="p-2">
-            <textarea id="message-text" name="generated_message" class="w-full h-32 p-2 border rounded-lg">
+            <textarea id="message-text" name="generated_message" class="w-full h-32 p-2 border rounded-lg text-center text-gray-500">
                 {%- if generated_message not in ['', 'None', 'null', None] -%}{{ generated_message }}{%- else -%}⏳分析完成后，如果匹配度达标，将自动生成...{%- endif -%}
             </textarea>
         </div>
@@ -236,54 +236,66 @@ async function process_candidate() {
             if (messageText?.includes('⏳')) {
                 await generateMessage();
             }
-            
-            // Step 4b: Check borderline_threshold - try to get full resume and re-analyze
-            // check if we should generate new message
-            const need_reply = !getCandidateData('viewed');
-            const should_seek = current_score >= borderline_threshold || skill_score >= seek_threshold || startup_fit_score >= seek_threshold || background_score >= seek_threshold;
-            if (need_reply || should_seek) {
-                if (should_seek) {
-                    newStage = 'SEEK';
-                }
-                // For chat mode, try to get full resume and re-analyze
-                if (mode !== 'recommend') {
-                    let full_resume_text = document.getElementById('resume-textarea-full')?.value?.trim() || '';
-                    if (full_resume_text.includes('⏳')) {
-                        await fetchFullResume();
-                        full_resume_text = document.getElementById('resume-textarea-full')?.value?.trim() || '';
-                    }
-                    // check if analysis is from full resume
-                    if (! is_full_analysis && full_resume_text.length > 100 && !full_resume_text.includes('⏳')) {
-                        await startAnalysis();
-                        // Re-read analysis after full resume analysis
-                        const updated_analysis_container = document.querySelector('#analysis-content #analysis-result-container');
-                        analysis = JSON.parse(updated_analysis_container.getAttribute('data-analysis'));
-                        is_full_analysis = analysis.resume_type === 'full';
-                        current_score = analysis?.overall || current_score;
-                    }
-                    if (need_reply || is_full_analysis && current_score >= borderline_threshold ) {
-                        // Step 4c: Send notification if analysis was updated
-                        await generateMessage();
-                        const autoSend = document.getElementById('auto-send-checkbox')?.checked ?? true;
-                        await greetAndSendMessage(autoSend);
-                    }
-                    // Step 4d: Check seek_threshold - request contact if above
-                    if (is_full_analysis && current_score >= seek_threshold) {
-                        newStage = 'CONTACT';
-                        await sendDingNotification(analysis, name, getCandidateData('job_applied'));
-                        await requestContact();
-                    }
-                }else{
-                    // For recommend mode, greet and send message
-                    const autoSend = document.getElementById('auto-send-checkbox')?.checked ?? false;
-                    await greetAndSendMessage(autoSend);
-                    // await sendDingNotification(analysis, name, getCandidateData('job_applied'));
-                }
-            }
-            
         } else {
             showToast(`匹配度: ${current_score}, 未达最低值: ${chat_threshold}`, 'info');
-            newStage = 'PASS';
+        }
+        // Step 4b: Check borderline_threshold - try to get full resume and re-analyze
+        const need_reply = await shouldReply();
+        if (current_score >= borderline_threshold || skill_score >= seek_threshold || startup_fit_score >= seek_threshold || background_score >= seek_threshold) {
+            newStage = 'SEEK';
+            // For chat mode, try to get full resume and re-analyze
+            if (mode !== 'recommend') {
+                let full_resume_text = document.getElementById('resume-textarea-full')?.value?.trim() || '';
+                if (full_resume_text.includes('⏳')) {
+                    await fetchFullResume();
+                    full_resume_text = document.getElementById('resume-textarea-full')?.value?.trim() || '';
+                }
+                // check if analysis is from full resume
+                if (! is_full_analysis && full_resume_text.length > 100 && !full_resume_text.includes('⏳')) {
+                    await startAnalysis();
+                    // Re-read analysis after full resume analysis
+                    const updated_analysis_container = document.querySelector('#analysis-content #analysis-result-container');
+                    analysis = JSON.parse(updated_analysis_container.getAttribute('data-analysis'));
+                    is_full_analysis = analysis.resume_type === 'full';
+                    current_score = analysis?.overall || current_score;
+                }
+                if (need_reply && is_full_analysis && current_score >= borderline_threshold ) {
+                    // Step 4c: Send notification if analysis was updated
+                    await generateMessage();
+                    const autoSend = document.getElementById('auto-send-checkbox')?.checked ?? true;
+                    await greetAndSendMessage(autoSend);
+                }
+                // Step 4d: Check seek_threshold - request contact if above
+                if (is_full_analysis && current_score >= seek_threshold) {
+                    newStage = 'CONTACT';
+                    await sendDingNotification(analysis, name, getCandidateData('job_applied'));
+                    await requestContact();
+                }
+            }else{
+                // For recommend mode, greet and send message
+                const autoSend = document.getElementById('auto-send-checkbox')?.checked ?? false;
+                await greetAndSendMessage(autoSend);
+                // await sendDingNotification(analysis, name, getCandidateData('job_applied'));
+            }
+        }
+        //step 4e: check if we need to reply candidate
+        if (need_reply) {
+            // Step 4c: Send notification if analysis was updated
+            await generateMessage();
+            const autoSend = document.getElementById('auto-send-checkbox')?.checked ?? true;
+            await greetAndSendMessage(autoSend);
+        }
+        
+        // Step 5: Check if candidate has contact info and score >= seek_threshold, set to SEEK
+        // Only set to SEEK if not already CONTACT (don't downgrade from CONTACT)
+        const candidateData = getCandidateData();
+        const metadata = candidateData.metadata || {};
+        const hasPhoneNumber = metadata.phone_number && metadata.phone_number.trim();
+        const hasWechatNumber = metadata.wechat_number && metadata.wechat_number.trim();
+        const hasContactInfo = hasPhoneNumber || hasWechatNumber;
+        
+        if (hasContactInfo && current_score >= seek_threshold && newStage !== 'CONTACT') {
+            newStage = 'SEEK';
         }
         
         // Update stage and card
@@ -403,7 +415,6 @@ async function greetAndSendMessage(autoSend = true) {
     const greeted = getCandidateData('greeted');
     
     const need_reply = await shouldReply();
-    debugger;
     if (!need_reply || greeted) {
         showToast('等待候选人回复后再发送消息', 'info');
         return;
@@ -431,9 +442,8 @@ async function greetAndSendMessage(autoSend = true) {
     
     // Show browser notification after successful message send
     const candidateName = getCandidateData('name') || '候选人';
-    const notificationTitle = '消息已发送';
-    const notificationBody = `已向 ${candidateName} 发送消息`;
-    await showBrowserNotification(notificationTitle, notificationBody);
+    const notificationTitle = `已向 ${candidateName} 发送消息`;
+    await showBrowserNotification(notificationTitle, message);
     
     // Update to CHAT stage
     const currentStage = getCandidateData('stage');

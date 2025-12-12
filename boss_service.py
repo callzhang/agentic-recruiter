@@ -254,17 +254,8 @@ class BossServiceAsync:
         continue to serve status information.
         
         """
-        import time
-        lock_wait_start = time.perf_counter()
-        
         while True:
-            # Monitor browser lock wait time
-            lock_acquire_start = time.perf_counter()
             async with self.browser_lock:
-                lock_wait_ms = (time.perf_counter() - lock_acquire_start) * 1000
-                if lock_wait_ms > 50.0:  # Log if waited more than 50ms for lock
-                    logger.warning(f"[PERF] Browser lock wait: {lock_wait_ms:.2f}ms (total wait: {(time.perf_counter() - lock_wait_start) * 1000:.2f}ms)")
-                
                 page = await self._prepare_browser_session()
                 login_needed = not self.is_logged_in
 
@@ -1065,32 +1056,14 @@ class BossServiceAsync:
         @self.app.middleware("http")
         @self.app.middleware("https")
         async def ensure_startup(request: Request, call_next):
-            import time
-            middleware_start = time.perf_counter()
-            
             # Record request arrival time for queue detection
-            request.state.request_arrival_time = middleware_start
+            request.state.request_arrival_time = None
             
             # Wait for startup to complete (should be instant after first request)
-            startup_wait_start = time.perf_counter()
             await self.startup_complete.wait()
-            startup_wait_ms = (time.perf_counter() - startup_wait_start) * 1000
-            if startup_wait_ms > 10.0:
-                logger.warning(f"[PERF] Middleware startup wait: {startup_wait_ms:.2f}ms for {request.url.path}")
             
-            # Process request and measure handler time separately
-            handler_start = time.perf_counter()
+            # Process request
             response = await call_next(request)
-            handler_time_ms = (time.perf_counter() - handler_start) * 1000
-            
-            # Log total middleware time if significant
-            middleware_time_ms = (time.perf_counter() - middleware_start) * 1000
-            if middleware_time_ms > 50.0:
-                logger.warning(
-                    f"[PERF] Middleware total: {middleware_time_ms:.2f}ms "
-                    f"(startup_wait={startup_wait_ms:.2f}ms, handler={handler_time_ms:.2f}ms) "
-                    f"for {request.url.path}"
-                )
             
             return response
 

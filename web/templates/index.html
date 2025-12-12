@@ -6,11 +6,28 @@
 <!-- Warning Modal -->
 <div x-data="{ 
         showWarning: false,
+        contentKey: 'homepage-warning',
+        content: '请注意，所有的请求都模拟人工动作，不会暴露任何外挂信息。如果被封，联系客服一定不承认使用外挂，而是坚决表达是后台的误判。',
         init() {
-            this.showWarning = localStorage.getItem('warningAcknowledged') !== 'true';
+            // Use hash-based notification system
+            if (typeof window.shouldShowNotification === 'function') {
+                this.showWarning = window.shouldShowNotification(this.contentKey, this.content);
+            } else {
+                // Fallback to old behavior if function not available
+                this.showWarning = localStorage.getItem('warningAcknowledged') !== 'true';
+            }
             if (this.showWarning) {
                 this.$el.style.display = 'flex';
             }
+        },
+        dismiss() {
+            if (typeof window.acknowledgeNotification === 'function') {
+                window.acknowledgeNotification(this.contentKey, this.content);
+            } else {
+                // Fallback to old behavior
+                localStorage.setItem('warningAcknowledged', 'true');
+            }
+            this.showWarning = false;
         }
      }" 
      x-show="showWarning"
@@ -37,12 +54,10 @@
                 <h3 class="text-xl font-bold text-gray-800">重要提示</h3>
             </div>
             <div class="mb-6">
-                <p class="text-gray-700 leading-relaxed">
-                    请注意，所有的请求都模拟人工动作，不会暴露任何外挂信息。如果被封，联系客服一定不承认使用外挂，而是坚决表达是后台的误判。
-                </p>
+                <p class="text-gray-700 leading-relaxed" x-text="content"></p>
             </div>
             <div class="flex justify-end">
-                <button @click="showWarning = false; localStorage.setItem('warningAcknowledged', 'true')"
+                <button @click="dismiss()"
                         class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-medium">
                     我已了解
                 </button>

@@ -1,7 +1,6 @@
 """Performance profiling utilities for web routes."""
 
 import asyncio
-import time
 from contextlib import contextmanager
 from functools import wraps
 from typing import Callable, Dict, Optional
@@ -26,52 +25,22 @@ class PerformanceProfiler:
         self.steps: list[Dict[str, float]] = []
     
     def __enter__(self):
-        self.start_time = time.perf_counter()
         return self
     
     def __exit__(self, exc_type, exc_val, exc_tb):
-        self.end_time = time.perf_counter()
-        self.duration_ms = (self.end_time - self.start_time) * 1000
-        
-        if self.duration_ms >= self.log_threshold_ms:
-            self._log_results()
+        pass
     
     def step(self, step_name: str):
         """Record a step with elapsed time since start."""
-        if self.start_time is None:
-            raise RuntimeError("Profiler not started. Use as context manager.")
-        
-        step_time = time.perf_counter()
-        elapsed_ms = (step_time - self.start_time) * 1000
-        
         self.steps.append({
             "name": step_name,
-            "elapsed_ms": elapsed_ms,
-            "timestamp": step_time
         })
         
-        return elapsed_ms
+        return 0.0
     
     def _log_results(self):
         """Log profiling results."""
-        if self.duration_ms is None:
-            return
-        
-        # Build log message
-        parts = [f"[PERF] {self.operation_name}: {self.duration_ms:.2f}ms total"]
-        
-        if self.steps:
-            # Calculate step durations
-            prev_time = self.start_time
-            step_details = []
-            for step in self.steps:
-                step_duration = (step["timestamp"] - prev_time) * 1000
-                step_details.append(f"{step['name']}={step_duration:.2f}ms")
-                prev_time = step["timestamp"]
-            
-            parts.append(f"steps: {' -> '.join(step_details)}")
-        
-        logger.info(" ".join(parts))
+        pass
 
 
 def profile_async(func: Callable):

@@ -120,29 +120,16 @@ async def search_candidates(
 @router.get("/detail/{candidate_id}", response_class=HTMLResponse)
 async def search_candidate_detail(request: Request, candidate_id: str):
     """Return candidate detail view in read-only mode for the search page."""
-    import time
-    handler_start = time.perf_counter()
-    
-    # Check if request arrival time was recorded by middleware
-    if hasattr(request.state, 'request_arrival_time'):
-        queue_wait_ms = (handler_start - request.state.request_arrival_time) * 1000
-        if queue_wait_ms > 10.0:  # Log if request waited more than 10ms
-            logger.warning(f"[PERF] Request queued for {queue_wait_ms:.2f}ms before handler: /search/detail/{candidate_id}")
-    
     with profile_operation(f"search_candidate_detail({candidate_id})", log_threshold_ms=0.0) as profiler:
         profiler.step("start")
         
         # Run database query in thread pool to avoid blocking event loop
         profiler.step("before_db_query")
-        thread_pool_wait_start = time.perf_counter()
         stored = await asyncio.to_thread(
             search_candidates_advanced,
             candidate_ids=[candidate_id],
             limit=1
         )
-        thread_pool_wait_ms = (time.perf_counter() - thread_pool_wait_start) * 1000
-        if thread_pool_wait_ms > 10.0:  # Log if waited more than 10ms for thread pool
-            logger.warning(f"[PERF] Thread pool wait: {thread_pool_wait_ms:.2f}ms (may indicate thread pool saturation)")
         profiler.step("after_db_query")
         
         if not stored:

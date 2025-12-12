@@ -175,11 +175,15 @@ async def send_message_action(page: Page, chat_id: str, message: str) -> bool:
     await _prepare_chat_page(page)
     dialog = await _go_to_chat_dialog(page, chat_id)
     if not dialog:
-        raise ValueError("未找到指定对话项")
+        # raise ValueError("未找到指定对话项")
+        logger.error("未找到指定对话项")
+        return False
 
     input_field = page.locator(MESSAGE_INPUT_SELECTOR).first
     if await input_field.count() == 0:
-        raise ValueError("未找到消息输入框")
+        # raise ValueError("未找到消息输入框")
+        logger.error("未找到消息输入框")
+        return False
 
     await input_field.wait_for(state="visible", timeout=3000)
     await input_field.click()
@@ -389,11 +393,12 @@ async def view_online_resume_action(page: Page, chat_id: str, timeout: int = 200
 #--------------------------------------------------
 
 async def request_full_resume_action(page: Page, chat_id: str) -> bool:
-    """Request resume from candidate. Returns True on success, raises ValueError on failure."""
+    """Request resume from candidate. Returns True on success, False on failure (e.g., dialog not found)."""
     await _prepare_chat_page(page)
     dialog = await _go_to_chat_dialog(page, chat_id)
     if not dialog:
-        raise ValueError("未找到指定对话项")
+        logger.warning(f"未找到指定对话项 (chat_id: {chat_id})")
+        return False
     
     # first check if candidate has already sent resume, click to accept
     accepted = await accept_full_resume_action(page, chat_id)
@@ -406,24 +411,20 @@ async def request_full_resume_action(page: Page, chat_id: str) -> bool:
     
     t0 = time.time()
     while "disabled" not in await btn.get_attribute("class"):
-        await btn.click(timeout=1000)
-        # 境外提醒
-        confirm_continue = page.locator("div.btn-sure-v2:has-text('继续交换')")
-        if await confirm_continue.count() > 0:
-            try:
+        try:
+            await btn.click(timeout=1000)
+            # 境外提醒
+            confirm_continue = page.locator("div.btn-sure-v2:has-text('继续交换')")
+            if await confirm_continue.count() > 0:
                 await confirm_continue.click(timeout=1000)
                 logger.info("境外提醒已确认")
-            except:
-                pass
-        
-        # Confirm dialog
-        confirm = page.locator("span.boss-btn-primary:has-text('确定')")
-        if await confirm.count() > 0:
-            try:
+            # Confirm dialog
+            confirm = page.locator("span.boss-btn-primary:has-text('确定')")
+            if await confirm.count() > 0:
                 await confirm.click(timeout=1000)
                 logger.info("简历请求已发送")
-            except:
-                pass
+        except Exception as e:
+            pass
         if time.time() - t0 > 10:
             return False
     else:

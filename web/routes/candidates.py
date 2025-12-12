@@ -128,7 +128,7 @@ async def list_candidates(
                 tab=tab_filter,
                 status=status_filter,
                 job_applied=job_applied,
-                unread_only=False  # new_only=False maps to unread_only=False
+                unread_only=False  # True 只看未读
             )
         except Exception as e:
             logger.error(f"Failed to get chat candidates: {e}")
@@ -141,26 +141,16 @@ async def list_candidates(
         return HTMLResponse(content='<div class="text-center text-gray-500 py-12">暂无候选人</div>')
     
     # Batch query candidates from cloud store
-    candidate_ids: list[str] = []
-    chat_ids: list[str] = []
-    conversation_ids: list[str] = []
-    names: list[str] = []
-    for c in candidates:
-        if c.get("candidate_id"):
-            candidate_ids.append(c["candidate_id"])
-        if c.get("chat_id"):
-            chat_ids.append(c["chat_id"])
-        if c.get("conversation_id"):
-            conversation_ids.append(c["conversation_id"])
-        if c.get("name"):
-            names.append(c["name"])
+    candidate_ids = [c.get("candidate_id") for c in candidates if c.get("candidate_id")]
+    chat_ids = [c.get("chat_id") for c in candidates if c.get("chat_id")]
+    conversation_ids = [c.get("conversation_id") for c in candidates if c.get("conversation_id")]
+    names = [c.get("name") for c in candidates if c.get("name")]
     # Run database query in thread pool to avoid blocking event loop
-    stored_candidates = await asyncio.to_thread(
-        search_candidates_advanced,
-        candidate_ids=list({cid for cid in candidate_ids}),
-        chat_ids=list({cid for cid in chat_ids}),
-        conversation_ids=list({cid for cid in conversation_ids}),
-        names=list({n for n in names}),
+    stored_candidates = search_candidates_advanced(
+        candidate_ids= candidate_ids,
+        chat_ids= chat_ids,
+        conversation_ids= conversation_ids,
+        names= names if mode == "recommend" else None, # if not recommend mode, use ids to search
         job_applied=job_applied,
         limit=len(candidates) * 2,
         strict=False,
@@ -191,6 +181,8 @@ async def list_candidates(
             # update greeted status if the candidate is in chat, greet, or seek stage
             candidate['greeted'] = candidate.get('greeted', False)
             restored += 1
+        else:
+            logger.warning(f"No stored candidate found for {candidate.get('name')}")
 
         # Extract resume_text and full_resume from candidate
         # Prepare template context (pop values before rendering)

@@ -9,12 +9,14 @@ from fastapi import APIRouter, Query, Request, Form, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
+from src.global_logger import get_logger
 from src.jobs_store import (
     get_all_jobs, get_job_by_id, insert_job, update_job as update_job_store,
     delete_job as delete_job_store, delete_job_version,
     get_job_versions, switch_job_version, get_base_job_id
 )
 
+logger = get_logger()
 router = APIRouter()
 templates = Jinja2Templates(directory="web/templates")
 
@@ -389,8 +391,9 @@ async def api_list_jobs():
 @router.get("/api/{job_id}", response_class=JSONResponse)
 async def api_get_job(job_id: str):
     """API endpoint to get specific job (returns current version)."""
-    # Extract base job_id (remove _vN suffix if present)
+    # Extract base job_id (remove _vN suffix if present) - pure function, very fast
     base_job_id = get_base_job_id(job_id)
+    
     # Run database query in thread pool to avoid blocking event loop
     job = await asyncio.to_thread(get_job_by_id, base_job_id)
     

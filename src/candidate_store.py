@@ -166,12 +166,13 @@ def get_candidate_by_dict(kwargs: Dict[str, Any], strict: bool = True) -> Option
     resume_text = kwargs.get("resume_text")
     fields = kwargs.get("fields", _readable_fields)
     last_message = kwargs.get("last_message", '')
+    has_id = candidate_id or chat_id or conversation_id
     
     results = search_candidates_advanced(
         candidate_ids=[candidate_id] if candidate_id else None,
         chat_ids=[chat_id] if chat_id else None,
         conversation_ids=[conversation_id] if conversation_id else None,
-        names=[name] if name else None,
+        names=[name] if not has_id else None,
         job_applied=job_applied,
         limit=1,
         fields=fields,
@@ -213,10 +214,41 @@ def search_candidates_advanced(
     fields: Optional[List[str]] = None,
     strict = True
 ) -> List[Dict[str, Any]]:
-    """Advanced candidate search supporting multiple filters, identifiers and semantic queries."""
-    import time
-    perf_start = time.perf_counter()
+    """
+    Search candidates in the store with advanced, multi-field queries.
 
+    Supports filtering by one or more of:
+        - Identifiers: candidate_ids, chat_ids, conversation_ids, names
+        - Candidate/job metadata: job_applied, stage, notified status
+        - Update window: updated_from, updated_to (based on updated_at)
+        - Resume keyword: resume_contains matches `resume_text` or `full_resume`
+        - Semantic score: min_score (matches analysis["overall"])
+        - Custom result fields (default: _readable_fields)
+        - Strict/relaxed combining of identifier conditions (strict = AND, else OR)
+        - Sorting and result count limit
+
+    Args:
+        candidate_ids: List of candidate_id values to filter by.
+        chat_ids: List of chat_id values to filter by.
+        conversation_ids: List of conversation_id values to filter by.
+        names: List of candidate names to filter by.
+        job_applied: String job position filter.
+        stage: Candidate stage to filter (e.g. 'CHAT', 'PASS').
+        notified: Only return candidates that have been notified if True/False.
+        updated_from: Start ISO date string for updated_at.
+        updated_to: End ISO date string for updated_at.
+        resume_contains: Keyword to search for in resumes.
+        semantic_query: (Not implemented) Reserved for semantic search phrase.
+        min_score: Minimum overall analysis score for candidate.
+        limit: Maximum number of results (default 100).
+        sort_by: Field to sort by (default 'updated_at').
+        sort_direction: 'asc' or 'desc' (default 'desc').
+        fields: List of result fields to return. Uses `_readable_fields` if None.
+        strict: If True (default), combine identifier clauses with AND. If False, use OR.
+
+    Returns:
+        List of candidate records matching all supplied filters, up to `limit`.
+    """
     _quote = lambda value: f"'{value.strip()}'" if value else ''
     _build_in_clause = lambda field, values: f"{field} in [{', '.join(_quote(v) for v in values if v and v.strip())}]" if values else None
 
@@ -266,7 +298,6 @@ def search_candidates_advanced(
     order_clause = f"{sort_by_normalized} {sort_dir}"
 
     try:
-        perf_before_query = time.perf_counter()
         # Cap the limit to stay within Milvus's max query result window of 16384
         # The function multiplies limit by 3, so we cap the effective limit
         effective_limit = limit * 3 if limit else None
@@ -282,7 +313,6 @@ def search_candidates_advanced(
                 similarity_threshold=0.5,
             )
         else:
-            perf_before_db = time.perf_counter()
             results = _client.query(
                 collection_name=_collection_name,
                 filter=filter_expr,
@@ -290,34 +320,18 @@ def search_candidates_advanced(
                 limit=effective_limit,
                 output_fields_order=order_clause,
             )
-            perf_after_db = time.perf_counter()
-            db_time_ms = (perf_after_db - perf_before_db) * 1000
-            if db_time_ms > 50.0:  # Log if DB query takes more than 50ms
-                logger.info(f"[PERF] search_candidates_advanced DB query: {db_time_ms:.2f}ms (filter={filter_expr[:100] if filter_expr else 'None'}, limit={effective_limit})")
-        
-        perf_after_query = time.perf_counter()
-        query_time_ms = (perf_after_query - perf_before_query) * 1000
         
         candidates = [{k: v for k, v in result.items() if v or v == 0} for result in results or []]
-        perf_after_process = time.perf_counter()
         
         for candidate in candidates:
             candidate["score"] = candidate.get("analysis", {}).get("overall")
 
         reverse = sort_direction.lower() != "asc"
         candidates.sort(key=lambda c: c.get(sort_by_normalized) or "", reverse=reverse)
-        
-        perf_end = time.perf_counter()
-        total_time_ms = (perf_end - perf_start) * 1000
-        
-        if total_time_ms > 100.0:  # Log if total function takes more than 100ms
-            logger.info(f"[PERF] search_candidates_advanced total: {total_time_ms:.2f}ms (query={query_time_ms:.2f}ms, process={(perf_after_process-perf_after_query)*1000:.2f}ms, sort={(perf_end-perf_after_process)*1000:.2f}ms, results={len(candidates)})")
 
         return candidates[:limit] if limit else candidates
     except Exception as exc:
-        perf_end = time.perf_counter()
-        total_time_ms = (perf_end - perf_start) * 1000
-        logger.exception("Failed advanced candidate search: %s (took %.2fms)", exc, total_time_ms)
+        logger.exception("Failed advanced candidate search: %s", exc)
         return []
         
 

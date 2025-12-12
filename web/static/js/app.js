@@ -74,6 +74,49 @@ async function showBrowserNotification(title, body, icon = null) {
 window.showBrowserNotification = showBrowserNotification;
 
 /**
+ * Generate a simple hash from a string
+ * Used to track notification content changes
+ */
+function simpleHash(str) {
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+        const char = str.charCodeAt(i);
+        hash = ((hash << 5) - hash) + char;
+        hash = hash & hash; // Convert to 32bit integer
+    }
+    return Math.abs(hash).toString(36);
+}
+
+/**
+ * Check if a notification should be shown based on content hash
+ * @param {string} contentKey - Unique key for this notification (e.g., 'homepage-warning', 'candidates-troubleshooting')
+ * @param {string} content - The notification content text
+ * @returns {boolean} - True if notification should be shown (content is new or changed)
+ */
+function shouldShowNotification(contentKey, content) {
+    const currentHash = simpleHash(content);
+    const storedHash = localStorage.getItem(`${contentKey}_hash`);
+    
+    // Show if hash is different (new or changed content)
+    return storedHash !== currentHash;
+}
+
+/**
+ * Mark a notification as acknowledged
+ * @param {string} contentKey - Unique key for this notification
+ * @param {string} content - The notification content text
+ */
+function acknowledgeNotification(contentKey, content) {
+    const currentHash = simpleHash(content);
+    localStorage.setItem(`${contentKey}_hash`, currentHash);
+}
+
+// Expose notification functions globally
+window.simpleHash = simpleHash;
+window.shouldShowNotification = shouldShowNotification;
+window.acknowledgeNotification = acknowledgeNotification;
+
+/**
  * Confirm modal helper using Alpine.js store (minimal JS, matching index.html pattern)
  * Returns a Promise that resolves to true/false
  */
@@ -847,6 +890,7 @@ function disableAllCards() {
         card.style.pointerEvents = 'none';
         card.style.opacity = '0.6';
     });
+    console.log('disabled All Cards');
 }
 
 function enableAllCards() {
@@ -855,7 +899,11 @@ function enableAllCards() {
         card.style.pointerEvents = '';
         card.style.opacity = '';
     });
+    console.log('enabled All Cards');
 }
+// 将函数暴露到 window 对象
+window.disableAllCards = disableAllCards;
+window.enableAllCards = enableAllCards;
 
 // ============================================================================
 // Batch Processing Functions
