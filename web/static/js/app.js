@@ -1763,6 +1763,196 @@ document.body.addEventListener('htmx:afterSwap', function(event) {
 });
 
 // ============================================================================
+// Conversion Pie Chart Component (Pie Chart for stage distribution using Chart.js)
+// ============================================================================
+
+/**
+ * Get color for a stage
+ * @param {string} stage - Stage name (PASS, CHAT, SEEK, CONTACT)
+ * @returns {string} Color in rgba format
+ */
+function getStageColor(stage) {
+    const colors = {
+        'PASS': 'rgba(156, 163, 175, 0.8)',      // gray-400
+        'CHAT': 'rgba(59, 130, 246, 0.8)',       // blue-500
+        'SEEK': 'rgba(251, 191, 36, 0.8)',       // amber-400
+        'CONTACT': 'rgba(34, 197, 94, 0.8)',     // green-500
+    };
+    return colors[stage] || 'rgba(156, 163, 175, 0.8)';
+}
+
+/**
+ * Get border color for a stage
+ * @param {string} stage - Stage name (PASS, CHAT, SEEK, CONTACT)
+ * @returns {string} Color in rgba format
+ */
+function getStageBorderColor(stage) {
+    const colors = {
+        'PASS': 'rgba(156, 163, 175, 1)',        // gray-400
+        'CHAT': 'rgb(73, 107, 162)',         // blue-500
+        'SEEK': 'rgb(251, 251, 36)',         // amber-400
+        'CONTACT': 'rgb(78, 229, 28)',       // green-500
+    };
+    return colors[stage] || 'rgba(156, 163, 175, 1)';
+}
+
+/**
+ * Render pie chart for conversion data using Chart.js
+ * @param {HTMLElement} container - Container element with data-conversions attribute
+ */
+function renderConversionPieChart(container) {
+    const conversionsDataStr = container.getAttribute('data-conversions');
+    if (!conversionsDataStr) return;
+    
+    const conversionsData = JSON.parse(conversionsDataStr);
+    if (!conversionsData || conversionsData.length === 0) return;
+    
+    // Check if Chart.js is available
+    if (typeof Chart === 'undefined') {
+        console.error('Chart.js is not loaded');
+        return;
+    }
+    
+    // Find or create canvas element
+    let canvas = container.querySelector('canvas');
+    if (!canvas) {
+        // Create canvas element
+        canvas = document.createElement('canvas');
+        canvas.style.maxHeight = '250px';
+        container.insertBefore(canvas, container.firstChild);
+    }
+    
+    // Destroy existing chart if it exists
+    const chartId = container.getAttribute('data-chart-id') || `pie-chart-${Date.now()}-${Math.random()}`;
+    container.setAttribute('data-chart-id', chartId);
+    
+    if (chartInstances.has(chartId)) {
+        chartInstances.get(chartId).destroy();
+        chartInstances.delete(chartId);
+    }
+    
+    // Filter and prepare data for pie chart
+    // Include all items with valid stage (even if count is 0) to show all stages in legend
+    const validData = conversionsData.filter(c => c && c.stage);
+    
+    if (validData.length === 0) {
+        console.warn('No valid conversion data for pie chart');
+        return;
+    }
+    
+    const labels = validData.map(c => c.stage);
+    const data = validData.map(c => c.count || 0);
+    const backgroundColor = validData.map(c => getStageColor(c.stage));
+    const borderColor = validData.map(c => getStageBorderColor(c.stage));
+    
+    // Calculate total for percentage display (only count > 0 for percentage calculation)
+    const total = data.reduce((sum, val) => sum + val, 0);
+    
+    // Create Chart.js pie chart
+    const chart = new Chart(canvas, {
+        type: 'pie',
+        data: {
+            labels: labels,
+            datasets: [{
+                data: data,
+                backgroundColor: backgroundColor,
+                borderColor: borderColor,
+                borderWidth: 2,
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: {
+                    display: true,
+                    position: 'right',
+                    labels: {
+                        usePointStyle: true,
+                        padding: 15,
+                        font: {
+                            size: 12
+                        },
+                        generateLabels: function(chart) {
+                            // Manually generate labels for all stages, even if count is 0
+                            const legendLabels = [];
+                            for (let i = 0; i < labels.length; i++) {
+                                const value = data[i] || 0;
+                                const percentage = total > 0 ? ((value / total) * 100).toFixed(1) : 0;
+                                const stageName = labels[i] || 'Unknown';
+                                const bgColor = backgroundColor[i];
+                                const borderColorValue = borderColor[i];
+                                
+                                legendLabels.push({
+                                    text: `${stageName}: ${value} (${percentage}%)`,
+                                    fillStyle: bgColor,
+                                    strokeStyle: borderColorValue,
+                                    lineWidth: 2,
+                                    hidden: false, // Always show, even if value is 0
+                                    index: i
+                                });
+                            }
+                            return legendLabels;
+                        }
+                    }
+                },
+                tooltip: {
+                    callbacks: {
+                        label: function(context) {
+                            const label = context.label || '';
+                            const value = context.parsed || 0;
+                            const percentage = total > 0 ? ((value / total) * 100).toFixed(1) : 0;
+                            const conversion = validData[context.dataIndex];
+                            const rate = conversion ? (conversion.rate * 100).toFixed(0) : '0';
+                            return [
+                                `${label}: ${value} (${percentage}%)`,
+                                `转化率: ${rate}%`
+                            ];
+                        }
+                    }
+                }
+            }
+        }
+    });
+    
+    // Store chart instance
+    if (window.chartInstances) {
+        window.chartInstances.set(chartId, chart);
+    }
+    
+    // Also store reference on canvas for quick lookup
+    canvas.chart = chart;
+}
+
+// Initialize conversion pie charts when DOM is ready or after HTMX swap
+function initConversionPieCharts() {
+    document.querySelectorAll('.conversion-pie-chart-container').forEach(container => {
+        renderConversionPieChart(container);
+    });
+}
+
+// Initialize charts on page load
+document.addEventListener('DOMContentLoaded', initConversionPieCharts);
+
+// Re-initialize charts after HTMX swaps
+document.body.addEventListener('htmx:afterSwap', function(event) {
+    const target = event.detail.target;
+    if (!target) return;
+    
+    // Check if the swapped element itself is a pie chart container
+    if (target.classList && target.classList.contains('conversion-pie-chart-container')) {
+        renderConversionPieChart(target);
+        return;
+    }
+    
+    // Check if the swapped content contains pie chart containers
+    const swappedCharts = target.querySelectorAll('.conversion-pie-chart-container');
+    if (swappedCharts.length > 0) {
+        initConversionPieCharts();
+    }
+});
+
+// ============================================================================
 // Daily Chart Component (Bar Chart for daily new/SEEK stats using Chart.js)
 // ============================================================================
 
@@ -2028,16 +2218,7 @@ function renderJobStats(data) {
     jobs.forEach(job => {
         const ss = job.score_summary;
         const dailyData = job.daily || [];
-        
-        // Generate conversion rows
-        const convRows = (job.conversions || []).map(c => `
-            <tr>
-                <td class="py-1">${c.stage}</td>
-                <td class="py-1">${c.count}</td>
-                <td class="py-1 text-sm text-gray-500">${c.previous}</td>
-                <td class="py-1">${formatRateBadge(c.rate)}</td>
-            </tr>
-        `).join('');
+        const conversionData = job.conversions || [];
         
         html += `
             <div class="bg-white rounded-lg shadow p-6">
@@ -2067,17 +2248,9 @@ function renderJobStats(data) {
                     </div>
                     <div>
                         <h4 class="text-sm font-semibold text-gray-700 mb-2">阶段转化率</h4>
-                        <table class="min-w-full text-left text-sm">
-                            <thead>
-                                <tr class="text-gray-500">
-                                    <th class="py-1">阶段</th>
-                                    <th class="py-1">人数</th>
-                                    <th class="py-1">上阶段</th>
-                                    <th class="py-1">转化</th>
-                                </tr>
-                            </thead>
-                            <tbody>${convRows}</tbody>
-                        </table>
+                        <div class="conversion-pie-chart-container p-4 bg-gray-50 rounded-lg" data-conversions='${JSON.stringify(conversionData)}' style="min-height: 250px;">
+                            <!-- Chart.js canvas will be inserted here -->
+                        </div>
                     </div>
                 </div>
             </div>
@@ -2088,6 +2261,7 @@ function renderJobStats(data) {
     
     // Initialize charts after rendering
     initDailyCharts();
+    initConversionPieCharts();
 }
 
 /**

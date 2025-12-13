@@ -61,7 +61,7 @@
     </div>
     {% endif %}
     
-    {% if candidate.name and ('先生' in candidate.name or '女士' in candidate.name) and not candidate.chat_id%}
+    {% if candidate.name and ('先生' in candidate.name or '女士' in candidate.name) and candidate.chat_id %}
         <div class="flex items-center space-x-2 bg-yellow-100 border-l-4 border-yellow-400 text-yellow-800 px-4 py-2 rounded shadow-sm my-2">
             <span>⚠️</span>
             <span>
@@ -270,6 +270,9 @@ async function process_candidate() {
                     analysis = JSON.parse(updated_analysis_container.getAttribute('data-analysis'));
                     is_full_analysis = analysis.resume_type === 'full';
                     current_score = analysis?.overall || current_score;
+                    if (current_score >= borderline_threshold) {
+                        await sendDingNotification(analysis, name, getCandidateData('job_applied'));
+                    }
                 }
                 if (need_reply && is_full_analysis && current_score >= borderline_threshold ) {
                     // Step 4c: Send notification if analysis was updated
@@ -286,7 +289,6 @@ async function process_candidate() {
                 // For recommend mode, greet and send message
                 await greetAndSendMessage(autoSend=auto_send);
                 need_reply = false;
-                // await sendDingNotification(analysis, name, getCandidateData('job_applied'));
             }
         }
         //step 4e: check if we need to reply candidate

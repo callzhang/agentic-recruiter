@@ -625,10 +625,11 @@ async def notify_hr(
     # Generate message from analysis if not provided
     name = candidate.get("name", "未知候选人")
     job_applied = candidate.get("job_applied", "未指定岗位")
+    resume_type = '完整简历' if analysis.get('resume_type') == 'full' else '在线简历'
     message = f"""**候选人**: {name}
 **岗位**: {job_applied}
 
-**评分结果**:
+**评分结果（{resume_type}）**:
 - 技能匹配度: {analysis.get('skill', 'N/A')}/10
 - 创业契合度: {analysis.get('startup_fit', 'N/A')}/10
 - 基础背景: {analysis.get('background', 'N/A')}/10
@@ -640,7 +641,7 @@ async def notify_hr(
 **跟进建议**:
 {analysis.get('followup_tips', '暂无')}"""
     
-    title = f"候选人 {name} 通过初步筛选"
+    title = f"候选人 {name} 通过筛选（{resume_type}）"
     
     # Send notification with job_id support
     success = send_dingtalk_notification(title=title, message=message, job_id=job_id)
