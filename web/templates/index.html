@@ -14,7 +14,7 @@
                 this.showWarning = window.shouldShowNotification(this.contentKey, this.content);
             } else {
                 // Fallback to old behavior if function not available
-                this.showWarning = localStorage.getItem('warningAcknowledged') !== 'true';
+            this.showWarning = localStorage.getItem('warningAcknowledged') !== 'true';
             }
             if (this.showWarning) {
                 this.$el.style.display = 'flex';

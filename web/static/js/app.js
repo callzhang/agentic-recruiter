@@ -855,20 +855,14 @@ document.body.addEventListener('htmx:beforeRequest', function(event) {
  */
 window.handleApiResponse = async function handleApiResponse(response) {
     if (response.ok) {
-        // FastAPI normal response
         return await response.json();
     }
     
-    // Try parse the JSON error body
-    let errorData;
-    try {
-        errorData = await response.json();
-    } catch {
-        throw new Error(`HTTP ${response.status} ${response.statusText}`);
-    }
+    // Try to parse JSON error body, fallback to status text if parsing fails
+    const errorData = await response.json().catch(() => null);
     
     // 422: ValidationError or custom detail structure
-    if (response.status === 422 && errorData.detail) {
+    if (response.status === 422 && errorData?.detail) {
         const errors = errorData.detail
             .map(e => `${e.loc.join('.')}: ${e.msg}`)
             .join(', ');
@@ -876,9 +870,54 @@ window.handleApiResponse = async function handleApiResponse(response) {
     }
     
     // Other server errors
-    const message = errorData.error || errorData.detail || response.statusText;
+    const message = errorData?.error || errorData?.detail || response.statusText;
     throw new Error(`Server error (${response.status}): ${message}`);
 }
+
+/**
+ * Wrap htmx.ajax to return a Promise that resolves when swap completes
+ * 
+ * @param {string} method - HTTP method (GET, POST, etc.)
+ * @param {string} url - URL to request
+ * @param {object} options - HTMX options (must include 'target' selector)
+ * @returns {Promise<string>} Promise that resolves with target element's text content
+ * 
+ * @example
+ * await htmxAjaxPromise('POST', '/candidates/fetch-online-resume', {
+ *     target: '#resume-online-container',
+ *     swap: 'innerHTML',
+ *     values: { candidate_id: '123' }
+ * });
+ */
+window.htmxAjaxPromise = function htmxAjaxPromise(method, url, options) {
+    return new Promise((resolve, reject) => {
+        const target = document.querySelector(options.target);
+        if (!target) {
+            reject(new Error(`Target should be provided to use htmxAjaxPromise: ${options} or use fetch instead`));
+            return;
+        }
+        
+        // Listen for swap completion
+        const afterSwap = (evt) => {
+            target.removeEventListener('htmx:afterSwap', afterSwap);
+            target.removeEventListener('htmx:responseError', onError);
+            resolve(target.textContent.trim());
+        };
+        
+        const onError = (evt) => {
+            target.removeEventListener('htmx:afterSwap', afterSwap);
+            target.removeEventListener('htmx:responseError', onError);
+            const errorMsg = evt.detail?.error || evt.detail?.message || 'HTMX request failed';
+            reject(new Error(errorMsg));
+        };
+        
+        target.addEventListener('htmx:afterSwap', afterSwap, { once: true });
+        target.addEventListener('htmx:responseError', onError, { once: true });
+        
+        // Trigger the ajax call
+        htmx.ajax(method, url, options);
+    });
+};
 
 // ============================================================================
 // Helper functions to disable/enable candidate cards
@@ -1175,31 +1214,6 @@ window.addEventListener('beforeunload', () => {
     }
 });
 
-// ============================================================================
-// Global HTMX Event Listeners
-// ============================================================================
-
-// HTMX event listeners for global notifications
-document.body.addEventListener('htmx:afterRequest', (event) => {
-    if (event.detail.successful && event.detail.xhr.status === 200) {
-        // Check for HX-Trigger header
-        const trigger = event.detail.xhr.getResponseHeader('HX-Trigger');
-        if (trigger) {
-            try {
-                const triggers = JSON.parse(trigger);
-                if (triggers.showMessage) {
-                    showToast(triggers.showMessage.message, triggers.showMessage.type);
-                }
-            } catch (e) {
-                // Simple string trigger
-                if (trigger === 'dataUpdated') {
-                    showToast('数据已更新', 'success');
-                }
-            }
-        }
-    }
-});
-
 // Note: htmx:responseError is already handled above in the Global HTMX Error Handling section
 
 // ============================================================================
@@ -1389,6 +1403,26 @@ document.addEventListener('candidate:update', function(event) {
 // ============================================================================
 
 /**
+ * Fetch with timeout and error handling
+ * @param {string} url - URL to fetch
+ * @param {number} timeoutMs - Timeout in milliseconds (default: 30000)
+ * @returns {Promise<Response>} Fetch response
+ */
+async function fetchWithTimeout(url, timeoutMs = 30000) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    
+    const response = await fetch(url, {
+        method: 'GET',
+        headers: { 'Accept': 'application/json' },
+        signal: controller.signal
+    });
+    
+    clearTimeout(timeoutId);
+    return response;
+}
+
+/**
  * Combined runtime check: service status and version updates
  * Runs every 30 seconds
  */
@@ -1404,56 +1438,8 @@ function initRuntimeCheck() {
     async function runtimeCheck() {
         // Always check service status
         if (statusDot && statusText) {
-            try {
-                // Create abort controller for timeout
-                const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
-                
-                const response = await fetch('/status', {
-                    method: 'GET',
-                    headers: { 'Accept': 'application/json' },
-                    signal: controller.signal
-                });
-                
-                clearTimeout(timeoutId);
-                
-                if (response.ok) {
-                    const data = await response.json();
-                    // Check Zilliz connection status
-                    if (data.zilliz_connected === false) {
-                        // Zilliz connection failed - show error
-                        statusDot.className = 'w-2 h-2 bg-red-500 rounded-full animate-pulse';
-                        statusText.textContent = 'Zilliz 连接失败';
-                        statusText.className = 'text-sm text-red-600 font-semibold';
-                        
-                        // Show error toast (only once per session)
-                        if (!sessionStorage.getItem('zilliz_error_shown')) {
-                            const errorMsg = data.zilliz_error 
-                                ? `Zilliz 数据库连接失败: ${data.zilliz_error}` 
-                                : 'Zilliz 数据库连接失败，请检查配置';
-                            showToast(errorMsg, 'error');
-                            sessionStorage.setItem('zilliz_error_shown', 'true');
-                        }
-                    } else {
-                        // Service is running normally
-                        statusDot.className = 'w-2 h-2 bg-green-500 rounded-full animate-pulse';
-                        statusText.textContent = '服务运行中';
-                        statusText.className = 'text-sm text-gray-600';
-                        // Clear error flag if connection is restored
-                        sessionStorage.removeItem('zilliz_error_shown');
-                    }
-                    
-                    // Update version tag - always update, even if version is null/undefined
-                    console.log('Status response data:', data); // Debug log
-                    versionTag.textContent = data.version;
-                } else {
-                    // Service returned error
-                    statusDot.className = 'w-2 h-2 bg-yellow-500 rounded-full animate-pulse';
-                    statusText.textContent = '服务异常';
-                    statusText.className = 'text-sm text-yellow-600';
-                }
-            } catch (error) {
-                // Service is down or unreachable (network error, timeout, etc.)
+            const response = await fetchWithTimeout('/status').catch(error => {
+                // Handle fetch errors (network, timeout, etc.)
                 if (error.name === 'AbortError') {
                     statusDot.className = 'w-2 h-2 bg-yellow-500 rounded-full animate-pulse';
                     statusText.textContent = '服务响应超时';
@@ -1463,6 +1449,45 @@ function initRuntimeCheck() {
                     statusText.textContent = '服务离线';
                     statusText.className = 'text-sm text-red-600';
                 }
+                return null;
+            });
+            
+            if (response?.ok) {
+                const data = await response.json();
+                // Check Zilliz connection status
+                if (data.zilliz_connected === false) {
+                    // Zilliz connection failed - show error
+                    statusDot.className = 'w-2 h-2 bg-red-500 rounded-full animate-pulse';
+                    statusText.textContent = 'Zilliz 连接失败';
+                    statusText.className = 'text-sm text-red-600 font-semibold';
+                    
+                    // Show error toast (only once per session)
+                    if (!sessionStorage.getItem('zilliz_error_shown')) {
+                        const errorMsg = data.zilliz_error 
+                            ? `Zilliz 数据库连接失败: ${data.zilliz_error}` 
+                            : 'Zilliz 数据库连接失败，请检查配置';
+                        showToast(errorMsg, 'error');
+                        sessionStorage.setItem('zilliz_error_shown', 'true');
+                    }
+                } else {
+                    // Service is running normally
+                    statusDot.className = 'w-2 h-2 bg-green-500 rounded-full animate-pulse';
+                    statusText.textContent = '服务运行中';
+                    statusText.className = 'text-sm text-gray-600';
+                    // Clear error flag if connection is restored
+                    sessionStorage.removeItem('zilliz_error_shown');
+                }
+                
+                // Update version tag - always update, even if version is null/undefined
+                console.log('Status response data:', data); // Debug log
+                if (versionTag) {
+                    versionTag.textContent = data.version;
+                }
+            } else if (response) {
+                // Service returned error
+                statusDot.className = 'w-2 h-2 bg-yellow-500 rounded-full animate-pulse';
+                statusText.textContent = '服务异常';
+                statusText.className = 'text-sm text-yellow-600';
             }
         }
         
@@ -1471,66 +1496,51 @@ function initRuntimeCheck() {
         if (now - lastVersionCheck >= VERSION_CHECK_INTERVAL) {
             lastVersionCheck = now;
             
-            try {
-                // Create abort controller for timeout
-                const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
-                
-                const response = await fetch('/version/check', {
-                    method: 'GET',
-                    headers: { 'Accept': 'application/json' },
-                    signal: controller.signal
-                });
-                
-                clearTimeout(timeoutId);
-                
-                if (!response.ok) {
-                    return; // Silently fail
+            const response = await fetchWithTimeout('/version/check').catch(() => null);
+            
+            if (!response?.ok) {
+                return; // Silently fail
+            }
+            
+            const data = await response.json();
+            
+            // If merge was successful, show success message (don't show modal, just log)
+            if (data.merge_success === true) {
+                console.log('✅ Code updated successfully:', data.message);
+                // Clear dismissed version so user sees the success
+                if (data.remote_commit) {
+                    localStorage.removeItem('dismissedVersion');
+                }
+                return; // Don't show modal for successful auto-updates
+            }
+            
+            // If merge failed or update available, show modal
+            if (data.has_update && data.remote_commit) {
+                // Check if this version was already dismissed
+                const dismissedVersion = localStorage.getItem('dismissedVersion');
+                if (dismissedVersion === data.remote_commit) {
+                    return; // User already dismissed this version
                 }
                 
-                const data = await response.json();
-                
-                // If merge was successful, show success message (don't show modal, just log)
-                if (data.merge_success === true) {
-                    console.log('✅ Code updated successfully:', data.message);
-                    // Clear dismissed version so user sees the success
-                    if (data.remote_commit) {
-                        localStorage.removeItem('dismissedVersion');
-                    }
-                    return; // Don't show modal for successful auto-updates
-                }
-                
-                // If merge failed or update available, show modal
-                if (data.has_update && data.remote_commit) {
-                    // Check if this version was already dismissed
-                    const dismissedVersion = localStorage.getItem('dismissedVersion');
-                    if (dismissedVersion === data.remote_commit) {
-                        return; // User already dismissed this version
+                // Show modal
+                if (window.Alpine && Alpine.store('versionUpdateModal')) {
+                    const modal = Alpine.store('versionUpdateModal');
+                    
+                    // Set title and message based on merge status
+                    if (data.merge_success === false) {
+                        modal.title = '⚠️ 自动更新失败';
+                        modal.message = data.message || `检测到新版本但自动合并失败。\n\n错误: ${data.merge_error || '未知错误'}\n\n请手动运行 start.command 更新代码。`;
+                    } else {
+                        modal.title = '新版本可用';
+                        modal.message = data.message || '检测到新的 Git 版本可用，建议更新以获取最新功能。';
                     }
                     
-                    // Show modal
-                    if (window.Alpine && Alpine.store('versionUpdateModal')) {
-                        const modal = Alpine.store('versionUpdateModal');
-                        
-                        // Set title and message based on merge status
-                        if (data.merge_success === false) {
-                            modal.title = '⚠️ 自动更新失败';
-                            modal.message = data.message || `检测到新版本但自动合并失败。\n\n错误: ${data.merge_error || '未知错误'}\n\n请手动运行 start.command 更新代码。`;
-                        } else {
-                            modal.title = '新版本可用';
-                            modal.message = data.message || '检测到新的 Git 版本可用，建议更新以获取最新功能。';
-                        }
-                        
-                        modal.currentCommit = data.current_commit;
-                        modal.remoteCommit = data.remote_commit;
-                        modal.currentBranch = data.current_branch;
-                        modal.repoUrl = data.repo_url;
-                        modal.show = true;
-                    }
+                    modal.currentCommit = data.current_commit;
+                    modal.remoteCommit = data.remote_commit;
+                    modal.currentBranch = data.current_branch;
+                    modal.repoUrl = data.repo_url;
+                    modal.show = true;
                 }
-            } catch (error) {
-                // Silently fail - don't show errors for version checks
-                console.debug('Version check failed:', error);
             }
         }
     }
@@ -1540,29 +1550,15 @@ function initRuntimeCheck() {
     
     // Also update version tag immediately if element exists (in case status check hasn't run yet)
     if (versionTag) {
-        // Try to get version from status endpoint immediately
-        fetch('/status')
-            .then(response => {
-                if (!response.ok) {
-                    throw new Error(`HTTP ${response.status}`);
-                }
-                return response.json();
-            })
+        fetchWithTimeout('/status')
+            .then(response => response?.ok ? response.json() : null)
             .then(data => {
-                if (data.version) {
-                    // Version from changelog is already in format "v2.4.4", so just use it directly
-                    versionTag.textContent = data.version;
-                } else {
-                    versionTag.textContent = 'v-...';
-                }
+                versionTag.textContent = data?.version || 'v-...';
             })
-            .catch(error => {
-                console.error('Failed to fetch version:', error); // Debug
+            .catch(() => {
                 // Silently fail - version will be updated on next status check
                 versionTag.textContent = 'v-...';
             });
-    } else {
-        console.error('version-tag element not found!'); // Debug
     }
     
     // Then check every 30 seconds
@@ -1585,6 +1581,21 @@ if (typeof window.chartInstances === 'undefined') {
     window.chartInstances = new Map();
 }
 const chartInstances = window.chartInstances;
+
+/**
+ * Format date string to MM-DD format
+ * @param {string} dateStr - Date string to format
+ * @returns {string} Formatted date string (MM-DD)
+ */
+function formatDate(dateStr) {
+    const date = new Date(dateStr);
+    // Check if date is valid
+    if (isNaN(date.getTime())) {
+        // Fallback: try to extract date from string
+        return dateStr.split('T')[0].slice(5) || dateStr.slice(-5);
+    }
+    return `${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
 
 /**
  * Render bar chart for daily stats using Chart.js
@@ -1625,16 +1636,6 @@ function renderDailyChart(container) {
     if (chartInstances.has(chartId)) {
         chartInstances.get(chartId).destroy();
         chartInstances.delete(chartId);
-    }
-    
-    // Format date (MM-DD)
-    function formatDate(dateStr) {
-        try {
-            const date = new Date(dateStr);
-            return `${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-        } catch {
-            return dateStr.split('T')[0].slice(5) || dateStr.slice(-5);
-        }
     }
     
     // Prepare data
@@ -1745,19 +1746,19 @@ document.addEventListener('DOMContentLoaded', initDailyCharts);
 
 // Re-initialize charts after HTMX swaps
 document.body.addEventListener('htmx:afterSwap', function(event) {
-    if (event.detail.target) {
-        // Check if the swapped content contains chart containers
-        const swappedCharts = event.detail.target.querySelectorAll('.daily-chart-container');
-        if (swappedCharts.length > 0) {
-            initDailyCharts();
-        }
+    const target = event.detail.target;
+    if (!target) return;
+    
+    // Check if the swapped element itself is a chart container
+    if (target.classList && target.classList.contains('daily-chart-container')) {
+        renderDailyChart(target);
+        return;
     }
-});
-
-// Also check for charts in the swapped element itself
-document.body.addEventListener('htmx:afterSwap', function(event) {
-    if (event.detail.target.classList && event.detail.target.classList.contains('daily-chart-container')) {
-        renderDailyChart(event.detail.target);
+    
+    // Check if the swapped content contains chart containers
+    const swappedCharts = target.querySelectorAll('.daily-chart-container');
+    if (swappedCharts.length > 0) {
+        initDailyCharts();
     }
 });
 
@@ -1799,16 +1800,6 @@ function renderDailyCandidateChart() {
     
     const chartId = `candidate-chart-${Date.now()}`;
     container.setAttribute('data-chart-id', chartId);
-    
-    // Format date (MM-DD)
-    function formatDate(dateStr) {
-        try {
-            const date = new Date(dateStr);
-            return `${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-        } catch {
-            return dateStr.split('T')[0].slice(5) || dateStr.slice(-5);
-        }
-    }
     
     // Prepare data
     const labels = dailyData.map(d => formatDate(d.date));

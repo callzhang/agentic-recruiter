@@ -150,7 +150,7 @@ async def list_candidates(
         candidate_ids= candidate_ids,
         chat_ids= chat_ids,
         conversation_ids= conversation_ids,
-        names= names if mode == "recommend" else None, # if not recommend mode, use ids to search
+        names= names, # if not recommend mode, use ids to search
         job_applied=job_applied,
         limit=len(candidates) * 2,
         strict=False,
@@ -457,10 +457,11 @@ async def generate_message(
             chat_history = await chat_actions.get_chat_history_action(page, chat_id)
             for msg in chat_history[::-1]:
                 role = msg.get("role")
-                content = f'{msg.get("timestamp")}: {msg.get("content")}'
+                content = f'msg.get("content")'
                 if role == "assistant":
-                    last_assistant_message = content
-                    break
+                    if not content.startswith("方便发一份简历过来吗"):
+                        last_assistant_message = content
+                        break
                 else:
                     new_messages.insert(0, {"content": content, "role": role})
         else:
@@ -494,7 +495,7 @@ async def generate_message(
         )
     else:
         logger.warning("No new message found for conversation_id: %s", conversation_id)
-        message = last_assistant_message
+        message = ''
 
     
     # Return textarea with generated message and send button
@@ -551,6 +552,12 @@ async def send_message(
     message: str = Form(...),
 ):
     """Send message to candidate."""
+    if not message:
+        return HTMLResponse(
+            content='',
+            status_code=200,
+            headers={"HX-Trigger": json.dumps({"showToast": {"message": "消息不能为空", "type": "error"}}, ensure_ascii=True)}
+        )
     page = await boss_service.service._ensure_browser_session()
     
     if mode == "recommend" and index is not None:
@@ -561,20 +568,20 @@ async def send_message(
         return HTMLResponse(
             content='',
             status_code=400,
-            headers={"HX-Trigger": '{"showToast": {"message": "缺少候选人ID", "type": "error"}}'}
+            headers={"HX-Trigger": json.dumps({"showToast": {"message": "缺少候选人ID", "type": "error"}}, ensure_ascii=True)}
         )
     
     if result:
         return HTMLResponse(
             content='',
             status_code=200,
-            headers={"HX-Trigger": json.dumps({"showToast": {"message": "消息发送成功！", "type": "success"}})}
+            headers={"HX-Trigger": json.dumps({"showToast": {"message": f"消息发送成功:\n {message}", "type": "success"}}, ensure_ascii=True)}
         )
     else:
         return HTMLResponse(
             content='',
             status_code=500,
-            headers={"HX-Trigger": json.dumps({"showToast": {"message": "发送失败", "type": "error"}})}
+            headers={"HX-Trigger": json.dumps({"showToast": {"message": "发送失败", "type": "error"}}, ensure_ascii=True)}
         )
 
 #--------------------------------------------------
