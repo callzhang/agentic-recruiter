@@ -45,20 +45,22 @@ async function showBrowserNotification(title, body, icon = null) {
     
     // Only show notification if permission is granted
     if (Notification.permission === 'granted') {
+        // Ensure body is a string and not truncated
+        const fullBody = String(body || '');
+        
         const notification = new Notification(title, {
-            body: body,
+            body: fullBody,
             icon: icon || 'https://www.zhipin.com/favicon.ico',
             badge: icon || 'https://www.zhipin.com/favicon.ico',
             tag: 'bosszhipin-message', // Use tag to replace previous notifications
-            requireInteraction: false, // Auto-close after a few seconds
+            requireInteraction: true, // Keep notification visible until user interacts
+            silent: false, // Play notification sound
         });
         
-        // Auto-close after 5 seconds
-        setTimeout(() => {
-            notification.close();
-        }, 5000);
+        // Don't auto-close - let user dismiss manually or click to close
+        // Removed setTimeout auto-close to make notification sticky
         
-        // Handle click to focus window
+        // Handle click to focus window and close notification
         notification.onclick = () => {
             window.focus();
             notification.close();
