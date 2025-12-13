@@ -227,7 +227,7 @@ async function process_candidate() {
         const startup_fit_score = analysis?.startup_fit || 0;
         const background_score = analysis?.background || 0;
         const { chat_threshold, borderline_threshold, seek_threshold } = getThresholdValues();
-        
+        debugger;
         let newStage = 'PASS'; // Default to PASS
         // Step 4a: Check chat_threshold - generate message if above
         if (current_score >= chat_threshold || skill_score >= seek_threshold || startup_fit_score >= seek_threshold || background_score >= seek_threshold) {
@@ -240,7 +240,8 @@ async function process_candidate() {
             showToast(`匹配度: ${current_score}, 未达最低值: ${chat_threshold}`, 'info');
         }
         // Step 4b: Check borderline_threshold - try to get full resume and re-analyze
-        const need_reply = await shouldReply();
+        let need_reply = await shouldReply();
+        const auto_send = document.getElementById('auto-send-checkbox')?.checked ?? true;
         if (current_score >= borderline_threshold || skill_score >= seek_threshold || startup_fit_score >= seek_threshold || background_score >= seek_threshold) {
             newStage = 'SEEK';
             // For chat mode, try to get full resume and re-analyze
@@ -262,8 +263,7 @@ async function process_candidate() {
                 if (need_reply && is_full_analysis && current_score >= borderline_threshold ) {
                     // Step 4c: Send notification if analysis was updated
                     await generateMessage();
-                    const autoSend = document.getElementById('auto-send-checkbox')?.checked ?? true;
-                    await greetAndSendMessage(autoSend);
+                    await greetAndSendMessage(autoSend=auto_send);
                 }
                 // Step 4d: Check seek_threshold - request contact if above
                 if (is_full_analysis && current_score >= seek_threshold) {
@@ -273,29 +273,17 @@ async function process_candidate() {
                 }
             }else{
                 // For recommend mode, greet and send message
-                const autoSend = document.getElementById('auto-send-checkbox')?.checked ?? false;
-                await greetAndSendMessage(autoSend);
+                await greetAndSendMessage(autoSend=auto_send);
+                need_reply = false;
                 // await sendDingNotification(analysis, name, getCandidateData('job_applied'));
             }
         }
         //step 4e: check if we need to reply candidate
-        if (need_reply) {
+        if (mode !== 'recommend' && need_reply) {
             // Step 4c: Send notification if analysis was updated
             await generateMessage();
-            const autoSend = document.getElementById('auto-send-checkbox')?.checked ?? true;
-            await greetAndSendMessage(autoSend);
-        }
-        
-        // Step 5: Check if candidate has contact info and score >= seek_threshold, set to SEEK
-        // Only set to SEEK if not already CONTACT (don't downgrade from CONTACT)
-        const candidateData = getCandidateData();
-        const metadata = candidateData.metadata || {};
-        const hasPhoneNumber = metadata.phone_number && metadata.phone_number.trim();
-        const hasWechatNumber = metadata.wechat_number && metadata.wechat_number.trim();
-        const hasContactInfo = hasPhoneNumber || hasWechatNumber;
-        
-        if (hasContactInfo && current_score >= seek_threshold && newStage !== 'CONTACT') {
-            newStage = 'SEEK';
+            await greetAndSendMessage(autoSend=auto_send);
+            need_reply = false;
         }
         
         // Update stage and card
@@ -324,6 +312,8 @@ async function process_candidate() {
             }
         });
         document.dispatchEvent(event);
+        debugger;
+        throw error;
         // Don't re-throw - let finally handle cleanup
     } finally {
         // Always re-enable cards after processing, even on error
@@ -414,9 +404,9 @@ async function greetAndSendMessage(autoSend = true) {
     const stage = getCandidateData('stage');
     const greeted = getCandidateData('greeted');
     
-    const need_reply = await shouldReply();
-    if (!need_reply || greeted) {
-        showToast('等待候选人回复后再发送消息', 'info');
+    // const need_reply = await shouldReply();
+    if (greeted) {
+        showToast('已发送过消息，等待候选人回复后再发送消息', 'info');
         return;
     }
     const mode = getCandidateData('mode');
@@ -429,7 +419,6 @@ async function greetAndSendMessage(autoSend = true) {
         message,
     };
     // if not auto send and not recommend mode, skip sending message
-    debugger;
     if (!autoSend && mode !== 'recommend') {
         return;
     }
@@ -496,12 +485,16 @@ async function shouldReply() {
     const values = getCandidateData();
     const chat_id = values.chat_id;
     const mode = values.mode;
-    
-    // For recommend mode, always return true (no chat history)
-    if (mode === 'recommend' || !chat_id) {
-        return true;
+    const greeted = values.greeted;
+    const autoSend = document.getElementById('auto-send-checkbox')?.checked ?? true;
+    if (greeted) {
+        return false;
     }
-    
+    // For recommend mode, always return true (no chat history)
+    if (mode === 'recommend') {
+        return !greeted; // if not greeted, we need to reply
+    }
+    // for other modes, check if we should reply based on chat history
     const response = await fetch('/candidates/should-reply', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -511,7 +504,8 @@ async function shouldReply() {
         })
     });
     const data = await window.handleApiResponse(response);
-    return data.should_reply === true;
+    const should_reply = data.should_reply === true;
+    return should_reply;
 }
 
 async function requestContact() {
@@ -815,70 +809,23 @@ function htmxAjaxPromise(method, url, options) {
 // Run initialization when partial is loaded via HTMX
 // This ensures process_candidate() runs on each HTMX swap
 (function () {
+    // 当在搜索页面查看候选人详情时，使用 readonly 模式，不应该执行
     const viewMode = window.__candidate_detail_view_mode || 'interactive';
     if (viewMode === 'readonly') return;
     
-    // Track if processing is in progress to avoid duplicate runs
-    let processingInProgress = false;
-    
     // Function to run process_candidate with proper error handling
     async function runProcessCandidate() {
-        if (processingInProgress) {
-            console.log('process_candidate already in progress, skipping...');
-            return;
-        }
-        
-        processingInProgress = true;
-        
         // Set initial tab state - show online tab if resume_text exists, otherwise show full tab
         const fullTextarea = document.getElementById('resume-textarea-full');
-        
-        if (fullTextarea?.value?.trim().length > 100) {
-            switchResumeTab('full');
-        } else {
-            // Default to online tab
-            switchResumeTab('online');
-        }
-        
-        // Wrap process_candidate in error handling to ensure cards are re-enabled
-        try {
-            await process_candidate();
-        } catch (error) {
-            console.error('Unhandled error in process_candidate:', error);
-            showToast(`处理候选人时出错: ${error.message || error}`, 'error');
-        } finally {
-            // Always re-enable cards, even if process_candidate's finally didn't run
-            enableAllCards();
-            processingInProgress = false;
-        }
+        switchResumeTab( fullTextarea?.value?.trim().length > 100 ? 'full' : 'online');
+        await process_candidate();
     }
     
     // Use setTimeout instead of requestAnimationFrame to ensure it runs even in background tabs
     // requestAnimationFrame is paused when the tab is not visible, but setTimeout is only throttled
     setTimeout(() => {
         runProcessCandidate();
-    }, 0);
-    
-    // Listen for visibility changes - if page becomes visible and processing hasn't started, trigger it
-    // This handles the case where the page loads in a background tab
-    let visibilityCheckDone = false;
-    function handleVisibilityChange() {
-        if (document.visibilityState === 'visible' && !visibilityCheckDone && !processingInProgress) {
-            visibilityCheckDone = true;
-            // Small delay to ensure DOM is ready
-            setTimeout(() => {
-                runProcessCandidate();
-            }, 100);
-        }
-    }
-    
-    // Check initial visibility state
-    if (document.visibilityState === 'visible') {
-        visibilityCheckDone = true;
-    } else {
-        // If page is hidden, wait for it to become visible
-        document.addEventListener('visibilitychange', handleVisibilityChange, { once: true });
-    }
+    }, 100);
 })();
 
 </script>

@@ -481,13 +481,18 @@
             };
             
             // Get DingTalk notification config
+            // Allow setting notification even if only one field is provided
+            // If both are empty, set notification to null to clear it
             const dingtalkUrl = document.getElementById('dingtalk_url')?.value?.trim();
             const dingtalkSecret = document.getElementById('dingtalk_secret')?.value?.trim();
-            if (dingtalkUrl && dingtalkSecret) {
+            if (dingtalkUrl || dingtalkSecret) {
                 jobData.notification = {
-                    url: dingtalkUrl,
-                    secret: dingtalkSecret
+                    url: dingtalkUrl || '',
+                    secret: dingtalkSecret || ''
                 };
+            } else {
+                // Both are empty, set to null to clear notification
+                jobData.notification = null;
             }
             
             return jobData;

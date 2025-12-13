@@ -788,12 +788,7 @@ async def request_contact(
     wechat_number = contact_result.get("wechat_number")
     
     # Find the candidate by candidate_id or chat_id
-    candidate = None
-    if candidate_id:
-        candidate = get_candidate_by_dict({"candidate_id": candidate_id}, strict=False)
-    
-    if not candidate and chat_id:
-        candidate = get_candidate_by_dict({"chat_id": chat_id}, strict=False)
+    candidate = get_candidate_by_dict({"candidate_id": candidate_id, "chat_id": chat_id}, strict=False)
     
     # Update candidate metadata with contact info
     # metadata merging is now handled in upsert_candidate()
@@ -805,6 +800,7 @@ async def request_contact(
                 "phone_number": phone_number,
                 "wechat_number": wechat_number,
             },
+            stage="CONTACT",
         )
         
         return JSONResponse({
