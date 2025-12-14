@@ -66,29 +66,29 @@ StageType = Literal["PASS", "CHAT", "SEEK", "CONTACT"]
 
 def determine_stage(
     score: float,
-    chat_threshold: float = 5.0,
+    chat_threshold: float = 6.0,
     borderline_threshold: float = 7.0,
-    seek_threshold: float = 9.0,
+    seek_threshold: float = 8.0,
 ) -> str:
     """Determine candidate stage based on score and thresholds.
     
     Args:
         score: Overall candidate score (typically 1-10)
-        chat_threshold: Minimum score to enter CHAT stage (default: 5.0)
+        chat_threshold: Minimum score to enter CHAT stage (default: 6.0)
         borderline_threshold: Minimum score to enter SEEK stage (default: 7.0)
-        seek_threshold: Minimum score to enter CONTACT stage (default: 9.0)
+        seek_threshold: Minimum score to enter CONTACT stage (default: 8.0)
     
     Returns:
         Stage name: "PASS", "CHAT", "SEEK", or "CONTACT"
     
     Examples:
-        >>> determine_stage(4.0)  # score < chat_threshold
+        >>> determine_stage(5.0)  # score < chat_threshold (6.0)
         'PASS'
-        >>> determine_stage(6.0)  # chat_threshold <= score < borderline_threshold
+        >>> determine_stage(6.5)  # chat_threshold (6.0) <= score < borderline_threshold (7.0)
         'CHAT'
-        >>> determine_stage(8.0)  # borderline_threshold <= score < seek_threshold
+        >>> determine_stage(7.5)  # borderline_threshold (7.0) <= score < seek_threshold (8.0)
         'SEEK'
-        >>> determine_stage(9.5)  # score >= seek_threshold
+        >>> determine_stage(8.5)  # score >= seek_threshold (8.0)
         'CONTACT'
     """
     if score < chat_threshold:

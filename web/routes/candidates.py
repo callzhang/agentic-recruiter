@@ -77,8 +77,8 @@ async def list_candidates(
     - followup: Get follow-up candidates (沟通中, 牛人已读未回)
     """
     if mode == "recommend":
-        # Get job to retrieve candidate_filters (run in thread pool to avoid blocking)
-        job = await asyncio.to_thread(get_job_by_id, job_id)
+        # Get job to retrieve candidate_filters (database query, no browser lock needed)
+        job = get_job_by_id(job_id)
         
         # Get candidate_filters from job
         candidate_filters = job.get("candidate_filters") if job else None
@@ -223,8 +223,8 @@ async def get_candidate_detail(request: Request):
     # candidate = {k:str2bool(v) for k, v in candidate.items() if v}
     candidate = json.loads(request.query_params.get('candidate', '{}'))
     
-    # Try to find existing candidate (run in thread pool to avoid blocking event loop)
-    stored_candidate = await asyncio.to_thread(get_candidate_by_dict, candidate, strict=False)
+    # Try to find existing candidate (database query, no browser lock needed)
+    stored_candidate = get_candidate_by_dict(candidate, strict=False)
     
     if stored_candidate and candidate['name'] != stored_candidate.get('name'):
         logger.warning(f"name mismatch: {candidate.get('name')} != {stored_candidate.get('name')}")
@@ -321,12 +321,11 @@ async def init_chat(
     2. If not found, create a new candidate record with history or last_message
     """
 
-    # Get job info in thread pool to avoid blocking event loop
-    job_info = await asyncio.to_thread(get_job_by_id, job_id)
+    # Get job info (database query, no browser lock needed)
+    job_info = get_job_by_id(job_id)
     # check if existing candidate has been saved before by using semantic search
     if not chat_id and resume_text:
-        candidate = await asyncio.to_thread(
-            get_candidate_by_dict,
+        candidate = get_candidate_by_dict(
             {"name": name, "job_applied": job_applied, "resume_text": resume_text}
         )
         if candidate:
@@ -334,7 +333,7 @@ async def init_chat(
             current = {'chat_id': chat_id, 'job_applied': job_applied, 'resume_text': resume_text}
             updates = {k:v for k, v in candidate.items() if current.get(k) and v != current.get(k)}
             if updates:
-                await asyncio.to_thread(upsert_candidate, candidate_id=candidate.get('candidate_id'), **updates)
+                upsert_candidate(candidate_id=candidate.get('candidate_id'), **updates)
             return candidate
     
     if mode == "recommend":
@@ -391,9 +390,8 @@ async def analyze_candidate(
     resume_type = "online" if not full_resume else "full"
     analysis_result["resume_type"] = resume_type
     
-    # Save analysis in thread pool to avoid blocking event loop
-    await asyncio.to_thread(
-        upsert_candidate,
+    # Save analysis (database operation, no browser lock needed)
+    upsert_candidate(
         analysis=analysis_result,
         candidate_id=candidate_id,
         chat_id=chat_id,
@@ -424,8 +422,8 @@ async def save_candidate_to_cloud(request: Request):
     # Parse form data
     kwargs = await request.json()
     assert kwargs, "kwargs is empty"
-    # update candidate passes all relevant kwargs - run in thread pool to avoid blocking event loop
-    candidate_id = await asyncio.to_thread(upsert_candidate, **kwargs)
+    # update candidate passes all relevant kwargs (database operation, no browser lock needed)
+    candidate_id = upsert_candidate(**kwargs)
     return candidate_id
 
 
@@ -457,7 +455,7 @@ async def generate_message(
             chat_history = await chat_actions.get_chat_history_action(page, chat_id)
             for msg in chat_history[::-1]:
                 role = msg.get("role")
-                content = f'msg.get("content")'
+                content = msg.get("content")
                 if role == "assistant":
                     if not content.startswith("方便发一份简历过来吗"):
                         last_assistant_message = content
@@ -472,8 +470,7 @@ async def generate_message(
     # generate message if there is new message from user(candidate)
     if [m for m in new_messages if m.get('role') == 'user']:
         # Generate message in thread pool to avoid blocking event loop (OpenAI API call)
-        message = await asyncio.to_thread(
-            assistant_actions.generate_message,
+        message = assistant_actions.generate_message(
             input_message=new_messages,
             conversation_id=conversation_id,
             purpose=purpose
@@ -482,9 +479,8 @@ async def generate_message(
         
         # append the new message to the chat_history from DOM
         new_message = {"role": "assistant", "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "content": message}
-        # Save to database in thread pool to avoid blocking event loop
-        await asyncio.to_thread(
-            upsert_candidate,
+        # Save to database (database operation, no browser lock needed)
+        upsert_candidate(
             candidate_id=candidate_id,
             last_message=message,
             chat_id=chat_id,

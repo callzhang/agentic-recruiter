@@ -1167,15 +1167,13 @@ async def web_stats():
         # Get candidates for historical chart
         # Note: search_candidates_advanced multiplies limit by 3, so we use 5461 to stay under 16384
         # 5461 * 3 = 16383, which is just under Milvus's max of 16384
-        all_candidates = await asyncio.to_thread(
-            search_candidates_advanced,
+        all_candidates = search_candidates_advanced(
             fields=["candidate_id", "updated_at"],
             limit=5461,  # Will become 16383 after * 3, staying under Milvus limit of 16384
             sort_by="updated_at",
             sort_direction="desc"
         )
-        daily_candidate_counts = await asyncio.to_thread(
-            build_daily_candidate_counts,
+        daily_candidate_counts = build_daily_candidate_counts(
             all_candidates,
             total_candidates,
             30
@@ -1183,8 +1181,8 @@ async def web_stats():
     except Exception as e:
         logger.warning(f"Failed to get daily candidate counts: {e}")
     
-    # Get job statistics
-    stats_data = await asyncio.to_thread(compile_all_jobs)
+    # Get job statistics (database queries, no browser lock needed)
+    stats_data = compile_all_jobs()
     jobs = stats_data.get("jobs", [])
     best = stats_data.get("best")
     

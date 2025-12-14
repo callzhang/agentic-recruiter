@@ -237,7 +237,6 @@ async function process_candidate() {
         const startup_fit_score = analysis?.startup_fit || 0;
         const background_score = analysis?.background || 0;
         const { chat_threshold, borderline_threshold, seek_threshold } = getThresholdValues();
-        debugger;
         let newStage = 'PASS'; // Default to PASS
         // Step 4a: Check chat_threshold - generate message if above
         if (current_score >= chat_threshold || skill_score >= seek_threshold || startup_fit_score >= seek_threshold || background_score >= seek_threshold) {
@@ -250,13 +249,13 @@ async function process_candidate() {
             showToast(`匹配度: ${current_score}, 未达最低值: ${chat_threshold}`, 'info');
         }
         // Step 4b: Check borderline_threshold - try to get full resume and re-analyze
+        debugger;
         let need_reply = await shouldReply();
         const auto_send = document.getElementById('auto-send-checkbox')?.checked ?? true;
         if (current_score >= borderline_threshold || skill_score >= seek_threshold || startup_fit_score >= seek_threshold || background_score >= seek_threshold) {
             newStage = 'SEEK';
             // For chat mode, try to get full resume and re-analyze
             if (mode !== 'recommend') {
-                debugger;
                 let full_resume_text = document.getElementById('resume-textarea-full')?.value?.trim() || '';
                 if (full_resume_text.includes('⏳')) {
                     await fetchFullResume();
@@ -416,12 +415,6 @@ async function greetAndSendMessage(autoSend = true) {
     const message = autoSend ? message_textarea.value.trim() : '';
     const stage = getCandidateData('stage');
     const greeted = getCandidateData('greeted');
-    
-    // const need_reply = await shouldReply();
-    if (greeted) {
-        showToast('已发送过消息，等待候选人回复后再发送消息', 'info');
-        return;
-    }
     const mode = getCandidateData('mode');
     const chat_id = getCandidateData('chat_id');
     const index = getCandidateData('index');
@@ -517,10 +510,17 @@ async function shouldReply() {
     const mode = values.mode;
     const greeted = values.greeted;
     const autoSend = document.getElementById('auto-send-checkbox')?.checked ?? true;
-    if (greeted) {
-        return false;
+    // If greeted and updated_at is less than 5 minutes ago, don't reply
+    if (greeted && values.updated_at) {
+        const updatedAt = new Date(values.updated_at);
+        const now = new Date();
+        const diffMs = now - updatedAt;
+        const diffMinutes = diffMs / (1000 * 60);
+        if (diffMinutes < 5) {
+            return false;
+        }
     }
-    // For recommend mode, always return true (no chat history)
+    // For recommend mode, only rely on greeted flag
     if (mode === 'recommend') {
         return !greeted; // if not greeted, we need to reply
     }
@@ -766,9 +766,9 @@ function getCandidateData(key) {
 
 function getThresholdValues() {
     return {
-        chat_threshold: parseFloat(document.getElementById('threshold-chat')?.value) || 5.0,
+        chat_threshold: parseFloat(document.getElementById('threshold-chat')?.value) || 6.0,
         borderline_threshold: parseFloat(document.getElementById('threshold-borderline')?.value) || 7.0,
-        seek_threshold: parseFloat(document.getElementById('threshold-seek')?.value) || 9.0
+        seek_threshold: parseFloat(document.getElementById('threshold-seek')?.value) || 8.0
     };
 }
 

@@ -37,8 +37,9 @@ ACTION_PROMPTS = {
     "CHAT_ACTION": """
 请直接生成一条可以发送给候选人的自然语言消息，不要超过150字。不要发模板或者嵌入占位符，不要使用任何格式化、引号、JSON或括号。
 如果是初次沟通，请针对候选人简历，根据岗位信息里面的drill_down_questions，提出问题。提问前可以根据候选人简历的特点和具体岗位契合点位进行评价，以及告知待验证的岗位要求。然后让候选人回答经验细节，或者澄清模棱两可的地方。重点在于挖掘简历细节，判断候选人是否符合岗位要求。
+如果候选人信息中有外部链接（如博客），或者对候选人过往公司、项目经验不确定，可以通过web_search工具来获取更多信息，确保信息准确，不要猜测。
 如果初次提问后，候选人表达对于公司或者岗位有疑问，尤其是高分（7分以上）的候选人，请优先回答候选人的问题、解答岗位疑问、介绍公司情况等，以打消其顾虑、提高他的求职意愿。
-如果候选人认真回答了我们之前提出的问题，回答内容有逻辑，并消除了岗位判断的疑虑/达到了岗位的要求，请做岗位介绍，并吸引其进一步沟通，不必再提更多问题。
+如果候选人认真回答了我们之前提出的问题，消除了岗位判断的疑虑/达到了岗位的要求，请做岗位介绍，并吸引其进一步沟通，不必再提更多问题，尽快推进到面试阶段。
 如果候选人没有认真回答，或者如果回答不到位，则根据态度决定是否继续追问还是结束沟通。
 如果候选人表达没有兴趣，则结束沟通，不要继续提问。
 如果判断候选人符合岗位要求（7分以上），则表达希望尽快进行面试沟通。但不要约具体的时间，而是告知会通知HR尽快安排面试。
@@ -208,6 +209,7 @@ def generate_message(
                 input= input_message,
                 text_format=json_schema,
                 model=openai_config["model"],
+                tools=[{"type": "web_search"}],  # Enable web search tool
             )
             result = response.output_parsed.model_dump() 
             upsert_candidate(conversation_id=conversation_id, analysis=result)
@@ -215,11 +217,13 @@ def generate_message(
             raise NotImplementedError(f"Unsupported purpose: {purpose}")
         return result
     else:
+        # Enable web search tool to parse URLs from chat if necessary
         response = _openai_client.responses.create(
             conversation=conversation_id,
             instructions=instruction,
             input=input_message,
             model=openai_config["model"],
+            tools=[{"type": "web_search"}],  # Enable web search tool
         )
         return response.output_text
     

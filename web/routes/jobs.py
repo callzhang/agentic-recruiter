@@ -41,8 +41,8 @@ def generate_job_id(position: str) -> str:
 @router.get("/", response_class=HTMLResponse)
 async def jobs_page(request: Request):
     """Main jobs management page."""
-    # Run database query in thread pool to avoid blocking event loop
-    jobs = await asyncio.to_thread(load_jobs)
+    # Load jobs (database query, no browser lock needed)
+    jobs = load_jobs()
     return templates.TemplateResponse("jobs.html", {
         "request": request,
         "jobs": jobs
@@ -78,8 +78,8 @@ async def create_job(request: Request):
             content={"success": False, "error": "岗位ID和岗位名称不能为空"}
         )
     
-    # Check if job_id already exists (run in thread pool to avoid blocking)
-    existing_job = await asyncio.to_thread(get_job_by_id, job_id)
+    # Check if job_id already exists (database query, no browser lock needed)
+    existing_job = get_job_by_id(job_id)
     if existing_job:
         return JSONResponse(
             status_code=400,
@@ -131,8 +131,8 @@ async def create_job(request: Request):
                 content={"success": False, "error": f"YAML格式错误: {str(e)}"}
             )
     
-    # Insert job into Zilliz (run in thread pool to avoid blocking)
-    if await asyncio.to_thread(insert_job, **new_job):
+    # Insert job into Zilliz (database operation, no browser lock needed)
+    if insert_job(**new_job):
         return JSONResponse(content={"success": True, "data": new_job})
     else:
         return JSONResponse(
@@ -187,8 +187,8 @@ async def update_job(job_id: str, request: Request):
     # Extract base job_id from new_job_id (remove _vN suffix if present)
     new_base_job_id = get_base_job_id(new_job_id)
     
-    # Check if job exists (run in thread pool to avoid blocking)
-    existing_job = await asyncio.to_thread(get_job_by_id, base_job_id)
+    # Check if job exists (database query, no browser lock needed)
+    existing_job = get_job_by_id(base_job_id)
     if not existing_job:
         return JSONResponse(
             status_code=404,
@@ -197,7 +197,7 @@ async def update_job(job_id: str, request: Request):
     
     # Check if new base_job_id conflicts with existing jobs (excluding current job)
     if new_base_job_id != base_job_id:
-        existing_job_with_new_id = await asyncio.to_thread(get_job_by_id, new_base_job_id)
+        existing_job_with_new_id = get_job_by_id(new_base_job_id)
         if existing_job_with_new_id:
             return JSONResponse(
                 status_code=400,
@@ -242,10 +242,10 @@ async def update_job(job_id: str, request: Request):
     # (job_id is passed as the first positional argument)
     updated_job.pop("id", None)
     
-    # Update job in Zilliz (creates new version automatically) (run in thread pool to avoid blocking)
-    if await asyncio.to_thread(update_job_store, base_job_id, **updated_job):
+    # Update job in Zilliz (creates new version automatically) (database operation, no browser lock needed)
+    if update_job_store(base_job_id, **updated_job):
         # Return the new current version
-        new_current_job = await asyncio.to_thread(get_job_by_id, new_base_job_id)
+        new_current_job = get_job_by_id(new_base_job_id)
         return JSONResponse(content={"success": True, "data": new_current_job})
     else:
         return JSONResponse(
@@ -289,8 +289,8 @@ async def delete_job(job_id: str, request: Request):
                 content={"success": False, "error": "版本号必须是整数"}
             )
     
-    # Check if job exists (run in thread pool to avoid blocking)
-    existing_job = await asyncio.to_thread(get_job_by_id, base_job_id)
+    # Check if job exists (database query, no browser lock needed)
+    existing_job = get_job_by_id(base_job_id)
     if not existing_job:
         return JSONResponse(
             status_code=404,
@@ -298,8 +298,8 @@ async def delete_job(job_id: str, request: Request):
         )
     
     # Get all versions (allow deletion even if only 1 version left - frontend handles confirmation)
-    # Run in thread pool to avoid blocking
-    all_versions = await asyncio.to_thread(get_job_versions, base_job_id)
+    # Database query, no browser lock needed
+    all_versions = get_job_versions(base_job_id)
     
     # Check if the version exists
     version_exists = any(v.get("version") == version for v in all_versions)
@@ -319,9 +319,9 @@ async def delete_job(job_id: str, request: Request):
     
     is_deleting_current = version_to_delete.get("current", False)
     
-    # Delete the specific version (run in thread pool to avoid blocking)
-    if await asyncio.to_thread(delete_job_version, base_job_id, version):
-        remaining_versions = await asyncio.to_thread(get_job_versions, base_job_id)
+    # Delete the specific version (database operation, no browser lock needed)
+    if delete_job_version(base_job_id, version):
+        remaining_versions = get_job_versions(base_job_id)
         if remaining_versions:
             # Always ensure there's a current version after deletion
             current_version = next((v for v in remaining_versions if v.get("current")), None)
@@ -334,12 +334,12 @@ async def delete_job(job_id: str, request: Request):
                     version_minus_one = next((v for v in remaining_versions if v.get("version") == version - 1), None)
                     if version_minus_one:
                         # Set N-1 as current
-                        await asyncio.to_thread(switch_job_version, base_job_id, version - 1)
+                        switch_job_version(base_job_id, version - 1)
                     else:
                         # N-1 doesn't exist, set the highest remaining version as current
                         remaining_versions_sorted = sorted(remaining_versions, key=lambda v: v.get("version", 0), reverse=True)
                         if remaining_versions_sorted:
-                            await asyncio.to_thread(switch_job_version, base_job_id, remaining_versions_sorted[0].get("version"))
+                            switch_job_version(base_job_id, remaining_versions_sorted[0].get("version"))
                 else:
                     # We deleted a non-current version, but there's no current version
                     # Set the highest remaining version as current
@@ -365,8 +365,8 @@ async def delete_job(job_id: str, request: Request):
 @router.get("/list-simple", response_class=HTMLResponse)
 async def list_jobs_simple():
     """Get jobs as HTML options for select."""
-    # Run database query in thread pool to avoid blocking event loop
-    jobs = await asyncio.to_thread(load_jobs)
+    # Load jobs (database query, no browser lock needed)
+    jobs = load_jobs()
     
     if not jobs:
         return HTMLResponse(content='<option>无岗位</option>')
@@ -383,8 +383,8 @@ async def list_jobs_simple():
 @router.get("/api/list", response_class=JSONResponse)
 async def api_list_jobs():
     """API endpoint to list all jobs."""
-    # Run database query in thread pool to avoid blocking event loop
-    jobs = await asyncio.to_thread(load_jobs)
+    # Load jobs (database query, no browser lock needed)
+    jobs = load_jobs()
     return JSONResponse(content={"success": True, "data": jobs})
 
 
@@ -394,8 +394,8 @@ async def api_get_job(job_id: str):
     # Extract base job_id (remove _vN suffix if present) - pure function, very fast
     base_job_id = get_base_job_id(job_id)
     
-    # Run database query in thread pool to avoid blocking event loop
-    job = await asyncio.to_thread(get_job_by_id, base_job_id)
+    # Get job (database query, no browser lock needed)
+    job = get_job_by_id(base_job_id)
     
     if not job:
         return JSONResponse(
@@ -415,8 +415,8 @@ async def get_job_versions_endpoint(job_id: str):
     """
     # Extract base job_id (remove _vN suffix if present)
     base_job_id = get_base_job_id(job_id)
-    # Run database query in thread pool to avoid blocking event loop
-    versions = await asyncio.to_thread(get_job_versions, base_job_id)
+    # Get job versions (database query, no browser lock needed)
+    versions = get_job_versions(base_job_id)
     
     return JSONResponse(content={"success": True, "data": versions})
 
@@ -449,10 +449,10 @@ async def switch_job_version_endpoint(job_id: str, request: Request):
                 content={"success": False, "error": "版本号必须是整数"}
             )
     
-    # Run in thread pool to avoid blocking event loop
-    if await asyncio.to_thread(switch_job_version, base_job_id, version):
+    # Switch job version (database operation, no browser lock needed)
+    if switch_job_version(base_job_id, version):
         # Return updated job data
-        updated_job = await asyncio.to_thread(get_job_by_id, base_job_id)
+        updated_job = get_job_by_id(base_job_id)
         return JSONResponse(content={"success": True, "data": updated_job})
     else:
         return JSONResponse(

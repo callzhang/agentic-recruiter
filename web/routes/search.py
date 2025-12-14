@@ -25,8 +25,8 @@ STAGE_OPTIONS = ["PASS", "CHAT", "SEEK", "CONTACT"]
 @router.get("/", response_class=HTMLResponse)
 async def search_page(request: Request):
     """Main search page with form to search candidates by name and job."""
-    # Load all jobs for the dropdown (run in thread pool to avoid blocking event loop)
-    jobs = await asyncio.to_thread(get_all_jobs)
+    # Load all jobs for the dropdown (database query, no browser lock needed)
+    jobs = get_all_jobs()
     # Extract unique job positions for dropdown
     job_positions = sorted(set([job.get("position", "") for job in jobs if job.get("position")]))
     
@@ -85,9 +85,8 @@ async def search_candidates(
         elif notified_lower in ('false', '0', 'no'):
             notified_bool = False
 
-    # Run database query in thread pool to avoid blocking event loop
-    candidates = await asyncio.to_thread(
-        search_candidates_advanced,
+    # Search candidates (database query, no browser lock needed)
+    candidates = search_candidates_advanced(
         names=[name.strip()] if name and name.strip() else None,
         job_applied=job_applied.strip() if job_applied else None,
         stage=stage.strip() if stage else None,
@@ -123,10 +122,9 @@ async def search_candidate_detail(request: Request, candidate_id: str):
     with profile_operation(f"search_candidate_detail({candidate_id})", log_threshold_ms=0.0) as profiler:
         profiler.step("start")
         
-        # Run database query in thread pool to avoid blocking event loop
+        # Search candidate by ID (database query, no browser lock needed)
         profiler.step("before_db_query")
-        stored = await asyncio.to_thread(
-            search_candidates_advanced,
+        stored = search_candidates_advanced(
             candidate_ids=[candidate_id],
             limit=1
         )
