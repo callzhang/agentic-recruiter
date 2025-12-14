@@ -277,6 +277,7 @@ async function process_candidate() {
                     // Step 4c: Send notification if analysis was updated
                     await generateMessage();
                     await greetAndSendMessage(autoSend=auto_send);
+                    need_reply = false;
                 }
                 // Step 4d: Check seek_threshold - request contact if above
                 if (is_full_analysis && current_score >= seek_threshold) {
@@ -424,6 +425,11 @@ async function greetAndSendMessage(autoSend = true) {
         index,
         message,
     };
+    if (message.length < 10) {
+        debugger;
+        showToast('消息长度不能小于10个字符', 'error');
+        return;
+    }
     // if not auto send and not recommend mode, skip sending message
     if (!autoSend && mode !== 'recommend') {
         return;

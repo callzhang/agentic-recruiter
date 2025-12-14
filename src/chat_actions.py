@@ -332,7 +332,12 @@ async def get_chat_history_action(page: Page, chat_id: str) -> List[Dict[str, An
         friend_entry = message.locator("div.item-friend")
         if await friend_entry.count() > 0:
             message_str = await friend_entry.inner_text(timeout=200)
-            msg_type = "user"
+            if message_str == '' and await friend_entry.locator('img').count() > 0:
+                message_str = '[图片]无法加载'
+            if await friend_entry.locator('div.message-card-wrap').count() > 0:
+                msg_type = "developer"
+            else:
+                msg_type = "user"
 
         if msg_type and message_str:
             history.append(
