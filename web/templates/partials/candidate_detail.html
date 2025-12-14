@@ -425,9 +425,9 @@ async function greetAndSendMessage(autoSend = true) {
         index,
         message,
     };
-    if (message.length < 10) {
+    if (message === '') {
         debugger;
-        showToast('消息长度不能小于10个字符', 'error');
+        showToast('消息长度不能为空', 'error');
         return;
     }
     // if not auto send and not recommend mode, skip sending message

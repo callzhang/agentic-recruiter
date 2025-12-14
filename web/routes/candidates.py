@@ -172,7 +172,10 @@ async def list_candidates(
         if stored_candidate:
             chat_id, chat_id2 = candidate.get("chat_id"), stored_candidate.get("chat_id")
             if chat_id and chat_id2 and chat_id != chat_id2:
-                logger.warning(f"chat_id mismatch ({candidate['name']}): {chat_id} != {chat_id2}")
+                logger.error(f"chat_id mismatch ({candidate['name']}): {chat_id} != {chat_id2}")
+                stored_candidate = {}
+            elif chat_id is None and mode == "recommend" and chat_id2:
+                logger.warning(f"there should be no chat_id in recommend mode, current candidate:\n{candidate['last_message']}\n---\n stored candidate:\n{stored_candidate['last_message']}")
                 stored_candidate = {}
             candidate.update(stored_candidate) # last_message will be updated by saved candidate
             candidate["saved"] = True
@@ -222,14 +225,16 @@ async def get_candidate_detail(request: Request):
     # candidate = dict(request.query_params)
     # candidate = {k:str2bool(v) for k, v in candidate.items() if v}
     candidate = json.loads(request.query_params.get('candidate', '{}'))
-    
+    chat_id = candidate.get('chat_id')
     # Try to find existing candidate (database query, no browser lock needed)
     stored_candidate = get_candidate_by_dict(candidate, strict=False)
-    
+    chat_id2 = stored_candidate.get('chat_id')
     if stored_candidate and candidate['name'] != stored_candidate.get('name'):
         logger.warning(f"name mismatch: {candidate.get('name')} != {stored_candidate.get('name')}")
-    if candidate.get('chat_id') and stored_candidate.get('chat_id') and candidate.get('chat_id') != stored_candidate.get('chat_id'):
+    elif chat_id and chat_id2 and chat_id != chat_id2:
         logger.warning(f"chat_id mismatch: {candidate.get('chat_id')} != {stored_candidate.get('chat_id')}")
+    elif chat_id is None and candidate.get('mode') == "recommend" and chat_id2:
+        logger.warning(f"there should be no chat_id in recommend mode, current candidate:\n{candidate}\n---\n stored candidate:\n{stored_candidate}")
     else:
         candidate.update(stored_candidate)
     candidate['score'] = stored_candidate.get("analysis", {}).get("overall") if stored_candidate else None
@@ -325,6 +330,7 @@ async def init_chat(
     job_info = get_job_by_id(job_id)
     # check if existing candidate has been saved before by using semantic search
     if not chat_id and resume_text:
+        # use semantic search to find existing candidate
         candidate = get_candidate_by_dict(
             {"name": name, "job_applied": job_applied, "resume_text": resume_text}
         )
