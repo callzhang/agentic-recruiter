@@ -505,6 +505,11 @@ function candidateTabs() {
         },
         
         switchTab(tab) {
+            // If the tab is already active, do nothing
+            if (this.activeTab === tab) {
+                return;
+            }
+            
             this.activeTab = tab;
             // Reset selected candidate
             // Clear list when switching tabs
@@ -767,10 +772,9 @@ document.body.addEventListener('htmx:afterRequest', function(event) {
 });
 
 // Global HTMX error handler to catch swap errors
-// Global HTMX error handler to catch swap errors
-// Only handle errors that weren't already handled by local listeners (e.g., in processAllCandidates)
+// Only handle errors that weren't already handled by local listeners (e.g., in process All Candidates)
 document.body.addEventListener('htmx:responseError', function(evt) {
-    // Skip if event propagation was stopped (already handled by local listener)
+    // Skip if event propagation was stopped (already handled by local listenesr)
     if (evt.cancelBubble) {
         return;
     }
@@ -1068,7 +1072,7 @@ window.processAllCandidates = async function processAllCandidates() {
                     document.removeEventListener('candidate:processing-complete', onComplete);
                     document.removeEventListener('candidate:processing-error', onError);
                     reject(new Error('Processing timeout (180s)'));
-                }, 180000); // 180 second timeout
+                }, 1800000); // 1800 second timeout
                 
                 const onComplete = (event) => {
                     clearTimeout(timeout);
@@ -1217,6 +1221,310 @@ window.addEventListener('beforeunload', () => {
 });
 
 // Note: htmx:responseError is already handled above in the Global HTMX Error Handling section
+
+// ============================================================================
+// Cycle Reply Automation (auto-rotates candidate modes)
+// ============================================================================
+
+const CYCLE_MODES = ['recommend', 'greet', 'chat', 'followup'];
+
+const cycleReplyState = {
+    running: false,
+    stopRequested: false,
+    modeIndex: 0,
+    errorStreak: 0
+};
+
+const CycleReplyHelpers = {
+    getButton() {
+        return document.getElementById('cycle-reply-btn');
+    },
+    
+    setButton(isRunning, label = null) {
+        const btn = this.getButton();
+        if (!btn) return;
+        
+        btn.disabled = false;
+        btn.textContent = label || (isRunning ? '⏸️ 停止循环' : '🔄 循环回复');
+        btn.classList.toggle('opacity-60', isRunning && cycleReplyState.stopRequested);
+    },
+    
+    async requestStop(message = '循环回复即将停止...') {
+        cycleReplyState.stopRequested = true;
+        this.setButton(true, '⏹️ 正在停止...');
+        
+        // If batch processing is active, stop it first
+        if (window.batchProcessingActive) {
+            showToast('正在停止批处理，然后停止循环处理', 'info');
+            
+            // Call stop batch processing handler
+            stopBatchProcessingHandler();
+            
+            // Wait for batch processing to complete (up to 5 minutes)
+            const waitResult = await this.waitUntil(
+                () => !window.batchProcessingActive,
+                { timeoutMs: 300000, stepMs: 500 } // Wait up to 5 minutes
+            );
+            
+            if (!waitResult.success) {
+                showToast('等待批处理停止超时，循环处理已停止', 'warning');
+            } else {
+                showToast('批处理已停止，循环处理已停止', 'info');
+            }
+        } else {
+            showToast(message, 'info');
+        }
+    },
+    
+    sleep(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
+    },
+    
+    async waitUntil(predicate, { timeoutMs = 15000, stepMs = 300 } = {}) {
+        const start = performance.now();
+        while (true) {
+            if (cycleReplyState.stopRequested) {
+                return { success: false, stopped: true };
+            }
+            if (predicate()) {
+                return { success: true };
+            }
+            if (performance.now() - start >= timeoutMs) {
+                return { success: false, timeout: true };
+            }
+            await this.sleep(stepMs);
+        }
+    },
+    
+    getCandidateTabs() {
+        const element = document.querySelector('[x-data*="candidateTabs"]');
+        if (element?.__x?.$data) {
+            return element.__x.$data;
+        }
+        if (element?._x_dataStack?.[0]) {
+            return element._x_dataStack[0];
+        }
+        throw new Error('无法访问 candidateTabs 实例');
+    },
+    
+    async ensureCandidatesLoaded(mode, candidateTabs) {
+        const candidateList = document.getElementById('candidate-list');
+        if (!candidateList) {
+            throw new Error('无法找到候选人列表容器');
+        }
+        
+        let candidateCards = candidateList.querySelectorAll('.candidate-card');
+        
+        if (!candidateCards || candidateCards.length === 0) {
+            showToast(`查询候选人: ${mode}`, 'info');
+            
+            candidateTabs.loadCandidates();
+            const loadResult = await this.waitUntil(() => !candidateTabs.loading, { timeoutMs: 20000 });
+            if (!loadResult.success) {
+                return loadResult;
+            }
+            
+            await this.waitUntil(
+                () => candidateList.querySelectorAll('.candidate-card').length > 0 || candidateList.querySelector('#empty-message'),
+                { timeoutMs: 5000 }
+            );
+            
+            candidateCards = candidateList.querySelectorAll('.candidate-card');
+        } else {
+            showToast(`列表已有 ${candidateCards.length} 人，跳过查询`, 'info');
+        }
+        
+        return { success: true, candidateCards };
+    },
+    
+    async waitForBatchButton(timeoutMs = 8000) {
+        const waitResult = await this.waitUntil(() => {
+            const batchBtn = document.getElementById('batch-analyze-btn');
+            return batchBtn && !batchBtn.classList.contains('hidden');
+        }, { timeoutMs, stepMs: 250 });
+        
+        if (!waitResult.success) {
+            return null;
+        }
+        
+        return document.getElementById('batch-analyze-btn');
+    },
+    
+    async waitForBatchProcessingComplete(numberOfCandidates = 1) {
+        // Calculate timeout as number of candidates * 180 seconds (in milliseconds)
+        const timeoutMs = numberOfCandidates * 180000;
+        const start = performance.now();
+        while (window.batchProcessingActive && !cycleReplyState.stopRequested) {
+            if (performance.now() - start >= timeoutMs) {
+                return { success: false, timeout: true };
+            }
+            await this.sleep(600);
+        }
+        
+        if (cycleReplyState.stopRequested) {
+            return { success: false, stopped: true };
+        }
+        
+        // Let UI settle
+        await this.sleep(400);
+        return { success: true };
+    },
+    
+    async processAllCandidatesForMode(mode, candidateCards) {
+        if (!candidateCards || candidateCards.length === 0) {
+            showToast(`没有找到候选人: ${mode}`, 'info');
+            return { success: true, skipped: true };
+        }
+        
+        const batchBtn = await this.waitForBatchButton();
+        
+        if (cycleReplyState.stopRequested) {
+            return { success: false, stopped: true };
+        }
+        
+        if (!batchBtn) {
+            throw new Error('全部分析按钮未准备好');
+        }
+        
+        batchBtn.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        // start batch processing
+        await processAllCandidates();
+        const finishResult = await this.waitForBatchProcessingComplete(candidateCards.length);
+        
+        if (finishResult.timeout) {
+            showToast('等待批量处理完成超时，将继续下一模式', 'warning');
+        }
+        
+        return finishResult;
+    },
+    
+    async processMode(mode, candidateTabs) {
+        const isCurrentTab = candidateTabs.activeTab === mode;
+        
+        if (!isCurrentTab) {
+            showToast(`循环回复: 切换到 ${mode}`, 'info');
+            candidateTabs.switchTab(mode);
+            await this.sleep(350);
+        } else {
+            // If already on this tab, preserve the existing candidate list
+            showToast(`循环回复: 处理当前模式 ${mode}`, 'info');
+        }
+        
+        const loadResult = await this.ensureCandidatesLoaded(mode, candidateTabs);
+        if (!loadResult.success) {
+            return loadResult;
+        }
+        
+        return this.processAllCandidatesForMode(mode, loadResult.candidateCards);
+    },
+    
+    resetState() {
+        cycleReplyState.running = false;
+        cycleReplyState.stopRequested = false;
+        // Start from current tab instead of always starting from index 0
+        try {
+            const candidateTabs = this.getCandidateTabs();
+            const currentTab = candidateTabs.activeTab || 'recommend';
+            cycleReplyState.modeIndex = CYCLE_MODES.indexOf(currentTab);
+            if (cycleReplyState.modeIndex === -1) {
+                cycleReplyState.modeIndex = 0; // Fallback to first mode if current tab not found
+            }
+        } catch (error) {
+            cycleReplyState.modeIndex = 0; // Fallback to first mode on error
+        }
+        cycleReplyState.errorStreak = 0;
+    }
+};
+
+async function startCycleReply() {
+    if (!isOnCandidatePage()) {
+        showToast('请在候选人页面使用循环回复', 'warning');
+        return;
+    }
+    
+    if (cycleReplyState.running) {
+        await CycleReplyHelpers.requestStop();
+        return;
+    }
+    
+    // If batch processing is active, stop it and wait for it to complete
+    if (window.batchProcessingActive) {
+        CycleReplyHelpers.setButton(true, '⏹️ 正在停止...');
+        showToast('正在停止批处理，然后停止循环处理', 'info');
+        
+        // Mark batch processing to stop
+        window.stopBatchProcessing = true;
+        
+        // Wait for batch processing to complete
+        const waitResult = await CycleReplyHelpers.waitUntil(
+            () => !window.batchProcessingActive,
+            { timeoutMs: 300000, stepMs: 500 } // Wait up to 5 minutes
+        );
+        
+        if (!waitResult.success) {
+            showToast('等待批处理停止超时，循环处理已取消', 'warning');
+            CycleReplyHelpers.setButton(false);
+            return;
+        }
+        
+        // Now stop the cycle reply
+        CycleReplyHelpers.resetState();
+        CycleReplyHelpers.setButton(false);
+        showToast('循环处理已停止', 'info');
+        return;
+    }
+    
+    CycleReplyHelpers.resetState();
+    cycleReplyState.running = true;
+    CycleReplyHelpers.setButton(true);
+    
+    try {
+        while (!cycleReplyState.stopRequested) {
+            const mode = CYCLE_MODES[cycleReplyState.modeIndex];
+            let result;
+            
+            try {
+                const candidateTabs = CycleReplyHelpers.getCandidateTabs();
+                result = await CycleReplyHelpers.processMode(mode, candidateTabs);
+            } catch (error) {
+                result = { success: false, error };
+            }
+            
+            if (result.stopped) {
+                break;
+            }
+            
+            if (result.success === false) {
+                cycleReplyState.errorStreak += 1;
+                console.error(`[循环回复] 处理模式 ${mode} 出错:`, result.error || result);
+                showToast(`循环回复错误(${cycleReplyState.errorStreak}/2): ${result.error?.message || result.error || '未知错误'}`, 'error');
+                
+                if (result.timeout) {
+                    showToast('等待超时，循环回复已停止', 'error');
+                    break;
+                }
+                
+                if (cycleReplyState.errorStreak >= 2) {
+                    showToast('连续错误超过 2 次，循环回复已停止', 'error');
+                    break;
+                }
+            } else {
+                cycleReplyState.errorStreak = 0;
+            }
+            
+            cycleReplyState.modeIndex = (cycleReplyState.modeIndex + 1) % CYCLE_MODES.length;
+            await CycleReplyHelpers.sleep(900);
+        }
+    } finally {
+        CycleReplyHelpers.resetState();
+        CycleReplyHelpers.setButton(false);
+        showToast('循环回复已停止', 'info');
+    }
+}
+
+// Expose to window for inline handlers
+window.startCycleReply = startCycleReply;
+window.CycleReplyHelpers = CycleReplyHelpers;
 
 // ============================================================================
 // Centralized Candidate Card Update Handler

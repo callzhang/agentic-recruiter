@@ -2,9 +2,8 @@
 
 import time
 from typing import Any, Dict, List
-
+from tenacity import retry, stop_after_attempt, wait_fixed
 from playwright.async_api import Frame, Page
-
 from src.config import get_boss_zhipin_config
 from .global_logger import get_logger
 from .resume_capture_async import (
@@ -24,6 +23,7 @@ JOB_SELECTOR = "div.ui-dropmenu >> ul.job-list > li"
 
 
 
+@retry(stop=stop_after_attempt(2), wait=wait_fixed(1))
 async def _prepare_recommendation_page(page: Page, job_title: str = None, *, wait_timeout: int = 15000) -> Frame:
     """
     Navigates and configures the recommendation page for automated actions.
@@ -89,6 +89,7 @@ async def _prepare_recommendation_page(page: Page, job_title: str = None, *, wai
     return frame
 
 
+@retry(stop=stop_after_attempt(2), wait=wait_fixed(1))
 async def list_recommended_candidates_action(page: Page, *, limit: int = 999, job_applied: str, new_only: bool = True, filters: Dict[str, Any] = None) -> List[Dict[str, Any]]:
     """
     List recommended candidates from the Boss直聘推荐页面.
@@ -144,7 +145,7 @@ async def list_recommended_candidates_action(page: Page, *, limit: int = 999, jo
         viewed = "viewed" in classes
         greeted = await card.locator("button:has-text('继续沟通')").count() > 0
         name = (await card.locator("span.name").inner_text()).strip()
-        text = (await card.inner_text()).replace(name, "")
+        text = (await card.inner_text()).strip().replace('\n', ' ')
         
         # Create candidate dict with standardized field names for web UI
         if not new_only or not viewed:
@@ -167,6 +168,7 @@ async def list_recommended_candidates_action(page: Page, *, limit: int = 999, jo
     return candidates
 
 
+@retry(stop=stop_after_attempt(2), wait=wait_fixed(1))
 async def view_recommend_candidate_resume_action(page: Page, index: int) -> Dict[str, Any]:
     """View recommended candidate's resume. Returns dict with 'text'. Raises ValueError on failure."""
     frame = await _prepare_recommendation_page(page)
@@ -193,6 +195,7 @@ async def view_recommend_candidate_resume_action(page: Page, index: int) -> Dict
     return result
 
 
+@retry(stop=stop_after_attempt(2), wait=wait_fixed(1))
 async def greet_recommend_candidate_action(page: Page, index: int, message: str = None) -> bool:
     """Greet recommended candidate with message. Returns True on success, raises ValueError on failure."""
     frame = await _prepare_recommendation_page(page)
@@ -247,6 +250,7 @@ async def greet_recommend_candidate_action(page: Page, index: int, message: str 
     return True
 
 
+@retry(stop=stop_after_attempt(2), wait=wait_fixed(1))
 async def discard_recommend_candidate_action(page: Page, index: int, reason: str = "过往经历不符") -> bool:
     """Discard a recommendation candidate.
     Args:
@@ -286,7 +290,7 @@ async def discard_recommend_candidate_action(page: Page, index: int, reason: str
     else:
         raise ValueError("未找到不合适原因")
 
-
+@retry(stop=stop_after_attempt(2), wait=wait_fixed(1))
 async def apply_filters(frame: Frame, filters: Dict[str, Any]) -> bool:
     """Apply filters to the recommendation page.
     
@@ -325,9 +329,15 @@ async def apply_filters(frame: Frame, filters: Dict[str, Any]) -> bool:
     
     # apply filters
     logger.debug("开始应用筛选条件: %s", filters)
+    failed = False
     for key, value in filters.items():
         if key == "只看第一学历":
-            await filter_panel.locator("div.first-degree-wrap").click(timeout=1000)
+            try:
+                await filter_panel.locator("div.first-degree-wrap").click(timeout=1000)
+            except Exception as e:
+                logger.error(f"点击第一学历筛选选项失败: {e}")
+                failed = True
+                break
             continue
         # Find the parent "div.filter-wrap" that contains a child "div.name:has-text('{key}')"
         filter_wrap_item = filter_panel.locator(f"div.filter-wrap:has(div.name:has-text('{key}'))").first
@@ -345,7 +355,14 @@ async def apply_filters(frame: Frame, filters: Dict[str, Any]) -> bool:
                     logger.warning(f"未找到筛选选项: {key} = {v}")
             except Exception as e:
                 logger.error(f"点击筛选选项失败 {key} = {v}: {e}")
-    
+                failed = True
+                break
+    # cancel the filter panel
+    if failed:
+        cancel_btn = filter_panel.locator("div.btn:has-text('取消')")
+        if await cancel_btn.count() > 0:
+            await cancel_btn.click(timeout=1000)
+        raise ValueError("筛选条件应用失败")
     # confirm
     confirm_btn = filter_panel.locator("div.btn:has-text('确定')")
     if await confirm_btn.count() > 0:

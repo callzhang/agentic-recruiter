@@ -9,7 +9,7 @@ import asyncio
 import re
 from textwrap import dedent
 from typing import Any, Dict, List, Optional
-
+from tenacity import retry, stop_after_attempt, wait_fixed
 from playwright.async_api import (
     BrowserContext,
     Frame,
@@ -423,6 +423,7 @@ async def _setup_wasm_route(context: BrowserContext) -> None:
     await context.route(glob_pattern, _route_resume)
 
 
+@retry(stop=stop_after_attempt(2), wait=wait_fixed(1))
 async def _capture_inline_resume(
     page_or_frame: Page | Frame,
     logger=None,
@@ -437,7 +438,7 @@ async def _capture_inline_resume(
         await asyncio.sleep(0.25)
     return None
 
-
+@retry(stop=stop_after_attempt(2), wait=wait_fixed(1))
 async def _open_online_resume(page: Page, chat_id: str, logger=None) -> Dict[str, Any]:
     target = page.locator(
         f"div.geek-item[id='{chat_id}'], div.geek-item[data-id='{chat_id}'], "
@@ -466,7 +467,7 @@ async def _open_online_resume(page: Page, chat_id: str, logger=None) -> Dict[str
 
     return {"success": True, "details": "已打开在线简历"}
 
-
+@retry(stop=stop_after_attempt(2), wait=wait_fixed(1))
 async def _get_resume_handle(page: Page, timeout_ms: int = 10000, logger=None) -> Dict[str, Any]:
     from .ui_utils import IFRAME_OVERLAY_SELECTOR, RESUME_OVERLAY_SELECTOR
 
@@ -1216,7 +1217,6 @@ async def _process_resume_entry(page: Page, context_info: Dict[str, Any], logger
         wasm_result = await _try_wasm_exports(frame, logger)
         canvas_result = await _try_canvas_text_hooks(frame, logger)
         hooks_result = await _try_clipboard_hooks(frame, logger)
-
         results = [res for res in [parent_result, wasm_result, canvas_result, hooks_result] if isinstance(res, dict)]
         success = any(result.get("success") for result in results)
         methods = [result.get("method") for result in results]

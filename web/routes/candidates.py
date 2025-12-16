@@ -7,15 +7,17 @@
 """
 
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 from typing import Any, Dict, Optional
+import difflib
+from dateutil import parser as date_parser
 
 from fastapi import APIRouter, BackgroundTasks, Form, Query, Request, Response, Body
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from tenacity import retry, stop_after_attempt, wait_exponential
-from src.candidate_store import search_candidates_advanced, get_candidate_by_dict, upsert_candidate
+from src.candidate_store import search_candidates_advanced, get_candidate_by_dict, upsert_candidate, _readable_fields, calculate_resume_similarity
 from src.jobs_store import get_all_jobs, get_job_by_id as get_job_by_id_from_store
 from src.global_logger import logger
 from src import chat_actions, assistant_actions, assistant_utils, recommendation_actions
@@ -84,22 +86,16 @@ async def list_candidates(
         candidate_filters = job.get("candidate_filters") if job else None
         
         # Use recommendation_actions directly instead of API call
-        try:
-            # Get page from boss_service
-            page = await boss_service.service._ensure_browser_session()
-            # Call list_recommended_candidates_action directly
-            candidates = await recommendation_actions.list_recommended_candidates_action(
-                page=page,
-                limit=limit,
-                job_applied=job_applied,
-                new_only=False,
-                filters=candidate_filters
-            )
-        except Exception as e:
-            logger.error(f"Failed to get recommended candidates: {e}")
-            return HTMLResponse(
-                content=f'<div class="text-center text-red-500 py-12">获取推荐牛人失败: {str(e)}</div>'
-            )
+        # Get page from boss_service
+        page = await boss_service.service._ensure_browser_session()
+        # Call list_recommended_candidates_action directly
+        candidates = await recommendation_actions.list_recommended_candidates_action(
+            page=page,
+            limit=limit,
+            job_applied=job_applied,
+            new_only=False,
+            filters=candidate_filters
+        )
     else:
         # Map modes to tab and status filters based on boss_service.py API
         if mode == "greet":
@@ -146,6 +142,8 @@ async def list_candidates(
     conversation_ids = [c.get("conversation_id") for c in candidates if c.get("conversation_id")]
     names = [c.get("name") for c in candidates if c.get("name")]
     # Run database query in thread pool to avoid blocking event loop
+    fields_to_remove = {"resume_vector", "full_resume", "resume_text"}
+    fields = [f for f in _readable_fields if f not in fields_to_remove]
     stored_candidates = search_candidates_advanced(
         candidate_ids= candidate_ids,
         chat_ids= chat_ids,
@@ -154,6 +152,7 @@ async def list_candidates(
         job_applied=job_applied,
         limit=len(candidates) * 2,
         strict=False,
+        fields=fields,
     )
 
     # Render candidate cards
@@ -166,17 +165,9 @@ async def list_candidates(
         candidate["saved"] = False
         # match stored candidate by chat_id, or name + job_applied
         stored_candidate = next((c for c in stored_candidates if \
-            (candidate.get("chat_id") and c.get("chat_id") == candidate.get("chat_id") and c.get('name') == candidate.get('name')) or\
-            (c.get("name") == candidate.get("name")) and c.get("job_applied") == candidate.get("job_applied")), None)
-        
+            c["name"] == candidate['name'] and candidate_matched(candidate, c, mode)), None)
+
         if stored_candidate:
-            chat_id, chat_id2 = candidate.get("chat_id"), stored_candidate.get("chat_id")
-            if chat_id and chat_id2 and chat_id != chat_id2:
-                logger.error(f"chat_id mismatch ({candidate['name']}): {chat_id} != {chat_id2}")
-                stored_candidate = {}
-            elif chat_id is None and mode == "recommend" and chat_id2:
-                logger.warning(f"there should be no chat_id in recommend mode, current candidate:\n{candidate['last_message']}\n---\n stored candidate:\n{stored_candidate['last_message']}")
-                stored_candidate = {}
             candidate.update(stored_candidate) # last_message will be updated by saved candidate
             candidate["saved"] = True
             # Extract score from analysis if available)
@@ -184,31 +175,24 @@ async def list_candidates(
             # update greeted status if the candidate is in chat, greet, or seek stage
             candidate['greeted'] = candidate.get('greeted', False)
             restored += 1
-        else:
-            logger.warning(f"No stored candidate found for {candidate.get('name')}")
 
         # Extract resume_text and full_resume from candidate
-        # Prepare template context (pop values before rendering)
         analysis = candidate.pop("analysis", '')
         resume_text = candidate.pop("resume_text", '')
         full_resume = candidate.pop("full_resume", '')
         metadata = candidate.pop("metadata", {})
         generated_message = candidate.pop("generated_message", '')
         
-        # Render template in thread pool to avoid blocking event loop
-        def _render_card():
-            template = templates.get_template("partials/candidate_card.html")
-            return template.render({
-                "analysis": analysis,
-                "resume_text": resume_text,
-                "full_resume": full_resume,
-                "metadata": metadata,
-                "generated_message": generated_message,
-                "candidate": candidate,
-                "selected": False
-            })
-        
-        html += await asyncio.to_thread(_render_card)
+        template = templates.get_template("partials/candidate_card.html")
+        html += template.render({
+            "analysis": analysis,
+            "resume_text": resume_text,
+            "full_resume": full_resume,
+            "metadata": metadata,
+            "generated_message": generated_message,
+            "candidate": candidate,
+            "selected": False
+        })
     logger.info(f"Restored {restored}/{len(candidates)} candidates from cloud store")
     return HTMLResponse(content=html)
 
@@ -220,24 +204,13 @@ async def list_candidates(
 @router.get("/detail", response_class=HTMLResponse)
 async def get_candidate_detail(request: Request):
     """Get candidate detail view."""
-    # Parse index if provided
-    # str2bool = lambda v: {'true': True, 'false': False}.get(v, v)
-    # candidate = dict(request.query_params)
-    # candidate = {k:str2bool(v) for k, v in candidate.items() if v}
     candidate = json.loads(request.query_params.get('candidate', '{}'))
     chat_id = candidate.get('chat_id')
     # Try to find existing candidate (database query, no browser lock needed)
     stored_candidate = get_candidate_by_dict(candidate, strict=False)
-    chat_id2 = stored_candidate.get('chat_id')
-    if stored_candidate and candidate['name'] != stored_candidate.get('name'):
-        logger.warning(f"name mismatch: {candidate.get('name')} != {stored_candidate.get('name')}")
-    elif chat_id and chat_id2 and chat_id != chat_id2:
-        logger.warning(f"chat_id mismatch: {candidate.get('chat_id')} != {stored_candidate.get('chat_id')}")
-    elif chat_id is None and candidate.get('mode') == "recommend" and chat_id2:
-        logger.warning(f"there should be no chat_id in recommend mode, current candidate:\n{candidate}\n---\n stored candidate:\n{stored_candidate}")
-    else:
+    matched = candidate_matched(candidate, stored_candidate, candidate.get('mode'))
+    if matched:
         candidate.update(stored_candidate)
-    candidate['score'] = stored_candidate.get("analysis", {}).get("overall") if stored_candidate else None
     
     # Prepare template context (pop values before rendering to avoid issues)
     analysis = candidate.pop("analysis", {}) if stored_candidate else {}
@@ -246,19 +219,16 @@ async def get_candidate_detail(request: Request):
     full_resume = candidate.pop("full_resume", '') if stored_candidate else ''
     
     # Render template content in thread pool to avoid blocking event loop
-    def _render_template():
-        template = templates.get_template("partials/candidate_detail.html")
-        return template.render({
-            "request": request,
-            "analysis": analysis,
-            "generated_message": generated_message,
-            "resume_text": resume_text,
-            "full_resume": full_resume,
-            "candidate": candidate,
-            "view_mode": "interactive",
-        })
-    
-    html_content = await asyncio.to_thread(_render_template)
+    template = templates.get_template("partials/candidate_detail.html")
+    html_content = template.render({
+        "request": request,
+        "analysis": analysis,
+        "generated_message": generated_message,
+        "resume_text": resume_text,
+        "full_resume": full_resume,
+        "candidate": candidate,
+        "view_mode": "interactive",
+    })
     return HTMLResponse(content=html_content)
 
 
@@ -313,6 +283,7 @@ async def get_candidate_history(candidate_id: str):
 
 @router.post("/init-chat")
 async def init_chat(
+    request: Request,
     mode: str = Form(...),
     chat_id: Optional[str] = Form(None),
     job_id: str = Form(...),
@@ -325,15 +296,13 @@ async def init_chat(
     1. If in recommend mode, first check if exisiting candidate has been saved before by using semantic search
     2. If not found, create a new candidate record with history or last_message
     """
-
-    # Get job info (database query, no browser lock needed)
-    job_info = get_job_by_id(job_id)
+    # Get all form data as kwargs
+    form_data = await request.form()
+    kwargs = dict(form_data)
     # check if existing candidate has been saved before by using semantic search
     if not chat_id and resume_text:
         # use semantic search to find existing candidate
-        candidate = get_candidate_by_dict(
-            {"name": name, "job_applied": job_applied, "resume_text": resume_text}
-        )
+        candidate = get_candidate_by_dict(kwargs, strict=True)
         if candidate:
             logger.info(f"Found existing candidate when initializing chat: {candidate.get('candidate_id')} for name: {candidate.get('name')}")
             current = {'chat_id': chat_id, 'job_applied': job_applied, 'resume_text': resume_text}
@@ -348,16 +317,18 @@ async def init_chat(
         assert chat_id is not None, "chat_id is required for chat mode"
         page = await boss_service.service._ensure_browser_session()
         history = await chat_actions.get_chat_history_action(page, chat_id)
-        
+    
+    # Get job info
+    job_info = get_job_by_id(job_id)
     # Init chat in thread pool to avoid blocking event loop (OpenAI API call)
-    result = await asyncio.to_thread(
-        assistant_actions.init_chat,
+    result = assistant_actions.init_chat(
         mode=mode,
-        chat_id=chat_id,
-        job_info=job_info,
         name=name,
+        job_info=job_info,
         online_resume_text=resume_text,
-        chat_history=history
+        chat_history=history,
+        chat_id=chat_id,
+        kwargs=kwargs,
     )
     assert result.get("conversation_id"), "conversation_id is required"
     assert result.get("candidate_id"), "candidate_id is required"
@@ -476,7 +447,8 @@ async def generate_message(
     # generate message if there is new message from user(candidate)
     if [m for m in new_messages if m.get('role') == 'user']:
         # Generate message in thread pool to avoid blocking event loop (OpenAI API call)
-        message = assistant_actions.generate_message(
+        message = await asyncio.to_thread(
+            assistant_actions.generate_message,
             input_message=new_messages,
             conversation_id=conversation_id,
             purpose=purpose
@@ -488,7 +460,7 @@ async def generate_message(
         # Save to database (database operation, no browser lock needed)
         upsert_candidate(
             candidate_id=candidate_id,
-            last_message=message,
+            # last_message=message, # last_message is used to identify the candidate in recommend mode
             chat_id=chat_id,
             mode=mode,
             conversation_id=conversation_id,
@@ -833,28 +805,57 @@ async def request_contact(
         })
 
 
-# ============================================================================
 # Record Reuse Endpoints
-# ============================================================================
-
-
-
-# @router.get("/thread-history/{conversation_id}", response_class=HTMLResponse)
-# async def get_thread_history(
-#     request: Request,
-#     conversation_id: str
-# ):
-#     """Get conversation history HTML.
+@router.get("/thread-history/{conversation_id}", response_class=HTMLResponse)
+async def get_thread_history(
+    request: Request,
+    conversation_id: str
+):
+    """Get conversation history HTML.
     
-#     Args:
-#         conversation_id: OpenAI conversation ID
-#     """
-#     messages_data = assistant_utils.get_conversation_messages(conversation_id)
+    Args:
+        conversation_id: OpenAI conversation ID
+    """
+    # Get conversation messages in thread pool to avoid blocking event loop (OpenAI API call)
+    messages_data = await asyncio.to_thread(
+        assistant_utils.get_conversation_messages,
+        conversation_id
+    )
     
-#     return templates.TemplateResponse("partials/thread_history.html", {
-#         "request": request,
-#         "messages": messages_data.get("messages", []),
-#         "conversation_id": conversation_id
-#     })
+    return templates.TemplateResponse("partials/thread_history.html", {
+        "request": request,
+        "messages": messages_data.get("messages", []),
+        "conversation_id": conversation_id
+    })
 
+
+# Utils Functions
+def candidate_matched(candidate: Dict[str, Any], stored_candidate: Dict[str, Any], mode: str) -> bool:
+    """Check if candidate is matched with stored candidate."""
+    if not stored_candidate:
+        return False
+    if candidate['name'] != stored_candidate['name']:
+        return False
+    # check chat_id if provided
+    chat_id, chat_id2 = candidate.get("chat_id"), stored_candidate.get("chat_id")
+    if chat_id and chat_id2:
+        if chat_id == chat_id2:
+            return True
+        else:
+            return False
+    # check by last_message if provided
+    last_message, last_message2 = candidate.get("last_message", ''), stored_candidate.get("last_message", '')
+    updated_at = date_parser.parse(stored_candidate.get("updated_at"))
+    if updated_at.tzinfo is not None:
+        updated_at = updated_at.replace(tzinfo=None)
+    if chat_id is None and chat_id2 and updated_at < (datetime.now() - timedelta(days=3)):
+        logger.info(f"there should be no chat_id in recommend mode, current candidate:\n{candidate.get('name')} v.s. chat_id: {chat_id2}")
+        return False
+    elif last_message and last_message2:
+        from difflib import SequenceMatcher
+        similarity = SequenceMatcher(None, last_message, last_message2).ratio()
+        if similarity < 0.9:
+            logger.debug(f"last_message similarity ({candidate['name']}): {similarity*100:.2f}% < 90%\n{last_message}\n != \n{last_message2}")
+            return False
+    return True
 
