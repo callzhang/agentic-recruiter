@@ -2,6 +2,7 @@
 from difflib import SequenceMatcher
 from functools import lru_cache
 import json
+import re
 import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -48,6 +49,70 @@ _all_fields = [f.name for f in get_collection_schema()]
 
 # List of all field names except "resume_vector"
 _readable_fields = [f.name for f in get_collection_schema() if f.dtype != DataType.FLOAT_VECTOR]
+
+
+# ------------------------------------------------------------------
+# Resume Text Normalization for Matching
+# ------------------------------------------------------------------
+
+def normalize_resume_for_matching(text: str) -> str:
+    """Normalize resume text for similarity comparison.
+    
+    Removes metadata sections that vary between captures (like statistics,
+    other candidates, privacy notices) and normalizes whitespace to focus
+    on the core resume content.
+    
+    Args:
+        text: Raw resume text
+        
+    Returns:
+        Normalized resume text with only core content
+    """
+    if not text:
+        return ""
+    
+    # Clean literal line-break escape sequences that appear in scraped text
+    text = text.replace(r"\r\n", " ")
+    
+    # Remove 牛人分析器 section (statistics that vary)
+    text = re.sub(r'牛人分析器.*?查看全部\d+项分析', '', text, flags=re.DOTALL)
+    # Remove privacy notice section
+    text = re.sub(r'为妥善保护.*?传播、存储。', '', text, flags=re.DOTALL)
+    # Remove 其他名…牛人 section (other candidates recommendations; variants exist)
+    text = re.sub(r'其他名.*?牛人.*?经历概览', '经历概览', text, flags=re.DOTALL)
+    # Remove 经历概览 section (summary at the end)
+    text = re.sub(r'经历概览.*', '', text, flags=re.DOTALL)
+    # Normalize line breaks (both \r\n and \n to space)
+    text = re.sub(r'[\r\n]+', ' ', text)
+    # Normalize multiple spaces to single space
+    text = re.sub(r'\s+', ' ', text)
+    return text.strip()
+
+
+def calculate_resume_similarity(text1: str, text2: str) -> float:
+    """Calculate similarity between two resume texts.
+    
+    Uses normalized core resume content for comparison, which removes
+    metadata sections that vary between captures but keeps the actual
+    resume content (experience, skills, education, etc.).
+    
+    Args:
+        text1: First resume text
+        text2: Second resume text
+        
+    Returns:
+        Similarity ratio between 0.0 and 1.0
+    """
+    if not text1 or not text2:
+        return 0.0
+    
+    norm1 = normalize_resume_for_matching(text1)
+    norm2 = normalize_resume_for_matching(text2)
+    
+    if not norm1 or not norm2:
+        return 0.0
+    
+    return SequenceMatcher(None, norm1, norm2).ratio()
 
 # ------------------------------------------------------------------
 # MilvusClient Connection
@@ -179,13 +244,18 @@ def get_candidate_by_dict(kwargs: Dict[str, Any], strict: bool = True) -> Option
         strict=strict,
     )
     stored_candidate = results[0] if results else {}
-    # stored_last_message = stored_candidate.get("last_message", '')
-    # similarity = SequenceMatcher(a=last_message, b=stored_last_message).ratio()
-    # if stored_candidate and similarity < 0.8:
-    #     logger.warning(f"last_message similarity mismatch: {similarity} for {kwargs} and {stored_candidate}")
-    #     results = []
-
-    if not results and resume_text:
+    # if no resume_text, return stored_candidate
+    if not resume_text:
+        return stored_candidate
+    # if resume_text is provided, calculate resume similarity
+    if stored_candidate:
+        # Use improved resume similarity that normalizes content
+        similarity = calculate_resume_similarity(resume_text, stored_candidate.get("resume_text", ''))
+        if similarity < 0.9:
+            logger.warning(f"resume similarity mismatch: {similarity:.4f} for {kwargs.get('name')} and {stored_candidate.get('name')}")
+            stored_candidate = {}
+    # try again using resume similarity search
+    if not stored_candidate:
         results = search_candidates_by_resume(
             resume_text=resume_text, 
             filter_expr=f'name == "{name}" and job_applied == "{job_applied}"' if name and job_applied else None, 
@@ -193,7 +263,10 @@ def get_candidate_by_dict(kwargs: Dict[str, Any], strict: bool = True) -> Option
             limit=1
         )
         stored_candidate = results[0] if results else {}
+        if stored_candidate:
+            logger.info(f"found candidate by resume similarity: {stored_candidate.get('name')}")
     return stored_candidate
+
 
 def search_candidates_advanced(
     candidate_ids: Optional[List[str]] = [],

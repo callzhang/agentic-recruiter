@@ -17,3 +17,6 @@ wasm/*.wasm
 # Install script contains credentials and should not be committed
 start.command
 start.ps1
+.vercel
+.vercel.bak
+vercel/.vercel.bak

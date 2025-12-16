@@ -362,7 +362,10 @@ def search_candidates_advanced(
         limit=limit,
         order_by=order_clause,
     )
-    return results or []
+    # Ensure all keys are strings (Milvus may return bytes keys)
+    if results:
+        return [{str(k): v for k, v in item.items()} for item in results]
+    return []
 
 def get_all_jobs() -> List[Dict[str, Any]]:
     """Get all current jobs from Zilliz."""
@@ -383,7 +386,8 @@ def get_all_jobs() -> List[Dict[str, Any]]:
 
     jobs: List[Dict[str, Any]] = []
     for job in results:
-        job_dict = {k: v for k, v in job.items() if v or v == 0}
+        # Ensure all keys are strings (Milvus may return bytes keys)
+        job_dict = {str(k): v for k, v in job.items() if v or v == 0}
         jobs.append(job_dict)
 
     jobs.sort(key=lambda x: x.get("updated_at", ""), reverse=True)
@@ -479,12 +483,63 @@ def compile_all_jobs() -> Dict[str, Any]:
     best = max(stats, key=lambda s: s["today"]["metric"], default=None)
     return {"jobs": stats, "best": best}
 
+def ensure_json_serializable(obj, _visited=None):
+    """Recursively ensure all dictionary keys are strings and values are JSON-serializable."""
+    if _visited is None:
+        _visited = set()
+    
+    # Prevent infinite recursion
+    obj_id = id(obj)
+    if obj_id in _visited:
+        return "<circular reference>"
+    _visited.add(obj_id)
+    
+    try:
+        if isinstance(obj, dict):
+            # Ensure all keys are strings (handle bytes keys from Milvus)
+            result = {}
+            for k, v in obj.items():
+                key = str(k) if not isinstance(k, (str, int, float, bool, type(None))) else k
+                result[key] = ensure_json_serializable(v, _visited)
+            _visited.remove(obj_id)
+            return result
+        elif isinstance(obj, list):
+            result = [ensure_json_serializable(item, _visited) for item in obj]
+            _visited.remove(obj_id)
+            return result
+        elif isinstance(obj, (bytes, bytearray)):
+            # Convert bytes to string
+            _visited.remove(obj_id)
+            return obj.decode('utf-8', errors='replace')
+        elif isinstance(obj, (int, float, str, bool, type(None))):
+            _visited.remove(obj_id)
+            return obj
+        else:
+            # Try to convert to dict if it's a dataclass or similar
+            try:
+                if hasattr(obj, '_asdict'):
+                    result = ensure_json_serializable(obj._asdict(), _visited)
+                    _visited.remove(obj_id)
+                    return result
+                elif hasattr(obj, '__dict__'):
+                    result = ensure_json_serializable(obj.__dict__, _visited)
+                    _visited.remove(obj_id)
+                    return result
+            except Exception:
+                pass
+            _visited.remove(obj_id)
+            return str(obj)
+    except Exception as e:
+        _visited.discard(obj_id)
+        return f"<serialization error: {str(e)}>"
+
 def convert_score_analysis(obj):
     """Recursively convert ScoreAnalysis objects to dictionaries."""
     if isinstance(obj, ScoreAnalysis):
         return asdict(obj)
     elif isinstance(obj, dict):
-        return {k: convert_score_analysis(v) for k, v in obj.items()}
+        # Ensure all keys are strings (handle bytes keys from Milvus)
+        return {str(k): convert_score_analysis(v) for k, v in obj.items()}
     elif isinstance(obj, list):
         return [convert_score_analysis(item) for item in obj]
     return obj
@@ -687,12 +742,14 @@ def _get_statistics_data() -> Dict[str, Any]:
     jobs_serialized = convert_score_analysis(jobs)
     best_serialized = convert_score_analysis(best) if best else None
     
-    return {
+    result = {
         "total_candidates": total_candidates,
         "jobs_serialized": jobs_serialized,
         "best_serialized": best_serialized,
         "daily_candidate_counts": daily_candidate_counts
     }
+    # Ensure all data is JSON-serializable (handle bytes keys from Milvus)
+    return ensure_json_serializable(result)
 
 def _get_job_notification_config(job_name: str, default_url: str, default_secret: str) -> Dict[str, Any]:
     """Get notification configuration for a job (job-specific or fallback).
@@ -862,12 +919,14 @@ def send_overall_report(stats: Optional[Dict[str, Any]] = None) -> Dict[str, Any
         secret=default_dingtalk_secret,
     )
 
-    return {
+    result = {
         "success": True,
         "type": "overall",
         "sent": send_result["success"],
         "result": send_result["result"],
     }
+    # Ensure all data is JSON-serializable
+    return ensure_json_serializable(result)
 
 def send_job_report(job_index: int, stats: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Send job-specific report to DingTalk.
@@ -932,7 +991,8 @@ def send_job_report(job_index: int, stats: Optional[Dict[str, Any]] = None) -> D
     if using_fallback:
         response["warning"] = warning or "⚠️ This job report used the default DingTalk webhook fallback."
 
-    return response
+    # Ensure all data is JSON-serializable
+    return ensure_json_serializable(response)
 
 def send_daily_reports() -> Dict[str, Any]:
     """Send daily reports: 1 overall report + N job reports.
@@ -999,7 +1059,24 @@ async def get_stats(
     job_index: Optional[int] = Query(None, description="Job index (0-based) when format=job_report")
 ):
     """Get statistics data or formatted reports."""
-    stats = _get_statistics_data()
+    try:
+        stats = _get_statistics_data()
+    except ValueError as e:
+        # Handle configuration errors (e.g., missing Zilliz credentials)
+        error_msg = str(e)
+        print(f"Configuration error: {error_msg}", file=sys.stderr)
+        return JSONResponse(
+            status_code=503,
+            content={"success": False, "error": error_msg}
+        )
+    except Exception as e:
+        import traceback
+        error_msg = f"Error getting statistics: {str(e)}\n{traceback.format_exc()}"
+        print(error_msg, file=sys.stderr)
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": f"Failed to get statistics: {str(e)}"}
+        )
 
     if format in ("report", "text"):
         report = format_homepage_stats_report(
@@ -1008,7 +1085,8 @@ async def get_stats(
             jobs=stats["jobs_serialized"],
             best=stats["best_serialized"],
         )
-        return report
+        # Ensure all data is JSON-serializable
+        return ensure_json_serializable(report)
 
     if format == "job_report":
         if job_index is None:
@@ -1019,9 +1097,11 @@ async def get_stats(
                 detail=f"Job index {job_index} out of range (0-{len(stats['jobs_serialized'])-1})",
             )
         job_stat = stats["jobs_serialized"][job_index]
-        return format_job_stats_report(job_stat)
+        report = format_job_stats_report(job_stat)
+        # Ensure all keys are strings for JSON serialization
+        return ensure_json_serializable(report)
 
-    return {
+    result = {
         "success": True,
         "quick_stats": {
             "total_candidates": stats["total_candidates"],
@@ -1030,6 +1110,8 @@ async def get_stats(
         "best": stats["best_serialized"],
         "jobs": stats["jobs_serialized"],
     }
+    # Ensure all data is JSON-serializable
+    return ensure_json_serializable(result)
 
 @app.get("/api/send-report")
 async def send_report(
@@ -1047,18 +1129,26 @@ async def send_report(
 
     raise HTTPException(status_code=400, detail="Invalid 'type' parameter. Use 'overall' or 'job'")
 
+@app.get("/api/test")
+async def test_endpoint():
+    """Simple test endpoint to verify FastAPI is working."""
+    return {"success": True, "message": "FastAPI is working"}
+
 @app.get("/api/send-daily-report")
 async def send_daily_report():
     """Send daily reports: 1 overall report + N job reports (called by cron)."""
     print("Daily report cron triggered", file=sys.stderr)
     results = send_daily_reports()
-    return {
+    result = {
         "success": True,
         "overall_sent": results["overall_sent"],
         "job_reports_sent": results["job_reports_sent"],
         "job_reports_failed": results["job_reports_failed"],
         "errors": results["errors"],
     }
+    # Ensure all data is JSON-serializable
+    return ensure_json_serializable(result)
 
-
- 
+# Vercel automatically detects FastAPI app via the 'app' variable
+# Make sure it's accessible at module level for Vercel's Python runtime
+__all__ = ['app']

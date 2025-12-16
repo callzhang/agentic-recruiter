@@ -9,7 +9,7 @@ from dataclasses import asdict
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, time
 from typing import Any, Dict, List, Optional
-
+import asyncio
 import sentry_sdk
 from fastapi import Body, FastAPI, Query, Request
 from fastapi.responses import JSONResponse, HTMLResponse
@@ -835,7 +835,7 @@ class BossServiceAsync:
         # ------------------ AI Assistant API ------------------
 
         @self.app.post("/assistant/generate-message")
-        def generate_message(data: dict = Body(...)):
+        async def generate_message(data: dict = Body(...)):
             """Generate AI message for candidate based on thread context.
             
             Uses OpenAI Assistant API to generate contextual messages based on
@@ -854,7 +854,7 @@ class BossServiceAsync:
             Returns:
                 str: Generated message text
             """
-            return assistant_actions.generate_message(**data)
+            return await asyncio.to_thread(assistant_actions.generate_message, **data)
         
         @self.app.post("/assistant/init-chat")
         async def init_chat_api(data: dict = Body(...)):
@@ -878,10 +878,10 @@ class BossServiceAsync:
             Raises:
                 ValueError: If initialization fails (converted to 500 response)
             """
-            return assistant_actions.init_chat(**data)
+            return await asyncio.to_thread(assistant_actions.init_chat, **data)
         
         @self.app.get("/assistant/{thread_id}/messages")
-        def get_thread_messages_api(thread_id: str):
+        async def get_thread_messages_api(thread_id: str):
             """Get all messages from an OpenAI conversation.
             
             Note: The URL parameter is named 'thread_id' for backward compatibility,
@@ -901,10 +901,10 @@ class BossServiceAsync:
                 ValueError: If conversation not found or retrieval fails
             """
             from src.assistant_utils import get_conversation_messages
-            return get_conversation_messages(thread_id)
+            return await asyncio.to_thread(get_conversation_messages, thread_id)
 
         @self.app.get("/assistant/{thread_id}/analysis")
-        def get_thread_analysis_api(thread_id: str):
+        async def get_thread_analysis_api(thread_id: str):
             """Get analysis result from conversation messages.
             
             Note: The URL parameter is named 'thread_id' for backward compatibility,
@@ -923,83 +923,7 @@ class BossServiceAsync:
                 ValueError: If conversation not found
             """
             from src.assistant_utils import get_analysis_from_conversation
-            return get_analysis_from_conversation(thread_id)
-
-        # ------------------ OpenAI Assistant API ------------------
-        @self.app.get("/assistant/list")
-        def list_assistants_api():
-            """List all OpenAI assistants.
-            
-            Returns:
-                List[dict]: List of assistant dictionaries, each containing:
-                    - id: Assistant identifier
-                    - name: Assistant name
-                    - model: Model used by assistant
-                    - description: Assistant description
-                    - instructions: System instructions
-                    - metadata: Additional metadata
-                    - created_at: Creation timestamp
-            """
-            assistants = assistant_actions.get_assistants()
-            return [assistant.model_dump() for assistant in assistants.data]
-
-        @self.app.post("/assistant/create")
-        def create_assistant_api(payload: dict = Body(...)):
-            """Create a new OpenAI assistant.
-            
-            Args:
-                payload: JSON body containing:
-                    - name: Assistant name (required)
-                    - model: Model identifier (required, e.g., "gpt-4o-mini")
-                    - instructions: System instructions (required)
-                    - description: Optional description
-                    - metadata: Optional metadata dictionary
-            
-            Returns:
-                dict: Created assistant data
-            """
-            client = assistant_actions._openai_client
-            assistant = client.beta.assistants.create(**payload)
-            return assistant.model_dump()
-
-        @self.app.post("/assistant/update/{assistant_id}")
-        def update_assistant_api(assistant_id: str, payload: dict = Body(...)):
-            """Update an existing OpenAI assistant.
-            
-            Args:
-                assistant_id: OpenAI assistant identifier
-                payload: JSON body containing fields to update:
-                    - name: Optional new name
-                    - model: Optional new model
-                    - instructions: Optional new instructions
-                    - description: Optional new description
-                    - metadata: Optional new metadata
-            
-            Returns:
-                dict: Updated assistant data
-            
-            Raises:
-                ValueError: If update fails or assistant not found
-            """
-            client = assistant_actions._openai_client
-            assistant = client.beta.assistants.update(assistant_id, **payload)
-            assistant_actions.get_assistants.cache_clear()
-            return assistant.model_dump()
-
-        @self.app.delete("/assistant/delete/{assistant_id}")
-        def delete_assistant_api(assistant_id: str):
-            """Delete an OpenAI assistant.
-            
-            Args:
-                assistant_id: OpenAI assistant identifier
-            
-            Returns:
-                bool: True if deletion was successful
-            """
-            client = assistant_actions._openai_client
-            client.beta.assistants.delete(assistant_id)
-            assistant_actions.get_assistants.cache_clear()
-            return True
+            return await asyncio.to_thread(get_analysis_from_conversation, thread_id)
 
         # ------------------ System / Debug Endpoints ------------------
         @self.app.post("/restart")

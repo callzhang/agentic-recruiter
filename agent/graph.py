@@ -94,17 +94,12 @@ def check_environment(state: ManagerState, runtime: Runtime[ContextSchema]) -> M
             jobs_response = _call_api("GET", f"{web_portal}/jobs/api/list", timeout=runtime.context.timeout)
             # jobs endpoint returns {"success": True, "data": [...]}
             jobs = jobs_response.get('data', jobs_response) if isinstance(jobs_response, dict) else jobs_response
-            # get assistants from web portal
-            assistants_response = _call_api("GET", f"{web_portal}/assistant/list")
-            # assistants endpoint returns a list directly, not wrapped in dict
-            assistants = assistants_response if isinstance(assistants_response, list) else (assistants_response.get('data', []) if isinstance(assistants_response, dict) else [])
-            assert len(jobs) > 0 and len(assistants) > 0, "Jobs or Assistants Status: Disconnected"
+            assert len(jobs) > 0, "Jobs Status: Disconnected"
             names = [candidate.name for candidate in state.processed_candidates]
             system_message = SystemMessage(content=f'''浏览器成功链接，当前有{status["new_message_count"]}条新消息，{status["new_greet_count"]}条新问候。\n
             当前有{len(jobs)}个职位: {[j['position'] for j in jobs]}\n
-            当前有{len(assistants)}个助手风格: {[a['name'] for a in assistants]}\n
             当前有{len(names)}个已处理候选人: {names}\n
-            如果你想修改助手风格或者添加职位，请访问 {web_portal}/web 进行修改''')
+            如果你想添加职位，请访问 {web_portal}/web 进行修改''')
             break
         except Exception as e:
             status_message = f"⚠️ Error: {str(e)}\n请确认浏览器和网页是否正常运行。"

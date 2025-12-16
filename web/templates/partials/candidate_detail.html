@@ -61,7 +61,7 @@
     </div>
     {% endif %}
     
-    {% if candidate.name and ('先生' in candidate.name or '女士' in candidate.name) and candidate.chat_id %}
+    {% if candidate.name and ('先生' in candidate.name or '女士' in candidate.name) and candidate.chat_id and candidate.mode == 'recommend' %}
         <div class="flex items-center space-x-2 bg-yellow-100 border-l-4 border-yellow-400 text-yellow-800 px-4 py-2 rounded shadow-sm my-2">
             <span>⚠️</span>
             <span>
@@ -238,19 +238,18 @@ async function process_candidate() {
         const background_score = analysis?.background || 0;
         const { chat_threshold, borderline_threshold, seek_threshold } = getThresholdValues();
         let newStage = 'PASS'; // Default to PASS
-        // Step 4a: Check chat_threshold - generate message if above
+        // Step 4a: Check chat_threshold - generate message if above chat_threshold
         if (current_score >= chat_threshold || skill_score >= seek_threshold || startup_fit_score >= seek_threshold || background_score >= seek_threshold) {
             newStage = 'CHAT';
-            const messageText = document.getElementById('message-text').value;
-            if (messageText?.includes('⏳')) {
-                await generateMessage();
-            }
+            // const messageText = document.getElementById('message-text').value;
+            // if (messageText?.includes('⏳')) {
+            //     await generateMessage();
+            // }
         } else {
             showToast(`匹配度: ${current_score}, 未达最低值: ${chat_threshold}`, 'info');
         }
-        // Step 4b: Check borderline_threshold - try to get full resume and re-analyze
-        debugger;
         let need_reply = await shouldReply();
+        // Step 4b: Check borderline_threshold - try to get full resume and re-analyze
         const auto_send = document.getElementById('auto-send-checkbox')?.checked ?? true;
         if (current_score >= borderline_threshold || skill_score >= seek_threshold || startup_fit_score >= seek_threshold || background_score >= seek_threshold) {
             newStage = 'SEEK';
@@ -285,20 +284,15 @@ async function process_candidate() {
                     await sendDingNotification(analysis, name, getCandidateData('job_applied'));
                     await requestContact();
                 }
-            }else{
-                // For recommend mode, greet and send message
+            }
+
+            // Step 4e: Send message to candidate if still need to reply
+            if (need_reply) {
+                await generateMessage();
                 await greetAndSendMessage(autoSend=auto_send);
                 need_reply = false;
             }
         }
-        //step 4e: check if we need to reply candidate
-        if (mode !== 'recommend' && need_reply) {
-            // Step 4c: Send notification if analysis was updated
-            await generateMessage();
-            await greetAndSendMessage(autoSend=auto_send);
-            need_reply = false;
-        }
-        
         // Update stage and card
         await updateCandidateData({
             stage: newStage,
@@ -325,9 +319,6 @@ async function process_candidate() {
             }
         });
         document.dispatchEvent(event);
-        debugger;
-        // throw error;
-        // Don't re-throw - let finally handle cleanup
     } finally {
         // Always re-enable cards after processing, even on error
         // Use setTimeout to ensure this runs even if there are unhandled promise rejections
@@ -414,19 +405,22 @@ async function generateMessage() {
 async function greetAndSendMessage(autoSend = true) {
     const message_textarea = document.getElementById('message-text');
     const message = autoSend ? message_textarea.value.trim() : '';
-    const stage = getCandidateData('stage');
+    let stage = getCandidateData('stage');
     const greeted = getCandidateData('greeted');
     const mode = getCandidateData('mode');
     const chat_id = getCandidateData('chat_id');
     const index = getCandidateData('index');
+    if (stage === 'PASS') {
+        stage = 'CHAT';
+    }
     const values = {
         mode,
         chat_id,
         index,
         message,
+        stage,
     };
     if (message === '') {
-        debugger;
         showToast('消息长度不能为空', 'error');
         return;
     }
@@ -468,7 +462,7 @@ async function startAnalysis() {
     } else if(has_online_resume) {
         showToast('正在分析在线简历...', 'info');
     } else {
-        showToast('没有可分析的简历,请先请求简历', 'error');
+        debugger;
         throw new Error('没有可分析的简历,请先请求简历');
     }
     
@@ -516,19 +510,21 @@ async function shouldReply() {
     const mode = values.mode;
     const greeted = values.greeted;
     const autoSend = document.getElementById('auto-send-checkbox')?.checked ?? true;
-    // If greeted and updated_at is less than 5 minutes ago, don't reply
+    // If greeted and updated_at is less than 10 minutes ago, don't reply
+    const updatedAt = new Date(values.updated_at);
+    const now = new Date();
+    const diffMs = now - updatedAt;
+    const diffMinutes = diffMs / (1000 * 60);
     if (greeted && values.updated_at) {
-        const updatedAt = new Date(values.updated_at);
-        const now = new Date();
-        const diffMs = now - updatedAt;
-        const diffMinutes = diffMs / (1000 * 60);
-        if (diffMinutes < 5) {
+        if (diffMinutes < 10) {
             return false;
         }
     }
     // For recommend mode, only rely on greeted flag
     if (mode === 'recommend') {
         return !greeted; // if not greeted, we need to reply
+    }else if (mode === 'followup' && diffMinutes > 60*24*1) {
+        return true; // if updated_at is more than 1 day ago, we need to reply
     }
     // for other modes, check if we should reply based on chat history
     const response = await fetch('/candidates/should-reply', {
@@ -686,7 +682,7 @@ async function initializeNewChat() {
 async function updateCandidateData(data) {
     const dataCopy = {...data};
     data.saved = true
-    // update the resume, analysis and generated_message fields
+    // update the resume, analysis and generated_message fields, since these fields are from server, no need to update the stored data
     if (data.resume_text) {
         document.getElementById('resume-textarea-online').value = data.resume_text;
         document.getElementById('resume-textarea-online').textContent = data.resume_text;
@@ -698,7 +694,7 @@ async function updateCandidateData(data) {
         delete data.full_resume;
     }
     if (data.analysis) {
-        // Await the HTMX ajax call using htmxAjaxPromise
+        // use server-side rendering to render the analysis result
         await htmxAjaxPromise('POST', '/candidates/render-analysis-result', {
             swap: 'innerHTML',
             values: { analysis: JSON.stringify(data.analysis) },
@@ -759,8 +755,7 @@ async function updateCandidateData(data) {
 }
 
 function getCandidateData(key) {
-    const container = document.getElementById('candidate-context');
-    const hxVals = container.getAttribute('hx-vals');
+    const hxVals = document.getElementById('candidate-context').getAttribute('hx-vals');
     if (hxVals) {
         const data = JSON.parse(hxVals);
         // If key is provided, return that property; otherwise return the whole object

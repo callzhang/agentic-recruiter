@@ -74,14 +74,6 @@ class AnalysisSchema(BaseModel):
     followup_tips: str = Field(description="后续招聘顾问跟进的沟通策略，不要超过200字")
 
 
-# Assistants ----------------------------------------------------
-
-@lru_cache(maxsize=1)
-def get_assistants() -> List[Dict[str, Any]]:
-    """Get all assistants."""
-    return _openai_client.beta.assistants.list()
-
-
 # AI Generation with Responses API ------------------------------
 def init_chat(
     mode: str,
@@ -90,6 +82,7 @@ def init_chat(
     online_resume_text: str,
     chat_history: List[Dict[str, Any]]=[],
     chat_id: Optional[str] = None,
+    kwargs: Optional[Dict[str, Any]] = {},
 ) -> Dict[str, Any]:
     """
     Initialize conversation and Zilliz record.
@@ -105,7 +98,7 @@ def init_chat(
         online_resume_text: str (candidate online resume text - REQUIRED)
         chat_id: Optional[str] (for chat workflows, None for recommend workflow)
         chat_history: Optional existing chat history to sync
-        
+        kwargs: Optional additional keyword arguments to pass to the function
     Returns:
         str: OpenAI conversation ID
     """
@@ -142,14 +135,16 @@ def init_chat(
     )
 
     # create candidate record
+    kwargs.pop('chat_id', None)
+    kwargs.pop('stage', None)
+    kwargs.pop('conversation_id', None)
+    kwargs.pop('metadata', None)
     candidate_id = upsert_candidate(
         chat_id=chat_id,
-        name=name,
-        job_applied=job_info["position"],
-        resume_text=online_resume_text,
         stage=None,  # Not analyzed yet
         conversation_id=conversation.id,
         metadata={'history': chat_history},
+        **kwargs,
     )
     if not candidate_id:
         raise ValueError("Failed to create candidate record")
@@ -324,7 +319,6 @@ def send_dingtalk_notification(
 
 
 __all__ = [
-    "get_assistants",
     "init_chat",
     "generate_message",
     "send_dingtalk_notification",

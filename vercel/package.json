@@ -3,8 +3,7 @@
   "version": "1.0.0",
   "description": "Boss Zhipin bot - Homepage and Jobs Editor deployed on Vercel",
   "scripts": {
-    "build": "echo 'Build complete'",
-    "deploy": "vercel --prod"
+    "build": "echo 'Build complete - Python dependencies will be installed by Vercel during function build'"
   },
   "keywords": ["boss-zhipin", "homepage", "jobs", "editor", "stats"],
   "author": "",
