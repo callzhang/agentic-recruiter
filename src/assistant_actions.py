@@ -48,7 +48,7 @@ ACTION_PROMPTS = {
 不需要回复请回复“OK”。
 """,
     "ANALYZE_ACTION": f"""请根据岗位描述，对候选人的简历进行打分，用于决定是否继续推进。
-        重点关注keyword里面的正负向关键词要进行加分和减分。
+        重点关注keyword里面的正负向关键词，如果简历中匹配关键词，要进行相对应的加分或减分。
         仔细查看候选人的项目经历，检查是否有言过其词的情况。
         最后，还要查看候选人的过往工作经历，判断是否符合岗位要求。
         请给出 1-10 的四个评分：技能匹配度、创业契合度、基础背景、综合评分，并提供简要分析。""",
@@ -69,7 +69,7 @@ class AnalysisSchema(BaseModel):
     skill: int = Field(description="技能、经验匹配度，满分10分")
     startup_fit: int = Field(description="创业公司契合度，抗压能力、对工作的热情程度，满分10分")
     background: int = Field(description="基础背景、学历优秀程度、逻辑思维能力，满分10分")
-    overall: int = Field(description="综合评分，满分10分")
+    overall: int = Field(description="综合评分，满分10分，6分为及格/待定，7分为基本满足岗位要求/推进面试，8分为优秀，9分为卓越，10分为完全满足岗位要求")
     summary: str = Field(description="分析总结，不要超过200字")
     followup_tips: str = Field(description="后续招聘顾问跟进的沟通策略，不要超过200字")
 

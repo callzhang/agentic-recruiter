@@ -254,11 +254,11 @@ async def list_conversations_action(page: Page, limit: int = 999, tab: str = '�
     for index in range(count):
         item = items.nth(index)
         try:
-            data_id = await item.get_attribute("data-id")
-            name = (await item.locator("span.geek-name").inner_text()).strip()
+            data_id = await item.get_attribute("data-id", timeout=100)
+            name = (await item.locator("span.geek-name").inner_text(timeout=100)).strip()
             # job_title = (await item.locator("span.source-job").inner_text()).strip() # using job_applied instead, meaning we stick to our own job_applied field instead of the web job title
-            text = (await item.locator("span.push-text").inner_text()).strip()
-            timestamp = (await item.locator("span.time").inner_text()).strip()
+            text = (await item.locator("span.push-text").inner_text(timeout=100)).strip()
+            timestamp = (await item.locator("span.time").inner_text(timeout=100)).strip()
             unread = await item.locator("span.badge-count").count() > 0
         except Exception as exc:  # noqa: BLE001
             logger.debug("读取列表项失败 #%s: %s", index, exc)
@@ -365,7 +365,7 @@ async def get_chat_history_action(page: Page, chat_id: str) -> List[Dict[str, An
 # ------------------------------------------------------------
 # 在线简历
 # ------------------------------------------------------------
-@retry(stop=stop_after_attempt(2), wait=wait_fixed(1))
+# @retry(stop=stop_after_attempt(2), wait=wait_fixed(1))
 async def view_online_resume_action(page: Page, chat_id: str, timeout: int = 20000) -> Dict[str, Any]:
     """View candidate's online resume. Returns dict with 'text', 'name', 'chat_id'. Raises ValueError on failure."""
     await _prepare_chat_page(page)
@@ -404,7 +404,7 @@ async def view_online_resume_action(page: Page, chat_id: str, timeout: int = 200
 # 离线简历
 #--------------------------------------------------
 
-@retry(stop=stop_after_attempt(2), wait=wait_fixed(1))
+# @retry(stop=stop_after_attempt(2), wait=wait_fixed(1))
 async def request_full_resume_action(page: Page, chat_id: str) -> bool:
     """Request resume from candidate. Returns True on success, False on failure (e.g., dialog not found)."""
     await _prepare_chat_page(page)
@@ -429,7 +429,7 @@ async def request_full_resume_action(page: Page, chat_id: str) -> bool:
             # 境外提醒
             confirm_continue = page.locator("div.btn-sure-v2:has-text('继续交换')")
             if await confirm_continue.count() > 0:
-                await confirm_continue.click(timeout=1000)
+                await confirm_continue.click(timeout=5)
                 logger.info("境外提醒已确认")
             # Confirm dialog
             confirm = page.locator("span.boss-btn-primary:has-text('确定')")
@@ -438,10 +438,9 @@ async def request_full_resume_action(page: Page, chat_id: str) -> bool:
                 logger.info("简历请求已发送")
         except Exception as e:
             pass
-        if time.time() - t0 > 10:
+        if time.time() - t0 > 5:
             return False
     else:
-        logger.info("完整简历不存在")
         await page.wait_for_timeout(500)
         return True
     
@@ -451,24 +450,31 @@ async def accept_full_resume_action(page: Page, chat_id: str) -> bool:
     """Accept candidate's resume. Returns True on success, raises ValueError if accept button not found."""
     await _prepare_chat_page(page)
     await _go_to_chat_dialog(page, chat_id)
-    accept_button_selectors = ['div.notice-list >> a.btn:has-text("同意")', 'div.message-card-buttons >> span.card.btn:has-text("同意")']
-    for selector in accept_button_selectors:
-        resume_pending = page.locator(selector)
-        if await resume_pending.count() > 0:
-            await resume_pending.click(timeout=1000)
-            await page.wait_for_timeout(1000) 
+    accept_button_selector = 'div.notice-list >> a.btn:has-text("同意"), div.message-card-buttons >> span.card.btn:has-text("同意")'
+    accept_button = page.locator(accept_button_selector)
+    if await accept_button.count() == 0:
+        return False
+    confirm_continue = page.locator("div.btn-sure-v2:has-text('继续交换')")
+    tried = 0
+    while 'disabled' not in await accept_button.get_attribute("class", timeout=100):
+        try:
+            await accept_button.click(timeout=1000)
+            await page.wait_for_timeout(500) 
             # 境外提醒
-            confirm_continue = page.locator("div.btn-sure-v2:has-text('继续交换')")
             if await confirm_continue.count() > 0:
-                try:
-                    await confirm_continue.click(timeout=1000)
-                except:
-                    pass
-            return True
+                await confirm_continue.click(timeout=1000)
+                continue
+        except Exception as e:
+            pass
+        tried += 1
+        if tried > 10:
+            break
+    else:
+        return True
     return False
 
 
-@retry(stop=stop_after_attempt(2), wait=wait_fixed(1))
+# @retry(stop=stop_after_attempt(2), wait=wait_fixed(1))
 async def check_full_resume_available(page: Page, chat_id: str):
     """Check if full resume is available. Returns resume_button Locator if available, None otherwise."""
     await _prepare_chat_page(page)
@@ -491,23 +497,19 @@ async def check_full_resume_available(page: Page, chat_id: str):
     for _ in range(10):
         classes = await resume_button.get_attribute("class") or ""
         if "disabled" not in classes: # 按钮不是disabled状态，则表示简历已上传
-            # Resume is available!
             return True
         await page.wait_for_timeout(200)
     
-    # Button still disabled after waiting
-    logger.warning("暂无离线简历")
     return False
 
 
-@retry(stop=stop_after_attempt(2), wait=wait_fixed(1))
+# @retry(stop=stop_after_attempt(2), wait=wait_fixed(1))
 async def view_full_resume_action(page: Page, chat_id: str) -> Dict[str, Any]:
     """View candidate's full offline resume. Returns dict with 'text' and 'pages'. Raises ValueError on failure."""
     await _prepare_chat_page(page)
     await _go_to_chat_dialog(page, chat_id)
     available = await check_full_resume_available(page, chat_id)
     if not available:
-        # raise ValueError("暂无离线简历，请先请求简历")
         requested = await request_full_resume_action(page, chat_id)
         return {
             "text": None,

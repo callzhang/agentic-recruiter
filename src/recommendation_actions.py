@@ -126,14 +126,13 @@ async def list_recommended_candidates_action(page: Page, *, limit: int = 999, jo
     candidates: List[Dict[str, Any]] = []
     cards = frame.locator(CANDIDATE_CARD_SELECTOR)
     t0 = time.time()
-    while time.time() - t0 < 8000:
-        count = await cards.count()
-        if count > 0:
-            break
+    while (count := await cards.count()) == 0:
+        if time.time() - t0 > 20:
+            raise ValueError("未找到推荐候选人")
         await page.wait_for_timeout(200)
         logger.debug("等待推荐候选人卡片出现... %d 秒", time.time() - t0)
     else:
-        raise ValueError("未找到推荐候选人")
+        logger.info("找到 %d 个推荐候选人", count)
 
     from tqdm.asyncio import tqdm as async_tqdm
 
