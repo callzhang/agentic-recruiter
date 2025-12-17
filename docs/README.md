@@ -13,7 +13,6 @@ Boss直聘自动化机器人完整文档
 
 - 📊 [LangGraph 综合笔记](langgraph_comprehensive_notes.md) - LangGraph 使用指南
 - 📋 [开发路线图](ROADMAP.md) - 任务和优先级
-- 🌐 [岗位公开托管](jobs_public_hosting.md) - Vercel 部署说明
 
 ---
 
