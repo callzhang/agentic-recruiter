@@ -22,6 +22,7 @@ from src.jobs_store import get_all_jobs, get_job_by_id as get_job_by_id_from_sto
 from src.global_logger import logger
 from src import chat_actions, assistant_actions, assistant_utils, recommendation_actions
 from src.assistant_actions import send_dingtalk_notification
+from src.candidate_stages import STAGE_PASS, STAGE_CHAT, STAGE_SEEK, STAGE_CONTACT
 import boss_service
 
 router = APIRouter()
@@ -406,6 +407,7 @@ async def save_candidate_to_cloud(request: Request):
 
 @router.post("/generate-message", response_class=HTMLResponse)
 async def generate_message(
+    name: str = Form(...),
     mode: str = Form(...),
     candidate_id: str = Form(...),
     chat_id: Optional[str] = Form(None),
@@ -471,7 +473,20 @@ async def generate_message(
         logger.warning("No new message found for conversation_id: %s", conversation_id)
         message = ''
 
-    
+    if '<PASS>' in message:
+        pass_reason = message.split('<PASS>: ')[1]
+        logger.warning(f"候选人 {name} 判断为不合适，理由: {pass_reason}")
+        upsert_candidate(candidate_id=candidate_id, stage=STAGE_PASS)
+        if mode != "recommend":
+            result = await chat_actions.discard_candidate_action(page, chat_id)
+        return HTMLResponse(
+            content=f'''
+            <div class="space-y-4">
+                <textarea id="message-text" name="message" class="w-full h-32 p-4 border rounded-lg"> </textarea>
+            </div>''', 
+            headers={"HX-Trigger": json.dumps({"showToast": {"message": f"候选人 {name} 判断为不合适，理由: {pass_reason}", "type": "info"}}, ensure_ascii=True)}
+        )
+
     # Return textarea with generated message and send button
     html = f'''
     <div class="space-y-4">
@@ -688,8 +703,8 @@ async def fetch_online_resume(
 
 @router.post("/fetch-full-resume", response_class=HTMLResponse)
 async def fetch_full_resume(
-    candidate_id: str = Form(...),
-    chat_id: str = Form(...),
+    candidate_id: Optional[str] = Form(None),
+    chat_id: Optional[str] = Form(None),
     mode: str = Form("chat"),
     job_id: str = Form(""),
 ):
@@ -698,6 +713,13 @@ async def fetch_full_resume(
     if mode == "recommend":
         return HTMLResponse(
             content='<div class="text-red-500 p-4">推荐候选人不支持离线简历</div>',
+            status_code=400
+        )
+    
+    # Validate required fields
+    if not chat_id or not candidate_id:
+        return HTMLResponse(
+            content=f'<div class="text-red-500 p-4">缺少 chat_id({chat_id}) 或 candidate_id({candidate_id})，无法获取完整简历</div>',
             status_code=400
         )
     
@@ -735,21 +757,17 @@ async def pass_candidate(
 ):
     """Mark candidate as PASS and move to next."""
     page = await boss_service.service._ensure_browser_session()
-    result = await chat_actions.discard_candidate_action(page, chat_id, stage="PASS")
+    result = await chat_actions.discard_candidate_action(page, chat_id)
     
     if result:
-        upsert_candidate(
-            candidate_id=candidate_id,
-            chat_id=chat_id,
-            stage="PASS",
-        )
+        upsert_candidate( candidate_id=candidate_id, chat_id=chat_id, stage=STAGE_PASS)
         return HTMLResponse(
             content='<div class="text-green-600">✅ 已标记为 PASS</div>',
             headers={"HX-Trigger": "candidateUpdated"}
         )
     else:
         return HTMLResponse(
-            content='<div class="text-red-500">❌ 操作失败</div>',
+            content='<div class="text-red-500">❌ PASS 操作失败</div>',
             status_code=500
         )
 
@@ -782,7 +800,7 @@ async def request_contact(
                 "phone_number": phone_number,
                 "wechat_number": wechat_number,
             },
-            stage="CONTACT",
+            stage=STAGE_CONTACT,
         )
         
         return JSONResponse({
