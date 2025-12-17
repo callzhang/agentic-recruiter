@@ -67,7 +67,7 @@
     </nav>
     
     <!-- Main content -->
-    <main class="container mx-auto px-4 py-8">
+    <main class="container mx-auto p-4">
         {% block content %}{% endblock %}
     </main>
     
@@ -155,6 +155,188 @@
     
     <!-- Alpine.js global store -->
     <script src="/static/js/app.js"></script>
+    
+    <!-- Runtime Check (Service Status + Version Update) -->
+    <script>
+    // ============================================================================
+    // Runtime Check (Service Status + Version Update)
+    // ============================================================================
+
+    /**
+     * Fetch with timeout and error handling
+     */
+    async function fetchWithTimeout(url, timeoutMs = 30000) {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+        
+        const response = await fetch(url, {
+            method: 'GET',
+            headers: { 'Accept': 'application/json' },
+            signal: controller.signal
+        });
+        
+        clearTimeout(timeoutId);
+        return response;
+    }
+
+    /**
+     * Combined runtime check: service status and version updates
+     * Runs every 30 seconds
+     */
+    function initRuntimeCheck() {
+        const statusDot = document.getElementById('status-dot');
+        const statusText = document.getElementById('status-text');
+        const versionTag = document.getElementById('version-tag');
+        
+        let runtimeCheckInterval = null;
+        let lastVersionCheck = 0;
+        const VERSION_CHECK_INTERVAL = 300000; // Check version every 5 minutes (300s)
+        
+        async function runtimeCheck() {
+            // Always check service status
+            if (statusDot && statusText) {
+                const response = await fetchWithTimeout('/status').catch(error => {
+                    // Handle fetch errors (network, timeout, etc.)
+                    if (error.name === 'AbortError') {
+                        statusDot.className = 'w-2 h-2 bg-yellow-500 rounded-full animate-pulse';
+                        statusText.textContent = '服务响应超时';
+                        statusText.className = 'text-sm text-yellow-600';
+                    } else {
+                        statusDot.className = 'w-2 h-2 bg-red-500 rounded-full';
+                        statusText.textContent = '服务离线';
+                        statusText.className = 'text-sm text-red-600';
+                    }
+                    return null;
+                });
+                
+                if (response?.ok) {
+                    const data = await response.json();
+                    // Check Zilliz connection status
+                    if (data.zilliz_connected === false) {
+                        // Zilliz connection failed - show error
+                        statusDot.className = 'w-2 h-2 bg-red-500 rounded-full animate-pulse';
+                        statusText.textContent = 'Zilliz 连接失败';
+                        statusText.className = 'text-sm text-red-600 font-semibold';
+                        
+                        // Show error toast (only once per session)
+                        if (!sessionStorage.getItem('zilliz_error_shown')) {
+                            const errorMsg = data.zilliz_error 
+                                ? `Zilliz 数据库连接失败: ${data.zilliz_error}` 
+                                : 'Zilliz 数据库连接失败，请检查配置';
+                            if (typeof showToast === 'function') {
+                                showToast(errorMsg, 'error');
+                            }
+                            sessionStorage.setItem('zilliz_error_shown', 'true');
+                        }
+                    } else {
+                        // Service is running normally
+                        statusDot.className = 'w-2 h-2 bg-green-500 rounded-full animate-pulse';
+                        statusText.textContent = '服务运行中';
+                        statusText.className = 'text-sm text-gray-600';
+                        // Clear error flag if connection is restored
+                        sessionStorage.removeItem('zilliz_error_shown');
+                    }
+                    
+                    // Update version tag - always update, even if version is null/undefined
+                    if (versionTag) {
+                        versionTag.textContent = data.version;
+                    }
+                } else if (response) {
+                    // Service returned error
+                    statusDot.className = 'w-2 h-2 bg-yellow-500 rounded-full animate-pulse';
+                    statusText.textContent = '服务异常';
+                    statusText.className = 'text-sm text-yellow-600';
+                }
+            }
+            
+            // Check version update less frequently (every 5 minutes)
+            const now = Date.now();
+            if (now - lastVersionCheck >= VERSION_CHECK_INTERVAL) {
+                lastVersionCheck = now;
+                
+                const response = await fetchWithTimeout('/version/check').catch(() => null);
+                
+                if (!response?.ok) {
+                    return; // Silently fail
+                }
+                
+                const data = await response.json();
+                
+                // If merge was successful, show success message (don't show modal, just log)
+                if (data.merge_success === true) {
+                    console.log('✅ Code updated successfully:', data.message);
+                    // Clear dismissed version so user sees the success
+                    if (data.remote_commit) {
+                        localStorage.removeItem('dismissedVersion');
+                    }
+                    return; // Don't show modal for successful auto-updates
+                }
+                
+                // If merge failed or update available, show modal
+                if (data.has_update && data.remote_commit) {
+                    // Check if this version was already dismissed
+                    const dismissedVersion = localStorage.getItem('dismissedVersion');
+                    if (dismissedVersion === data.remote_commit) {
+                        return; // User already dismissed this version
+                    }
+                    
+                    // Show modal
+                    if (window.Alpine && Alpine.store('versionUpdateModal')) {
+                        const modal = Alpine.store('versionUpdateModal');
+                        
+                        // Set title and message based on merge status
+                        if (data.merge_success === false) {
+                            modal.title = '⚠️ 自动更新失败';
+                            modal.message = data.message || `检测到新版本但自动合并失败。\n\n错误: ${data.merge_error || '未知错误'}\n\n请手动运行 start.command 更新代码。`;
+                        } else {
+                            modal.title = '新版本可用';
+                            modal.message = data.message || '检测到新的 Git 版本可用，建议更新以获取最新功能。';
+                        }
+                        
+                        modal.currentCommit = data.current_commit;
+                        modal.remoteCommit = data.remote_commit;
+                        modal.currentBranch = data.current_branch;
+                        modal.repoUrl = data.repo_url;
+                        modal.show = true;
+                    }
+                }
+            }
+        }
+        
+        // Check immediately on page load
+        runtimeCheck();
+        
+        // Also update version tag immediately if element exists (in case status check hasn't run yet)
+        if (versionTag) {
+            fetchWithTimeout('/status')
+                .then(response => response?.ok ? response.json() : null)
+                .then(data => {
+                    versionTag.textContent = data?.version || 'v-...';
+                })
+                .catch(() => {
+                    // Silently fail - version will be updated on next status check
+                    versionTag.textContent = 'v-...';
+                });
+        }
+        
+        // Then check every 30 seconds
+        runtimeCheckInterval = setInterval(runtimeCheck, 30000);
+        
+        // Clean up on page unload
+        window.addEventListener('beforeunload', () => {
+            if (runtimeCheckInterval) {
+                clearInterval(runtimeCheckInterval);
+            }
+        });
+    }
+
+    // Initialize runtime check when DOM is ready
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initRuntimeCheck);
+    } else {
+        initRuntimeCheck();
+    }
+    </script>
     
     {% block scripts %}{% endblock %}
 </body>
