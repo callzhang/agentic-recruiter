@@ -41,7 +41,7 @@
          x-transition:leave="transition ease-in duration-200"
          x-transition:leave-start="opacity-100 transform scale-100"
          x-transition:leave-end="opacity-0 transform scale-95">
-        <div class="p-6">
+        <div class="p-4">
             <div class="flex items-center mb-4">
                 <div class="w-10 h-10 bg-yellow-100 rounded-full flex items-center justify-center mr-3">
                     <span class="text-2xl">⚠️</span>
@@ -63,7 +63,7 @@
 
 <div x-data="candidateTabs()" x-init="init()" class="space-y-6">
     <!-- Page header with controls -->
-    <div class="bg-white rounded-lg shadow p-6">
+    <div class="bg-white rounded-lg shadow p-4">
         <!-- <div class="flex justify-between items-center mb-6">
             <h1 class="text-3xl font-bold text-gray-800">候选人管理</h1>
             <button onclick="location.reload()" class="px-4 py-2 bg-gray-100 hover:bg-gray-200 rounded-lg transition">
@@ -171,7 +171,7 @@
     </div>
     
     <!-- Main content area: List + Detail -->
-    <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-4">
         <!-- Candidate list (left sidebar) -->
         <div class="lg:col-span-4">
             <div class="bg-white rounded-lg shadow-lg h-[1000px] overflow-y-auto">
@@ -214,7 +214,7 @@
         
         <!-- Candidate detail (right panel) -->
         <div class="lg:col-span-8">
-            <div id="detail-pane" class="bg-white rounded-lg shadow-lg p-6">
+            <div id="detail-pane" class="bg-white rounded-lg shadow-lg p-4">
                 <!-- Will be populated when candidate is selected -->
                 <div class="text-center text-gray-500 py-24">
                     <div class="text-6xl mb-4">👤</div>
@@ -224,4 +224,865 @@
         </div>
     </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// ============================================================================
+// Candidate Tabs Component
+// ============================================================================
+
+// Candidate tabs component
+function candidateTabs() {
+    return {
+        activeTab: 'recommend',
+        loading: false,
+        
+        init() {
+            // Read URL parameters on page load
+            this.restoreFromURL();
+            
+            // Listen for browser back/forward buttons
+            window.addEventListener('popstate', () => {
+                this.restoreFromURL();
+            });
+        },
+        
+        restoreFromURL() {
+            const urlParams = new URLSearchParams(window.location.search);
+            
+            // Set active tab from URL
+            const tab = urlParams.get('tab');
+            if (tab && ['recommend', 'greet', 'chat', 'followup'].includes(tab)) {
+                this.activeTab = tab;
+            }
+            
+            // Set thresholds from URL
+            const thresholdChat = urlParams.get('threshold_chat');
+            if (thresholdChat) {
+                const chatInput = document.getElementById('threshold-chat');
+                if (chatInput) chatInput.value = thresholdChat;
+            }
+            
+            const thresholdBorderline = urlParams.get('threshold_borderline');
+            if (thresholdBorderline) {
+                const borderlineInput = document.getElementById('threshold-borderline');
+                if (borderlineInput) borderlineInput.value = thresholdBorderline;
+            }
+            
+            const thresholdSeek = urlParams.get('threshold_seek');
+            if (thresholdSeek) {
+                const seekInput = document.getElementById('threshold-seek');
+                if (seekInput) seekInput.value = thresholdSeek;
+            }
+            
+            // Set job selector from URL (after jobs are loaded)
+            const jobId = urlParams.get('job_id');
+            if (jobId) {
+                // Wait for job selector to be populated
+                const checkJobSelector = setInterval(() => {
+                    const jobSelector = document.getElementById('job-selector');
+                    if (jobSelector && jobSelector.options.length > 1) {
+                        // Check if the job_id exists in options
+                        for (let option of jobSelector.options) {
+                            if (option.value === jobId) {
+                                jobSelector.value = jobId;
+                                clearInterval(checkJobSelector);
+                                break;
+                            }
+                        }
+                        clearInterval(checkJobSelector);
+                    }
+                }, 100);
+                
+                // Stop checking after 5 seconds
+                setTimeout(() => clearInterval(checkJobSelector), 5000);
+            }
+            
+            // Set limit from URL
+            const limit = urlParams.get('limit');
+            if (limit) {
+                const limitInput = document.getElementById('limit-input');
+                if (limitInput) limitInput.value = limit;
+            }
+        },
+        
+        updateURL() {
+            const params = new URLSearchParams();
+            
+            // Add tab
+            params.set('tab', this.activeTab);
+            
+            // Add thresholds
+            const thresholdChat = document.getElementById('threshold-chat')?.value;
+            if (thresholdChat) params.set('threshold_chat', thresholdChat);
+            
+            const thresholdBorderline = document.getElementById('threshold-borderline')?.value;
+            if (thresholdBorderline) params.set('threshold_borderline', thresholdBorderline);
+            
+            const thresholdSeek = document.getElementById('threshold-seek')?.value;
+            if (thresholdSeek) params.set('threshold_seek', thresholdSeek);
+            
+            // Add job_id
+            const jobSelector = document.getElementById('job-selector');
+            const jobId = jobSelector?.value;
+            if (jobId && jobId !== '加载中...') {
+                params.set('job_id', jobId);
+            }
+            
+            // Add limit
+            const limitInput = document.getElementById('limit-input');
+            const limit = limitInput?.value;
+            if (limit) {
+                params.set('limit', limit);
+            }
+            
+            // Update URL without page reload
+            const newURL = window.location.pathname + (params.toString() ? '?' + params.toString() : '');
+            window.history.pushState({}, '', newURL);
+        },
+        
+        switchTab(tab) {
+            // If the tab is already active, keep the list and do nothing
+            if (this.activeTab === tab) {
+                console.log(`[switchTab] Tab ${tab} is already active, keeping list`);
+                return;
+            }
+            
+            this.activeTab = tab;
+            // Reset selected candidate
+            // Clear list when switching tabs
+            const list = document.getElementById('candidate-list');
+            if (list) {
+                list.innerHTML = '';
+                // Re-add initial message
+                const initialMsg = document.createElement('div');
+                initialMsg.id = 'initial-message';
+                initialMsg.className = 'text-center text-gray-500 py-12';
+                initialMsg.textContent = '点击下方"查询候选人"按钮加载数据';
+                list.appendChild(initialMsg);
+            }
+            // Batch analyze button has been removed - no longer needed
+            // Update URL
+            this.updateURL();
+            // Automatically reload candidates when switching tabs
+            // this.loadCandidates();
+        },
+        
+        loadCandidates() {
+            
+            this.loading = true;
+            
+            const jobSelector = document.getElementById('job-selector');
+            const job_id = jobSelector?.value || jobSelector?.options[0]?.value;
+            const job_title = jobSelector?.selectedOptions[0]?.getAttribute("data-title");
+            
+            // Check if job title is valid
+            if (!job_title || job_title === '加载中...') {
+                console.error('Job title not loaded yet');
+                this.loading = false;
+                showToast('请等待岗位列表加载完成后再查询', 'warning');
+                return;
+            }
+            
+            let mode, chat_type;
+            if (this.activeTab === 'recommend') {
+                mode = 'recommend';
+                chat_type = '';
+            } else {
+                mode = this.activeTab; // Use the tab name directly as mode
+                const tabMap = {
+                    'greet': '新招呼',
+                    'chat': '沟通中',
+                    'followup': '牛人已读未回'
+                };
+                chat_type = tabMap[this.activeTab] || '新招呼';
+            }
+            
+            // Get limit from input
+            const limitInput = document.getElementById('limit-input');
+            const limit = limitInput?.value || '50';
+
+            const params = new URLSearchParams({
+                mode: mode,
+                chat_type: chat_type,
+                job_applied: job_title,
+                job_id: job_id,
+                limit: limit
+            });
+            
+            console.log('Loading candidates, activeTab:', this.activeTab, 'params:', params);
+            const url = `/candidates/list?${params.toString()}`;
+            console.log('Fetching:', url);
+            
+            const candidateList = document.getElementById('candidate-list');
+            
+            // Clear all non-candidate content (error messages, initial messages, empty messages)
+            // Keep only candidate cards if we're appending
+            const initialMsg = document.getElementById('initial-message');
+            if (initialMsg) {
+                initialMsg.remove();
+            }
+            const emptyMsg = document.getElementById('empty-message');
+            if (emptyMsg) {
+                emptyMsg.remove();
+            }
+            
+            // Remove any error messages (divs with text-red-500 or containing error indicators)
+            const errorMessages = candidateList.querySelectorAll('.text-red-500, [class*="error"], [class*="失败"]');
+            errorMessages.forEach(msg => {
+                // Only remove if it's not a candidate card
+                if (!msg.closest('.candidate-card')) {
+                    msg.remove();
+                }
+            });
+            
+            // Use a custom handler to detect errors and handle swap accordingly
+            fetch(url)
+                .then(async (response) => {
+                    const html = await response.text();
+                    const candidateList = document.getElementById('candidate-list');
+                    
+                    // Check if response is an error message
+                    if (!response.ok) {
+                        // Error: replace list content with error message
+                        candidateList.innerHTML = html;
+                        this.loading = false;
+                        showToast('获取候选人列表失败，请重试', 'error');
+                        return;
+                    }
+                    
+                    // Success: replace the entire list with new candidate cards
+                    // Use the HTML response directly
+                    candidateList.innerHTML = html;
+                    
+                    // Tell HTMX to process the new content
+                    htmx.process(candidateList);
+                    
+                    const loadedCount = candidateList.querySelectorAll('.candidate-card').length;
+                    console.log(`Loaded ${loadedCount} candidate cards`);
+                    
+                    this.loading = false;
+                    
+                    // Count how many candidates are in the list now - use a fresh query after all updates
+                    // Use requestAnimationFrame to ensure DOM is updated before counting
+                    const self = this;
+                    requestAnimationFrame(() => {
+                        const count = candidateList.querySelectorAll('.candidate-card').length;
+                        // Batch analyze button has been removed - no longer needed
+                        
+                        if (count === 0) {
+                            // Show empty state message
+                            const emptyMsg = document.createElement('div');
+                            emptyMsg.id = 'empty-message';
+                            emptyMsg.className = 'text-center text-gray-500 py-12';
+                            emptyMsg.innerHTML = `
+                                <div class="space-y-2">
+                                    <p class="text-lg">😔 未找到符合条件的候选人</p>
+                                    <p class="text-sm">请尝试切换标签或岗位</p>
+                                </div>
+                            `;
+                            candidateList.appendChild(emptyMsg);
+                            showToast('未找到候选人', 'warning');
+                        } else {
+                            // Remove empty message if it exists
+                            const emptyMsg = document.getElementById('empty-message');
+                            if (emptyMsg) {
+                                emptyMsg.remove();
+                            }
+                            
+                            // Show toast with count
+                            showToast(`加载完成，共 ${count} 个候选人`, 'success');
+                        }
+                    });
+                })
+                .catch((err) => {
+                    console.error('Failed:', err);
+                    this.loading = false;
+                    const candidateList = document.getElementById('candidate-list');
+                    candidateList.innerHTML = `
+                        <div class="text-center text-red-500 py-12">
+                            <p class="text-lg">❌ 请求失败</p>
+                            <p class="text-sm mt-2">${err.message}</p>
+                        </div>
+                    `;
+                    showToast('加载失败: ' + err.message, 'error');
+                });
+        }
+    };
+}
+
+// Global function for HTMX events to call updateURL
+window.updateCandidateURL = function() {
+    // First, restore job selector value from URL if it exists
+    const urlParams = new URLSearchParams(window.location.search);
+    const jobId = urlParams.get('job_id');
+    if (jobId) {
+        const jobSelector = document.getElementById('job-selector');
+        if (jobSelector && jobSelector.options.length > 1) {
+            // Check if the job_id exists in options
+            for (let option of jobSelector.options) {
+                if (option.value === jobId) {
+                    jobSelector.value = jobId;
+                    break;
+                }
+            }
+        }
+    }
+    
+    // Find the Alpine component instance
+    const candidateTabsElement = document.querySelector('[x-data*="candidateTabs"]');
+    if (candidateTabsElement && candidateTabsElement._x_dataStack) {
+        const component = candidateTabsElement._x_dataStack[0];
+        if (component && component.updateURL) {
+            component.updateURL();
+        }
+    }
+};
+
+// ============================================================================
+// Candidate Selection Management
+// ============================================================================
+
+// Visual state management for candidate cards
+document.body.addEventListener('htmx:beforeRequest', function(event) {
+    // Check if this is a candidate card click
+    const elt = event.detail.elt;
+    // Check if elt itself is a candidate-card, or if it's inside one
+    const card = elt.classList?.contains('candidate-card') ? elt : elt.closest('.candidate-card');
+    if (!card) {
+        return;  // Not a candidate card, allow request normally
+    }
+    
+    // Remove selected state from all cards
+    document.querySelectorAll('.candidate-card').forEach(c => {
+        c.classList.remove('bg-blue-50', 'border-blue-500', 'ring-2', 'ring-blue-300');
+        c.classList.add('border-gray-200');
+    });
+    
+    // Add selected state to clicked card
+    card.classList.remove('border-gray-200');
+    card.classList.add('bg-blue-50', 'border-blue-500', 'ring-2', 'ring-blue-300');
+    
+    // Scroll card into view in the left panel
+    card.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
+});
+
+// ============================================================================
+// Helper functions to disable/enable candidate cards
+// ============================================================================
+
+function disableAllCards() {
+    const cards = document.querySelectorAll('.candidate-card');
+    cards.forEach(card => {
+        card.style.pointerEvents = 'none';
+        card.style.opacity = '0.6';
+    });
+}
+
+function enableAllCards() {
+    const cards = document.querySelectorAll('.candidate-card');
+    cards.forEach(card => {
+        card.style.pointerEvents = '';
+        card.style.opacity = '';
+    });
+}
+// 将函数暴露到 window 对象
+window.disableAllCards = disableAllCards;
+window.enableAllCards = enableAllCards;
+
+// ============================================================================
+// Batch Processing Functions
+// ============================================================================
+
+// Global flags for batch processing control
+window.batchProcessingActive = false;
+window.stopBatchProcessing = false;
+
+/**
+ * Check if currently on the candidate page
+ */
+function isOnCandidatePage() {
+    return window.location.pathname.includes('/candidates') || 
+           window.location.pathname === '/candidates';
+}
+
+/**
+ * Check if batch processing should be cancelled
+ * Returns true if we should stop processing
+ * Only checks page navigation, not tab visibility
+ */
+function shouldCancelBatchProcessing() {
+    // Check if not on candidate page
+    if (!isOnCandidatePage()) {
+        return true;
+    }
+    
+    // Don't cancel based on tab visibility - allow switching tabs
+    return false;
+}
+
+/**
+ * Process all candidate cards sequentially
+ */
+window.processAllCandidates = async function processAllCandidates() {
+    const cards = document.querySelectorAll('.candidate-card');
+    if (cards.length === 0) {
+        showToast('没有找到候选人', 'warning');
+        return;
+    }
+    
+    // Find the currently selected card (has blue selection classes)
+    // If found, start from next; otherwise start from beginning
+    let startIndex = 0;
+    const selectedCard = Array.from(cards).find(card => 
+        card.classList.contains('bg-blue-50') || 
+        card.classList.contains('border-blue-500')
+    );
+    if (selectedCard) {
+        const selectedIndex = Array.from(cards).indexOf(selectedCard);
+        startIndex = selectedIndex + 1; // Start from next card
+        if (startIndex >= cards.length) {
+            showToast('当前已是最后一个候选人，将从第一个开始', 'info');
+            startIndex = 0;
+        }
+    }
+    
+    const total = cards.length;
+    const remaining = total - startIndex;
+    let processed = 0;
+    let failed = 0;
+    let skipped = 0; // Count skipped candidates (viewed)
+    
+    // Set batch processing flag
+    window.batchProcessingActive = true;
+    window.stopBatchProcessing = false;
+    
+    // Disable all candidate cards
+    disableAllCards();
+    
+    // Update cycle reply button to show stop state
+    let cycleReplyBtn = document.getElementById('cycle-reply-btn');
+    if (cycleReplyBtn) {
+        cycleReplyBtn.textContent = '⏸ 停止处理';
+    }
+    
+    if (startIndex > 0) {
+        showToast(`开始批量处理 ${remaining} 个候选人 (从第 ${startIndex + 1} 个开始)`, 'info');
+    } else {
+        showToast(`开始批量处理 ${total} 个候选人`, 'info');
+    }
+    
+    for (let i = startIndex; i < cards.length; i++) {
+        // Check if user requested stop
+        if (window.stopBatchProcessing) {
+            showToast(`批量处理已停止 (${processed}/${total} 完成)`, 'warning');
+            break;
+        }
+        
+        // Check if we should cancel due to page/tab change
+        if (shouldCancelBatchProcessing()) {
+            // Only show toast if it's a page navigation, not tab visibility change
+            if (!isOnCandidatePage()) {
+                showToast(`批量处理已取消 (已离开候选人页面)`, 'warning');
+            }
+            window.stopBatchProcessing = true;
+            break;
+        }
+        
+        const card = cards[i];
+        const cardData = JSON.parse(card.getAttribute('hx-vals'));
+        const candidate = cardData.candidate || {};
+        const name = candidate.name || cardData.name || `候选人 ${i + 1}`;
+        const currentPosition = i + 1;
+        
+        // Skip if candidate is already viewed
+        if (candidate.viewed === true || candidate.viewed === 'true') {
+            skipped++;
+            console.log(`[批量处理] 跳过已查看的候选人: ${name} (${skipped} 已跳过)`);
+            continue;
+        }
+        
+        showToast(`正在处理候选人 ${currentPosition}/${total}: ${name}`, 'info');
+        
+        try {
+            // Get detailPane reference - check if it exists and is stable
+            let detailPane = document.getElementById('detail-pane');
+            if (!detailPane) {
+                throw new Error('Detail pane not found');
+            }
+            
+            // Set up event listeners BEFORE triggering HTMX click
+            // This ensures we catch the event even if process_candidate() completes quickly
+            const processingPromise = new Promise((resolve, reject) => {
+                const timeout = setTimeout(() => {
+                    document.removeEventListener('candidate:processing-complete', onComplete);
+                    document.removeEventListener('candidate:processing-error', onError);
+                    reject(new Error('Processing timeout (180s)'));
+                }, 180000); // 180s timeout to avoid hanging batch loops
+                
+                const onComplete = (event) => {
+                    clearTimeout(timeout);
+                    document.removeEventListener('candidate:processing-complete', onComplete);
+                    document.removeEventListener('candidate:processing-error', onError);
+                    resolve(event.detail);
+                };
+                
+                const onError = (event) => {
+                    clearTimeout(timeout);
+                    document.removeEventListener('candidate:processing-complete', onComplete);
+                    document.removeEventListener('candidate:processing-error', onError);
+                    // Stop batch processing on processing error
+                    window.stopBatchProcessing = true;
+                    reject(new Error(event.detail.error || 'Processing failed'));
+                };
+                
+                document.addEventListener('candidate:processing-complete', onComplete, { once: true });
+                document.addEventListener('candidate:processing-error', onError, { once: true });
+            });
+            
+            // Wait for HTMX swap to complete
+            await new Promise((resolve, reject) => {
+                const timeout = setTimeout(() => {
+                    cleanup();
+                    reject(new Error('HTMX swap timeout'));
+                }, 1000); // 1 second timeout for swap
+                
+                const cleanup = () => {
+                    clearTimeout(timeout);
+                    detailPane.removeEventListener('htmx:afterSwap', onSwap);
+                    detailPane.removeEventListener('htmx:responseError', onResponseError);
+                    detailPane.removeEventListener('htmx:sendError', onSendError);
+                    detailPane.removeEventListener('htmx:swapError', onSwapError);
+                };
+                
+                const onSwap = () => {
+                    cleanup();
+                    // Wait a bit for DOM to be ready
+                    setTimeout(resolve, 200);
+                };
+                
+                const onResponseError = (evt) => {
+                    cleanup();
+                    // Stop event propagation to prevent global handler from catching it
+                    evt.stopPropagation();
+                    const errorMsg = evt.detail?.error || evt.detail?.message || 'HTMX request failed';
+                    reject(new Error(errorMsg));
+                };
+                
+                const onSendError = (evt) => {
+                    cleanup();
+                    // Stop event propagation to prevent global handler from catching it
+                    evt.stopPropagation();
+                    const errorMsg = evt.detail?.error || evt.detail?.message || evt.detail?.failed || 'HTMX send failed';
+                    reject(new Error(errorMsg));
+                };
+                
+                const onSwapError = (evt) => {
+                    cleanup();
+                    // Stop event propagation to prevent global handler from catching it
+                    evt.stopPropagation();
+                    const errorMsg = evt.detail?.error || evt.detail?.message || 'HTMX swap failed';
+                    reject(new Error(errorMsg));
+                };
+                
+                detailPane.addEventListener('htmx:afterSwap', onSwap, { once: true });
+                detailPane.addEventListener('htmx:responseError', onResponseError, { once: true });
+                detailPane.addEventListener('htmx:sendError', onSendError, { once: true });
+                detailPane.addEventListener('htmx:swapError', onSwapError, { once: true });
+                
+                // Scroll card into view before triggering click
+                card.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
+                
+                // Trigger HTMX click (htmx:beforeRequest will handle highlighting)
+                htmx.trigger(card, 'click');
+            });
+            
+            // Wait for process_candidate() to complete
+            await processingPromise;
+            
+            // Check again after processing completes
+            if (shouldCancelBatchProcessing()) {
+                // Only show toast if it's a page navigation, not tab visibility change
+                if (!isOnCandidatePage()) {
+                    showToast(`批量处理已取消 (已离开候选人页面)`, 'warning');
+                }
+                window.stopBatchProcessing = true;
+                break;
+            }
+            
+            processed++;
+            // Update last processed time for cycle reply idle timeout
+            if (window.cycleReplyState) {
+                window.cycleReplyState.lastProcessedTime = Date.now();
+            }
+            showToast(`✅ ${name} 处理完成 (${processed}/${total})`, 'success');
+        } catch (error) {
+            failed++;
+            const errorMessage = error?.message || error?.toString() || '未知错误';
+            console.error(`Failed to process candidate ${i + 1}:`, error);
+            
+            // Check if it's a connection/network error (transient error)
+            const isConnectionError = errorMessage.includes('ERR_CONNECTION_REFUSED') ||
+                                     errorMessage.includes('Connection refused') ||
+                                     errorMessage.includes('HTMX') ||
+                                     errorMessage.includes('network') ||
+                                     errorMessage.includes('NetworkError') ||
+                                     errorMessage.includes('Failed to fetch');
+            
+            if (isConnectionError) {
+                showToast(`⚠️ ${name} 连接失败，跳过: ${errorMessage}`, 'warning');
+            } else {
+                showToast(`❌ ${name} 处理失败: ${errorMessage}`, 'error');
+            }
+            
+            // Stop batch processing only if explicitly requested, otherwise continue
+            if (window.stopBatchProcessing) {
+                showToast(`批量处理已停止 (${processed}/${total} 完成, ${failed} 失败)`, 'warning');
+                break;
+            }
+            // Otherwise continue to next candidate
+        }
+    }
+    
+    // Re-enable candidate cards
+    enableAllCards();
+    
+    // Reset batch processing flag
+    window.batchProcessingActive = false;
+    window.stopBatchProcessing = false;
+    
+    // Reset cycle reply button
+    cycleReplyBtn = document.getElementById('cycle-reply-btn');
+    if (cycleReplyBtn) {
+        cycleReplyBtn.textContent = '🔄 开始处理';
+    }
+    
+    // Final summary
+    const summary = `批量处理完成: 成功 ${processed}/${total}, 失败 ${failed}${skipped > 0 ? `, 跳过 ${skipped}` : ''}`;
+    showToast(summary, processed === total ? 'success' : 'warning');
+}
+
+function stopBatchProcessingHandler() {
+    window.stopBatchProcessing = true;
+    const cycleBtn = document.getElementById('cycle-reply-btn');
+    if (cycleBtn) {
+        cycleBtn.textContent = '⏹️ 正在停止...';
+    }
+    showToast('正在停止批量处理...', 'info');
+}
+
+// ============================================================================
+// Batch Processing Cancellation Listeners
+// ============================================================================
+
+// Don't cancel batch processing when tab becomes hidden - allow switching tabs
+// Batch processing will continue in the background
+
+// Cancel batch processing when navigating away from candidate page
+// Check after HTMX swaps complete
+document.body.addEventListener('htmx:afterSwap', () => {
+    if (window.batchProcessingActive && !isOnCandidatePage()) {
+        window.stopBatchProcessing = true;
+        showToast('批量处理已取消 (已离开候选人页面)', 'warning');
+    }
+});
+
+// Cancel batch processing on browser navigation (back/forward)
+window.addEventListener('popstate', () => {
+    if (window.batchProcessingActive && !isOnCandidatePage()) {
+        window.stopBatchProcessing = true;
+        showToast('批量处理已取消 (已离开候选人页面)', 'warning');
+    }
+});
+
+// Cancel batch processing on page unload
+window.addEventListener('beforeunload', () => {
+    if (window.batchProcessingActive) {
+        window.stopBatchProcessing = true;
+    }
+});
+
+// ============================================================================
+// Candidate Card Update Functions
+// ============================================================================
+
+/**
+ * Update a candidate card with the given updates
+ */
+function applyCardUpdate(card, updates, identifiers) {
+    // Parse hx-vals which has structure: {"candidate": {...}}
+    const hxValsData = JSON.parse(card.getAttribute('hx-vals') || '{"candidate": {}}');
+    const cardData = hxValsData.candidate || {};
+    
+    // Update the card's candidate data
+    Object.assign(cardData, updates);
+    Object.assign(cardData, identifiers);
+    
+    // Apply updates - maintain the {"candidate": {...}} structure
+    card.setAttribute('hx-vals', JSON.stringify({ candidate: cardData }));
+    
+    // Update viewed state (opacity of entire card)
+    if ('viewed' in updates) {
+        if (updates.viewed) {
+            card.classList.add('opacity-60');
+        } else {
+            card.classList.remove('opacity-60');
+        }
+    }
+    
+    // Update stage badge
+    if ('stage' in updates) {
+        const stageBadge = card.querySelector('[data-badge="stage"]');
+        if (stageBadge) {
+            // Set base classes if not already set
+            if (!stageBadge.className.includes('inline-flex')) {
+                stageBadge.className = 'inline-flex items-center px-2 py-0.5 text-xs font-medium rounded-full shrink-0';
+            }
+            
+            let stageEmoji = '';
+            let stageClasses = '';
+            
+            switch (updates.stage) {
+                case 'CHAT':
+                    stageEmoji = '💬';
+                    stageClasses = 'bg-blue-100 text-blue-700';
+                    break;
+                case 'SEEK':
+                    stageEmoji = '✅';
+                    stageClasses = 'bg-yellow-100 text-yellow-700';
+                    break;
+                case 'CONTACT':
+                    stageEmoji = '⭐';
+                    stageClasses = 'bg-emerald-100 text-emerald-700';
+                    break;
+                case 'PASS':
+                    stageEmoji = '❌';
+                    stageClasses = 'bg-red-100 text-red-700';
+                    break;
+                default:
+                    stageEmoji = '';
+                    stageClasses = 'bg-gray-100 text-gray-700';
+            }
+            
+            // Remove old stage color classes and add new one
+            stageBadge.className = stageBadge.className.replace(/\b(bg-(blue|yellow|emerald|green|red|gray)-100 text-(blue|yellow|emerald|green|red|gray)-700)\b/g, '');
+            stageBadge.className += ' ' + stageClasses;
+            stageBadge.textContent = stageEmoji;
+            
+            if (updates.stage) {
+                stageBadge.classList.remove('hidden');
+            } else {
+                stageBadge.classList.add('hidden');
+            }
+        }
+        // If stageBadge doesn't exist, silently skip the update
+    }
+    
+    // Update tags (greeted, saved, and notified - viewed is handled by card opacity)
+    const tagsContainer = card.querySelector('#candidate-tags');
+    // Update greeted tag
+    if ('greeted' in updates) {
+        const greetedTag = tagsContainer.querySelector('[data-tag="greeted"]');
+        if (greetedTag) {
+            if (updates.greeted) {
+                greetedTag.classList.remove('hidden');
+            } else {
+                greetedTag.classList.add('hidden');
+            }
+        }
+    }
+    
+    // Update saved tag
+    if ('saved' in updates) {
+        const savedTag = tagsContainer.querySelector('[data-tag="saved"]');
+        if (savedTag) {
+            if (updates.saved) {
+                savedTag.classList.remove('hidden');
+            } else {
+                savedTag.classList.add('hidden');
+            }
+        }
+    }
+    
+    // Update notified tag
+    if ('notified' in updates) {
+        const notifiedTag = tagsContainer.querySelector('[data-tag="notified"]');
+        if (notifiedTag) {
+            if (updates.notified) {
+                notifiedTag.classList.remove('hidden');
+            } else {
+                notifiedTag.classList.add('hidden');
+            }
+        }
+    }
+    
+    // Update score badge
+    if ('score' in updates) {
+        const cardContainer = card.querySelector('#candidate-card-content');
+        const scoreBadge = cardContainer?.querySelector('[data-badge="score"]');
+        if (updates.score !== null && updates.score !== undefined) {
+            scoreBadge.textContent = updates.score.toString();
+            scoreBadge.classList.remove('hidden');
+        } else {
+            scoreBadge.classList.add('hidden');
+        }
+    }
+    
+    // Update last_message/generated_message display: 
+    // last_message is only for the first time loaded from website, 
+    // generated_message is for the updated message generated by the assistant
+    if ('generated_message' in updates) {
+        // Find the last_message paragraph element (the one with text-xs text-gray-500 mt-1 line-clamp-2 classes)
+        // Try multiple selector approaches for robustness
+        let lastMessageElement = card.querySelector('#last-message');
+        if (lastMessageElement) {
+            lastMessageElement.textContent = updates.generated_message || '暂无消息';
+        }
+    }
+}
+
+// Centralized event listener for candidate updates
+document.addEventListener('candidate:update', function(event) {
+    const { identifiers = {}, updates = {} } = event.detail || {};
+    const candidateCards = document.querySelectorAll('.candidate-card');
+    
+    // Convert NodeList to Array
+    const cardsArray = Array.from(candidateCards);
+    
+    // Find matching card by identifiers
+    let card = cardsArray.find(c => {
+        const hxVals = c.getAttribute('hx-vals');
+        const data = JSON.parse(hxVals);
+        const candidateData = data.candidate || data;
+        return idMatched(candidateData, identifiers);
+    });
+
+    if (!card) {
+        console.warn('candidate:update: no matching card found', identifiers);
+        return;
+    }
+    
+    applyCardUpdate(card, updates, identifiers);
+});
+
+/**
+ * Helper function to check if identifiers match
+ */
+function idMatched(data, identifiers) {
+    if (identifiers.candidate_id && data.candidate_id === identifiers.candidate_id) {
+        return true;
+    }
+    if (identifiers.chat_id && data.chat_id === identifiers.chat_id) {
+        return true;
+    }
+    if (identifiers.name && data.name === identifiers.name) {
+        return true;
+    }
+    if (identifiers.index && data.index === identifiers.index) {
+        return true;
+    }
+    return false;
+}
+</script>
 {% endblock %}
