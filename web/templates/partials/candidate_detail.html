@@ -421,7 +421,7 @@ async function greetAndSendMessage(autoSend = true) {
         stage,
     };
     if (message === '') {
-        showToast('消息长度不能为空', 'error');
+        // showToast('消息长度不能为空', 'error');
         return;
     }
     // if not auto send and not recommend mode, skip sending message
@@ -462,7 +462,6 @@ async function startAnalysis() {
     } else if(has_online_resume) {
         showToast('正在分析在线简历...', 'info');
     } else {
-        debugger;
         throw new Error('没有可分析的简历,请先请求简历');
     }
     
@@ -706,7 +705,7 @@ async function updateCandidateData(data) {
         const messageTextArea = document.getElementById('message-text')
         messageTextArea.value = data.generated_message;
         messageTextArea.textContent = data.generated_message;
-        delete data.generated_message;
+        // delete data.generated_message; //保留generated_message，用于更新UI
     }
 
     // Get current data from hx-vals

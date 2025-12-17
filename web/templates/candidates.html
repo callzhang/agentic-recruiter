@@ -103,25 +103,22 @@
                 📭 牛人已读未回
             </button>
             </div>
-            <!-- Top-right controls: Auto-send checkbox and Batch analyze button -->
+            <!-- Top-right controls: Auto-send checkbox and Process button -->
             <div class="flex items-center gap-4">
                 <label class="flex items-center space-x-2 cursor-pointer">
                     <input type="checkbox" id="auto-send-checkbox" checked class="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500">
                     <span class="text-sm text-gray-700 font-medium">自动发送</span>
                 </label>
-                <button 
-                    id="batch-analyze-btn"
-                    onclick="if (typeof processAllCandidates === 'function') { processAllCandidates(); } else { showToast('请先选择一个候选人以加载批处理功能', 'warning'); }"
-                    title="批处理将按以下步骤自动处理每个候选人：&#10;1. 加载在线简历（如未加载）&#10;2. 初始化对话（如未初始化）&#10;3. 进行AI分析（如未分析）&#10;4. 根据匹配度阈值：&#10;   - 达到沟通阈值：生成消息&#10;   - 达到及格线：获取完整简历并重新分析（沟通中模式）或发送招呼（推荐模式）&#10;5. 更新候选人卡片状态"
-                    class="hidden px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition disabled:opacity-50 disabled:cursor-not-allowed">
-                    全部分析
-                </button>
+                <label class="flex items-center space-x-2 cursor-pointer">
+                    <input type="checkbox" id="process-all-modes-checkbox" class="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500">
+                    <span class="text-sm text-gray-700 font-medium">处理所有模式</span>
+                </label>
                 <button 
                     id="cycle-reply-btn"
                     onclick="startCycleReply()"
-                    title="循环处理：自动循环处理所有模式的候选人&#10;&#10;功能说明：&#10;• 自动循环切换4个模式（推荐牛人、新招呼、沟通中、牛人已读未回）&#10;• 智能查询：列表为空时自动查询，已有候选人时跳过查询&#10;• 全部分析：对每个模式的候选人执行完整处理流程&#10;• 自动等待：等待当前模式处理完成后再切换下一个模式&#10;• 错误处理：遇到错误时自动停止循环&#10;• 手动控制：再次点击可随时停止循环&#10;&#10;提示：确保已选择岗位并设置好阈值参数"
+                    title="处理候选人：&#10;&#10;• 未勾选"处理所有模式"：只处理当前模式的候选人&#10;• 勾选"处理所有模式"：自动循环处理所有4个模式（推荐牛人、新招呼、沟通中、牛人已读未回）&#10;&#10;处理流程：&#10;1. 加载在线简历（如未加载）&#10;2. 初始化对话（如未初始化）&#10;3. 进行AI分析（如未分析）&#10;4. 根据匹配度阈值生成消息或发送招呼&#10;5. 更新候选人卡片状态&#10;&#10;提示：确保已选择岗位并设置好阈值参数"
                     class="px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition disabled:opacity-50 disabled:cursor-not-allowed">
-                    🔄 循环处理
+                    🔄 开始处理
                 </button>
             </div>
         </div>
