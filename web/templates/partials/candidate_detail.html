@@ -143,7 +143,7 @@
             {% if analysis %}
                 {% include 'partials/analysis_result.html' %}
             {% else %}
-            <div class="text-center py-8 text-gray-500">⏳ 等待简历加载完成后自动分析...</div>
+            <div class="text-center p-4 text-gray-500">⏳ 等待简历加载完成后自动分析...</div>
             {% endif %}
         </div>
     </div>
@@ -550,6 +550,10 @@ async function requestContact() {
         showToast('推荐模式不支持请求联系方式', 'info');
         return;
     }
+    // 如果已有联系方式，则不重复请求
+    if (values.metadata?.phone_number || values.metadata?.wechat_number) {
+        return;
+    }
     
     showToast('请求联系方式...', 'info');
     
@@ -705,7 +709,7 @@ async function updateCandidateData(data) {
         const messageTextArea = document.getElementById('message-text')
         messageTextArea.value = data.generated_message;
         messageTextArea.textContent = data.generated_message;
-        // delete data.generated_message; //保留generated_message，用于更新UI
+        // delete data.generated_message; //保留generated_message，用于更新UI，同时保留last_message不变
     }
 
     // Get current data from hx-vals
