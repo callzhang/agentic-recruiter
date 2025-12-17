@@ -1,8 +1,7 @@
 {
   "version": 2,
-  "buildCommand": null,
   "outputDirectory": "public",
-  "ignore": ["package.json"],
+
   "rewrites": [
     {
       "source": "/api/jobs/(.*)",
