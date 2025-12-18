@@ -291,7 +291,6 @@ async function process_candidate() {
         if (!conversation_id) {
             await initializeNewChat();
         }
-        
         // Step 3: Start analysis if pending
         const analysisDiv = document.getElementById('analysis-content');
         if (analysisDiv.textContent.includes('⏳')) {
@@ -453,35 +452,33 @@ async function greetAndSendMessage() {
     const autoSend = document.getElementById('auto-send-checkbox')?.checked ?? true;
     const message_textarea = document.getElementById('message-text');
     const message = autoSend ? message_textarea.value.trim() : '';
-    let stage = getCandidateData('stage');
-    const greeted = getCandidateData('greeted');
-    const mode = getCandidateData('mode');
-    const chat_id = getCandidateData('chat_id');
-    const index = getCandidateData('index');
-    if (stage === 'PASS') {
-        stage = 'CHAT';
-    }
-    const values = {
-        mode,
-        chat_id,
-        index,
-        message,
-        stage,
-    };
+    let values = getCandidateData();
     if (message === '') {
-        // showToast('消息长度不能为空', 'error');
+        console.error('消息长度不能为空');
         return;
     }
-    // if mode is other thanrecommend and auto send is false, skip sending message
-    if (mode !== 'recommend' && !autoSend) {
-        return;
+    values.message = message;
+    // Remove keys with null or undefined values
+    values = Object.fromEntries(
+        Object.entries(values).filter(([key, value]) => value !== null && value !== undefined)
+    );
+
+    // check if we should send message
+    if (!autoSend) {
+        if (mode === 'recommend') {
+            values.message = '';// if mode is thanrecommend and auto send is false, greet only
+        } else {
+            return; // skip sending message if auto send is false and mode is not recommend
+        }
     }
+
+    // send message
     await htmxAjaxPromise('POST', '/candidates/send', {
         target: '#message-content',
         swap: 'none',
         values: values
     });
-    
+
     // Show browser notification after successful message send
     const candidateName = getCandidateData('name') || '候选人';
     const notificationTitle = `已向 ${candidateName} 发送消息`;
