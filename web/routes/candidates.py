@@ -13,7 +13,7 @@ from typing import Any, Dict, Optional
 import difflib
 from dateutil import parser as date_parser
 
-from fastapi import APIRouter, BackgroundTasks, Form, Query, Request, Response, Body
+from fastapi import APIRouter, BackgroundTasks, Form, Query, Request, Response, Body, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from tenacity import retry, stop_after_attempt, wait_exponential
@@ -163,7 +163,7 @@ async def list_candidates(
     for i, candidate in enumerate(candidates):
         candidate["mode"] = mode
         candidate["job_id"] = job_id
-        candidate["index"] = i
+        # candidate["index"] = i
         candidate["saved"] = False
         # match stored candidate by chat_id, or name + job_applied
         stored_candidate = next((c for c in stored_candidates if \
@@ -419,6 +419,7 @@ async def generate_message(
     chat_id: Optional[str] = Form(None),
     conversation_id: str = Form(...),
     purpose: str = Form(...),
+    index: Optional[int] = Form(None),
 ):
     """Generate message for candidate. Requires conversation_id to be initialized first."""
     # Get chat history
@@ -476,7 +477,9 @@ async def generate_message(
         pass_reason = message.split('<PASS>: ')[1]
         logger.warning(f"候选人 {name} 判断为不合适，理由: {pass_reason}")
         upsert_candidate(candidate_id=candidate_id, stage=STAGE_PASS)
-        if mode != "recommend":
+        if mode == "recommend":
+            result = await recommendation_actions.pass_recommend_candidate_action(page, index)
+        else:
             result = await chat_actions.discard_candidate_action(page, chat_id)
         return HTMLResponse(
             content=f'''
@@ -759,26 +762,24 @@ async def fetch_full_resume(
         )
 
 
-@router.post("/pass", response_class=HTMLResponse)
+@router.post("/pass")
 async def pass_candidate(
-    chat_id: str = Form(...),
-    candidate_id: str = Form(...),
+    mode: str = Body(...),
+    index: int = Body(None),
+    chat_id: str = Body(None),
+    candidate_id: str = Body(...),
 ):
     """Mark candidate as PASS and move to next."""
     page = await boss_service.service._ensure_browser_session()
-    result = await chat_actions.discard_candidate_action(page, chat_id)
+    if mode == "recommend":
+        result = await recommendation_actions.pass_recommend_candidate_action(page, index)
+    else:
+        result = await chat_actions.discard_candidate_action(page, chat_id)
     
     if result:
-        upsert_candidate( candidate_id=candidate_id, chat_id=chat_id, stage=STAGE_PASS)
-        return HTMLResponse(
-            content='<div class="text-green-600">✅ 已标记为 PASS</div>',
-            headers={"HX-Trigger": "candidateUpdated"}
-        )
+        return {"success": True, "message": "已标记为 PASS"}
     else:
-        return HTMLResponse(
-            content='<div class="text-red-500">❌ PASS 操作失败</div>',
-            status_code=500
-        )
+        raise HTTPException(status_code=500, detail="PASS 操作失败")
 
 
 @router.post("/request-contact")
@@ -876,7 +877,7 @@ def candidate_matched(candidate: Dict[str, Any], stored_candidate: Dict[str, Any
     if updated_at.tzinfo is not None:
         updated_at = updated_at.replace(tzinfo=None)
     if chat_id is None and chat_id2 and updated_at < (datetime.now() - timedelta(days=3)):
-        logger.info(f"there should be no chat_id in recommend mode, current candidate:\n{candidate.get('name')} v.s. chat_id: {chat_id2}")
+        logger.info(f"there should be no chat_id in recommend mode, current candidate:\n{candidate.get('name')}<->{stored_candidate.get('name')}: chat_id: {chat_id2}")
         return False
     elif mode == "recommend" and last_message and last_message2:
         from difflib import SequenceMatcher

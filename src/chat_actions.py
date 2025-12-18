@@ -225,10 +225,10 @@ async def discard_candidate_action(page: Page, chat_id: str) -> bool:
     # wait for dialog to be deleted
     max_attempts = 10
     for _ in range(max_attempts):
+        await not_fit_button.click()
+        await page.wait_for_timeout(1000)
         if not await _go_to_chat_dialog(page, chat_id):
             return True  # Successfully discarded
-        await not_fit_button.click()
-        await page.wait_for_timeout(500)
     
     # If we get here, the dialog wasn't deleted
     raise RuntimeError("PASS失败: 未删除对话")

@@ -139,10 +139,12 @@ async def list_recommended_candidates_action(page: Page, *, limit: int = 999, jo
         card = cards.nth(index)
         # await card.hover(timeout=3000)
         classes = await card.get_attribute("class") or ""
+        if 'unsuited' in classes:
+            continue
         viewed = "viewed" in classes
         greeted = await card.locator("button:has-text('继续沟通')").count() > 0
-        name = (await card.locator("span.name").inner_text()).strip()
-        text = (await card.inner_text()).strip().replace('\n', ' ')
+        name = (await card.locator("span.name").inner_text(timeout=500)).strip()
+        text = (await card.inner_text(timeout=500)).strip().replace('\n', ' ')
         
         # Create candidate dict with standardized field names for web UI
         if not new_only or not viewed:
@@ -369,6 +371,21 @@ async def apply_filters(frame: Frame, filters: Dict[str, Any]) -> bool:
     
     return True
     
+
+# @retry(stop=stop_after_attempt(2), wait=wait_fixed(1))
+async def pass_recommend_candidate_action(page: Page, index: int) -> bool:
+    """Pass a recommendation candidate. Returns True on success, raises ValueError on failure."""
+    frame = await _prepare_recommendation_page(page)
+    card = frame.locator(CANDIDATE_CARD_SELECTOR).nth(index)
+    pass_btn = card.locator("div.suitable:has-text('不感兴趣')").first
+    if await pass_btn.count() > 0:
+        await card.hover(timeout=3000)
+        await pass_btn.hover(timeout=3000)
+        await pass_btn.click(timeout=3000)
+        return True
+    else:
+        raise RuntimeError("未找到“不感兴趣”按钮")
+
 
 __all__ = [
     "_prepare_recommendation_page",

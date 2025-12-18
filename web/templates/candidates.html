@@ -766,6 +766,35 @@ document.addEventListener('candidates:enable-cards', function(event) {
     enableAllCards();
 });
 
+// Event listener for removing candidate card with fade out animation
+document.addEventListener('candidate:remove', function(event) {
+    const { identifiers = {} } = event.detail || {};
+    const candidateCards = document.querySelectorAll('.candidate-card');
+    const cardsArray = Array.from(candidateCards);
+    
+    // Find matching card by identifiers
+    const card = cardsArray.find(c => {
+        const hxVals = c.getAttribute('hx-vals');
+        const data = JSON.parse(hxVals);
+        const candidateData = data.candidate || data;
+        return idMatched(candidateData, identifiers);
+    });
+    
+    if (!card) {
+        console.warn('candidate:remove: no matching card found', identifiers);
+        return;
+    }
+    
+    // Add fade out animation
+    card.style.transition = 'opacity 0.3s ease-out';
+    card.style.opacity = '0';
+    
+    // Remove card after animation completes
+    setTimeout(() => {
+        card.remove();
+    }, 300);
+});
+
 /**
  * Helper function to check if identifiers match
  */

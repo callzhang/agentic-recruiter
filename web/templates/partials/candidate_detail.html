@@ -180,10 +180,7 @@
                     class="px-4 py-1 bg-green-600 text-white text-sm rounded hover:bg-green-800">
                 📤 打招呼+发送消息
             </button>
-            <button hx-post="/candidates/pass"
-                    hx-vals='{{ candidate | tojson | safe }}'
-                    hx-target="body"
-                    hx-swap="none"
+            <button onclick="passCandidate()"
                     class="px-4 py-1 bg-gray-600 text-white text-sm rounded hover:bg-gray-800">
                 ❌ PASS
             </button>
@@ -330,7 +327,6 @@ async function process_candidate() {
                 }
             // Step 4c: Send notification if candidate send new message or analysis was updated
             if (need_reply) {
-                debugger;
                 await generateMessage(force = true);
                 await greetAndSendMessage();
                 need_reply = false;
@@ -340,6 +336,10 @@ async function process_candidate() {
                     await requestContact();
                 }
             }
+        }
+        // step 5: PASS candidate if score is below 5/10
+        if (current_score <= 4) {
+            passCandidate();
         }
         // Update stage and card
         await updateCandidateData({
@@ -702,6 +702,47 @@ function determineStage() {
         stage = 'CHAT';
     }
     return [stage, overall, analysis];
+}
+
+async function passCandidate() {
+    url = '/candidates/pass';
+    const values = getCandidateData();
+    const chat_id = values.chat_id;
+    const candidate_id = values.candidate_id;
+    const index = values.index;
+    const mode = values.mode;
+    const response = await fetch(url, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ 
+            mode: mode,
+            index: index,
+            chat_id: chat_id,
+            candidate_id: candidate_id
+        })
+    });
+    try{
+        const data = await window.handleApiResponse(response);
+        console.log('Candidate passed:', data);
+        await updateCandidateData({stage: 'PASS'});
+    } catch (error) {
+        console.error('Failed to pass candidate:', error);
+    }
+    
+    // Remove card with fade out animation
+    const identifiers = {
+        chat_id: chat_id,
+        candidate_id: candidate_id,
+        conversation_id: values.conversation_id,
+        index: index
+    };
+    
+    // Dispatch event to remove card with animation
+    const event = new CustomEvent('candidate:remove', {
+        detail: { identifiers: identifiers }
+    });
+    document.dispatchEvent(event);
+    showToast(`候选人${values.name}已标记为 PASS`, 'success');
 }
 
 
