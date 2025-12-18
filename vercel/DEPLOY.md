@@ -1,5 +1,16 @@
 # Quick Deployment Guide
 
+## 概述
+
+Vercel 部署使用 `BaseHTTPRequestHandler` 模式（而非 FastAPI），提供更好的 JSON 序列化控制和 Vercel Python runtime 兼容性。
+
+**主要 API 端点**:
+- `/api/stats` - 统计和报告 API
+- `/api/jobs` - 岗位管理 API  
+- `/api/candidate` - 候选人详情 API
+
+所有 API 使用 `BaseHTTPRequestHandler` 实现，自动处理 JSON 序列化（包括 Milvus 返回的 bytes 键问题）。
+
 ## Prerequisites
 
 1. Vercel account (free tier works)
@@ -100,6 +111,15 @@ If statistics are not loading:
 2. Verify collection names match environment variables
 3. Check Vercel function logs for calculation errors
 4. Ensure numpy is properly installed (check `requirements.txt`)
+
+### JSON Serialization Errors (TypeError: keys must be str...)
+
+If you see `TypeError: keys must be str, int, float, bool or None, not bytes`:
+
+1. This is automatically handled by `_json_safe()` function in `vercel/api/stats.py`
+2. The function recursively cleans Milvus results, converting bytes keys to strings
+3. If errors persist, check Vercel function logs for detailed error messages
+4. Ensure all Milvus query results are passed through `_json_safe()` before serialization
 
 ### Jobs API Errors
 

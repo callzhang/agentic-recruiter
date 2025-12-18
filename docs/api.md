@@ -15,7 +15,7 @@ Boss直聘自动化机器人 REST API 文档
 
 ## 基础信息
 
-**当前版本**: v2.4.2  
+**当前版本**: v2.6.1  
 **Base URL**: `http://127.0.0.1:5001`
 
 ### 响应格式 (v2.2.0+)
@@ -87,6 +87,13 @@ Boss直聘自动化机器人 REST API 文档
 | `/recommend/candidates` | GET | 获取推荐列表 |
 | `/recommend/candidate/{index}/resume` | GET | 查看候选人简历 |
 | `/recommend/candidate/{index}/greet` | POST | 打招呼 |
+
+### 候选人管理
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/candidates/pass` | POST | PASS 候选人（支持推荐模式和聊天模式，v2.6.1+） |
+| `/candidates/notify` | POST | 发送 DingTalk 通知 |
 
 ### AI 助手管理
 

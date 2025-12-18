@@ -83,6 +83,7 @@ FastAPI 服务主入口
 - `list_recommended_candidates_action()` - 获取推荐列表
 - `greet_recommend_candidate_action()` - 打招呼
 - `view_recommend_candidate_resume_action()` - 查看简历
+- `pass_recommend_candidate_action()` - PASS 推荐候选人（v2.6.1+）
 
 ### 4. src/assistant_actions.py
 AI 助手功能
@@ -268,6 +269,7 @@ UI 操作 → FastAPI 端点 → Playwright 执行
 - `GET /recommend/candidates` - 获取推荐列表
 - `GET /recommend/candidate/{index}/resume` - 查看简历
 - `POST /recommend/candidate/{index}/greet` - 打招呼
+- `POST /candidates/pass` - PASS 候选人（支持推荐模式和聊天模式，v2.6.1+）
 
 #### 候选人管理
 
@@ -424,10 +426,30 @@ settings.get_zilliz_config()
 - **自动化工作流**: [docs/workflows.md](workflows.md)
 - **变更日志**: [CHANGELOG.md](../CHANGELOG.md)
 
+## Vercel 部署架构
+
+### Serverless Functions
+
+Vercel 部署使用 `BaseHTTPRequestHandler` 模式，而非 FastAPI：
+
+- **`vercel/api/stats.py`**: 统计和报告 API（BaseHTTPRequestHandler）
+- **`vercel/api/jobs.py`**: 岗位管理 API（BaseHTTPRequestHandler）
+- **`vercel/api/candidate.py`**: 候选人详情 API（BaseHTTPRequestHandler）
+
+**设计原因**:
+- Vercel Python runtime 对 FastAPI 支持有限
+- BaseHTTPRequestHandler 提供更直接的控制
+- 更好的 JSON 序列化控制（避免 bytes 键问题）
+
+**JSON 安全处理**:
+- 使用 `_json_safe()` 函数递归清理 Milvus 返回的数据
+- 自动转换 `bytes` 键为字符串
+- 处理 `numpy` 类型和非标准 JSON 类型
+
 ## 版本
 
-**当前版本**: v2.2.0+  
-**最后更新**: 2024-12
+**当前版本**: v2.6.1+  
+**最后更新**: 2025-12
 
 ---
 
