@@ -176,6 +176,9 @@ async def list_candidates(
             # update greeted status if the candidate is in chat, greet, or seek stage
             candidate['greeted'] = candidate.get('greeted', False)
             restored += 1
+        elif mode in ['greet', 'followup']:
+            found_candidates = [c for c in stored_candidates if c['name'] == candidate['name']]
+            logger.error(f"Candidate {candidate} \n not matched, found: {json.dumps(found_candidates, indent=2, ensure_ascii=False)}")
 
         # Extract resume_text and full_resume from candidate
         analysis = candidate.pop("analysis", '')
@@ -481,17 +484,14 @@ async def generate_message(
             result = await chat_actions.discard_candidate_action(page, chat_id)
         return HTMLResponse(
             content=f'''
-            <div class="space-y-4">
-                <textarea id="message-text" name="message" class="w-full h-32 p-4 border rounded-lg"> </textarea>
-            </div>''', 
+            <textarea id="message-text" name="generated_message" class="w-full h-32 p-2 border rounded-lg text-gray-800"> </textarea>
+            ''', 
             headers={"HX-Trigger": json.dumps({"showToast": {"message": f"候选人 {name} 判断为不合适，理由: {pass_reason}", "type": "info"}}, ensure_ascii=True)}
         )
 
     # Return textarea with generated message and send button
     html = f'''
-    <div class="space-y-4">
-        <textarea id="message-text" name="message" class="w-full h-32 p-4 border rounded-lg">{message}</textarea>
-    </div>
+    <textarea id="message-text" name="generated_message" class="w-full h-32 p-2 border rounded-lg text-gray-800">{message}</textarea>
     '''
     return HTMLResponse(content=html)
 
@@ -523,15 +523,18 @@ async def should_reply(
     chat_history = await chat_actions.get_chat_history_action(page, chat_id)
     
     # Check last message role
+    message = ''
     for msg in chat_history[::-1]:
         role = msg.get("role")
         if role == "assistant":
             return JSONResponse({"should_reply": False})
         elif role == "user":
-            return JSONResponse({"should_reply": True})
+            message += msg.get("content", '')
+            if len(message) > 5:# ignore short messages from user
+                return JSONResponse({"should_reply": True})
     
-    # no message found, or only developer message, return True
-    return JSONResponse({"should_reply": True})
+    # no message found, or only developer message, return False
+    return JSONResponse({"should_reply": False})
 
 @router.post("/send", response_class=HTMLResponse)
 async def send_message(
@@ -692,23 +695,25 @@ async def fetch_online_resume(
                 job_applied=job_applied,
             )
         return HTMLResponse(
-            content=f'<textarea id="resume-textarea-online" readonly class="w-full h-64 p-4 bg-gray-50 border rounded-lg font-mono text-sm">{resume_text}</textarea>'
+            content=f'<textarea id="resume-textarea-online" readonly class="w-full h-64 p-2 bg-gray-50 border rounded-lg font-mono text-sm">{resume_text}</textarea>'
         )
     else:
         return HTMLResponse(
             # content='<div class="text-red-500 p-4">暂无在线简历，请先请求在线简历</div>',
-            content=f'<textarea id="resume-textarea-online" readonly class="w-full p-4 bg-gray-50 border rounded-lg text-red-500 text-sm">暂无在线简历，请先请求在线简历</textarea>'
+            content=f'<textarea id="resume-textarea-online" readonly class="w-full h-64 p-2 bg-gray-50 border rounded-lg font-mono text-sm text-red-500">暂无在线简历，请先请求在线简历</textarea>'
         )
 
 
 @router.post("/fetch-full-resume", response_class=HTMLResponse)
 async def fetch_full_resume(
-    candidate_id: Optional[str] = Form(None),
-    chat_id: Optional[str] = Form(None),
-    mode: str = Form("chat"),
-    job_id: str = Form(""),
+    request: Request,
 ):
     """Explicitly fetch full/offline resume (not online resume)."""
+    form_data = await request.form()
+    candidate_id = form_data.get("candidate_id")
+    chat_id = form_data.get("chat_id")
+    mode = form_data.get("mode")
+    job_id = form_data.get("job_id")
     # Only for chat/greet/followup modes, not recommend
     if mode == "recommend":
         return HTMLResponse(
@@ -738,7 +743,7 @@ async def fetch_full_resume(
             mode=mode
         )
         return HTMLResponse(
-            content=f'<textarea id="resume-textarea-full" readonly class="w-full h-64 p-4 bg-gray-50 border rounded-lg font-mono text-sm">{full_resume_text}</textarea>'
+            content=f'<textarea id="resume-textarea-full" readonly class="w-full h-64 p-2 bg-gray-50 border rounded-lg font-mono text-sm">{full_resume_text}</textarea>'
         )
     elif requested:
         return HTMLResponse(
@@ -869,7 +874,7 @@ def candidate_matched(candidate: Dict[str, Any], stored_candidate: Dict[str, Any
     if chat_id is None and chat_id2 and updated_at < (datetime.now() - timedelta(days=3)):
         logger.info(f"there should be no chat_id in recommend mode, current candidate:\n{candidate.get('name')} v.s. chat_id: {chat_id2}")
         return False
-    elif last_message and last_message2:
+    elif mode == "recommend" and last_message and last_message2:
         from difflib import SequenceMatcher
         similarity = SequenceMatcher(lambda x: x in ['\n', '\r', '\t', ' '], last_message, last_message2).ratio()
         if similarity < 0.8:

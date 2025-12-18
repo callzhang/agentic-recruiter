@@ -67,7 +67,7 @@ async def _prepare_chat_page(page: Page, tab = None, status = None, job_title = 
             while await page.locator(CHAT_ITEM_SELECTORS).first.count() == 0:
                 await page.wait_for_timeout(500)
                 if time.time() - start_time > wait_timeout:
-                    raise ValueError(f"未找到标签为 '{tab}' 的对话")
+                    raise RuntimeError(f"未找到标签为 '{tab}' 的对话")
     
     if status:
         status_selector = f"div.chat-message-filter-left > span:has-text('{status}')"
@@ -79,7 +79,7 @@ async def _prepare_chat_page(page: Page, tab = None, status = None, job_title = 
             while await page.locator(CHAT_ITEM_SELECTORS).first.count() == 0:
                 await page.wait_for_timeout(500)
                 if time.time() - start_time > wait_timeout:
-                    raise ValueError(f"未找到状态为 '{status}' 的聊天对话")
+                    raise RuntimeError(f"未找到状态为 '{status}' 的聊天对话")
     
     if job_title:
         current_job_selector = f"div.ui-dropmenu-label > span.chat-select-job"
@@ -97,10 +97,10 @@ async def _prepare_chat_page(page: Page, tab = None, status = None, job_title = 
                     while await page.locator(CHAT_ITEM_SELECTORS).first.count() == 0:
                         await page.wait_for_timeout(500)
                         if time.time() - start_time > wait_timeout:
-                            raise ValueError(f"未找到职位为 '{job_title}' 的岗位")
+                            raise RuntimeError(f"未找到职位为 '{job_title}' 的岗位")
                 else:
                     await page.locator(CHAT_MENU_SELECTOR).click(timeout=1000)
-                    raise ValueError(f"未找到职位为 '{job_title}' 的岗位")
+                    raise RuntimeError(f"未找到职位为 '{job_title}' 的岗位")
 
 
     return page
@@ -215,7 +215,7 @@ async def discard_candidate_action(page: Page, chat_id: str) -> bool:
     await _prepare_chat_page(page)
     dialog = await _go_to_chat_dialog(page, chat_id)
     if not dialog:
-        raise ValueError("未找到指定对话项")
+        raise RuntimeError("未找到指定对话项")
 
     not_fit_button = page.locator("div.not-fit-wrap").first
     await not_fit_button.wait_for(state="visible", timeout=3000)
@@ -231,7 +231,7 @@ async def discard_candidate_action(page: Page, chat_id: str) -> bool:
         await page.wait_for_timeout(500)
     
     # If we get here, the dialog wasn't deleted
-    raise ValueError("PASS失败: 未删除对话")
+    raise RuntimeError("PASS失败: 未删除对话")
     
 
 @retry(stop=stop_after_attempt(2), wait=wait_fixed(1))
@@ -371,7 +371,7 @@ async def view_online_resume_action(page: Page, chat_id: str, timeout: int = 200
     await _prepare_chat_page(page)
     dialog = await _go_to_chat_dialog(page, chat_id)
     if not dialog:
-        raise ValueError("未找到指定对话项")
+        raise RuntimeError("未找到指定对话项")
 
     candidate_name_locator = page.locator("span.name-box").first
     if await candidate_name_locator.count() > 0:
@@ -384,11 +384,11 @@ async def view_online_resume_action(page: Page, chat_id: str, timeout: int = 200
 
     open_result = await _open_online_resume(page, chat_id, logger)
     if not open_result.get("success"):
-        raise ValueError(_create_error_result(open_result, "无法打开在线简历").get("details", "无法打开在线简历"))
+        raise RuntimeError(_create_error_result(open_result, "无法打开在线简历").get("details", "无法打开在线简历"))
     
     context = await _get_resume_handle(page, timeout, logger)
     if not context.get("success"):
-        raise ValueError(context.get("details", "未找到在线简历"))
+        raise RuntimeError(context.get("details", "未找到在线简历"))
     
     result = await _process_resume_entry(page, context, logger)
     if not isinstance(result, dict):
@@ -544,7 +544,7 @@ async def request_contact_action(page: Page, chat_id: str) -> bool:
     await _prepare_chat_page(page)
     dialog = await _go_to_chat_dialog(page, chat_id)
     if not dialog:
-        raise ValueError("未找到指定对话项")
+        raise RuntimeError("未找到指定对话项")
     phone_number = None
     wechat_number = None
     clicked_phone, clicked_wechat = False, False

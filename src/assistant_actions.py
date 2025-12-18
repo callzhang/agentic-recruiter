@@ -151,7 +151,7 @@ def init_chat(
         **kwargs,
     )
     if not candidate_id:
-        raise ValueError("Failed to create candidate record")
+        raise RuntimeError("Failed to create candidate record")
     
     return {
         "conversation_id": conversation.id,

@@ -22,8 +22,6 @@ JOB_POPOVER_SELECTOR = "div.ui-dropmenu"
 JOB_SELECTOR = "div.ui-dropmenu >> ul.job-list > li"
 
 
-
-@retry(stop=stop_after_attempt(2), wait=wait_fixed(1))
 async def _prepare_recommendation_page(page: Page, job_title: str = None, *, wait_timeout: int = 15000) -> Frame:
     """
     Navigates and configures the recommendation page for automated actions.
@@ -59,7 +57,7 @@ async def _prepare_recommendation_page(page: Page, job_title: str = None, *, wai
         job_options = frame.locator(JOB_SELECTOR)
         count = await job_options.count()
         if count == 0:
-            raise ValueError("未找到职位下拉菜单")
+            raise RuntimeError("未找到职位下拉菜单")
 
         dropdown_label = frame.locator(JOB_POPOVER_SELECTOR).first
         current_selected_job = await dropdown_label.inner_text(timeout=500)
@@ -72,7 +70,7 @@ async def _prepare_recommendation_page(page: Page, job_title: str = None, *, wai
         except StopIteration:
             error_msg = f"未找到包含'{job_title}'的职位。可用职位: {', '.join(job_titles)}"
             logger.error(error_msg)
-            raise ValueError(error_msg)
+            raise RuntimeError(error_msg)
         # click the job option
         await frame.locator(JOB_POPOVER_SELECTOR).click(timeout=1000)
         await job_options.nth(job_idx).click(timeout=1000)
@@ -82,7 +80,7 @@ async def _prepare_recommendation_page(page: Page, job_title: str = None, *, wai
             current_selected_job = await dropdown_label.inner_text(timeout=500)
             await page.wait_for_timeout(200)
             if time.time() - t0 > wait_timeout:
-                raise ValueError(f"职位选择可能失败。当前选择: {current_selected_job}")
+                raise RuntimeError(f"职位选择可能失败。当前选择: {current_selected_job}")
             
     
     logger.debug("已导航到推荐页面")
@@ -128,7 +126,7 @@ async def list_recommended_candidates_action(page: Page, *, limit: int = 999, jo
     t0 = time.time()
     while (count := await cards.count()) == 0:
         if time.time() - t0 > 20:
-            raise ValueError("未找到推荐候选人")
+            raise RuntimeError("未找到推荐候选人")
         await page.wait_for_timeout(200)
         logger.debug("等待推荐候选人卡片出现... %d 秒", time.time() - t0)
     else:
@@ -183,7 +181,7 @@ async def view_recommend_candidate_resume_action(page: Page, index: int) -> Dict
 
     context = await _get_resume_handle(page, 20000, logger)
     if not context.get("success"):
-        raise ValueError(context.get("details", "未找到在线简历"))
+        raise RuntimeError(context.get("details", "未找到在线简历"))
 
     result = await _process_resume_entry(page, context, logger)
     if not result.get("success"):
@@ -222,7 +220,7 @@ async def greet_recommend_candidate_action(page: Page, index: int, message: str 
         if await card.locator(chat_selectors).count() > 0:
             pass
         else:
-            raise ValueError("未找到打招呼按钮")
+            raise RuntimeError("未找到打招呼按钮")
 
     if message:
         try:
@@ -278,7 +276,7 @@ async def discard_recommend_candidate_action(page: Page, index: int, reason: str
         await discard_btn.click(timeout=1000)
         await page.wait_for_timeout(1000)
     else:
-        raise ValueError("未找到不合适按钮")
+        raise RuntimeError("未找到不合适按钮")
     # click the popup dialog's close button
     reason = card.locator("span.btn-quxiao:has-text('过往经历不符')").first
     comfirm_btn = card.locator("span.boss-dialog__button:has-text('提交')").first
@@ -287,7 +285,7 @@ async def discard_recommend_candidate_action(page: Page, index: int, reason: str
         await comfirm_btn.click(timeout=1000)
         return True
     else:
-        raise ValueError("未找到不合适原因")
+        raise RuntimeError("未找到不合适原因")
 
 @retry(stop=stop_after_attempt(2), wait=wait_fixed(1))
 async def apply_filters(frame: Frame, filters: Dict[str, Any]) -> bool:
@@ -361,7 +359,7 @@ async def apply_filters(frame: Frame, filters: Dict[str, Any]) -> bool:
         cancel_btn = filter_panel.locator("div.btn:has-text('取消')")
         if await cancel_btn.count() > 0:
             await cancel_btn.click(timeout=1000)
-        raise ValueError("筛选条件应用失败")
+        raise RuntimeError("筛选条件应用失败")
     # confirm
     confirm_btn = filter_panel.locator("div.btn:has-text('确定')")
     if await confirm_btn.count() > 0:

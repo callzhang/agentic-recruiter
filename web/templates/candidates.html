@@ -106,16 +106,16 @@
             <!-- Top-right controls: Auto-send checkbox and Process button -->
             <div class="flex items-center gap-4">
                 <label class="flex items-center space-x-2 cursor-pointer">
-                    <input type="checkbox" id="auto-send-checkbox" checked class="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500">
+                    <input type="checkbox" id="auto-send-checkbox" checked class="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500" @change="saveState()">
                     <span class="text-sm text-gray-700 font-medium">自动发送</span>
                 </label>
                 <label class="flex items-center space-x-2 cursor-pointer">
-                    <input type="checkbox" id="process-all-modes-checkbox" class="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500">
+                    <input type="checkbox" id="process-all-modes-checkbox" class="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500" @change="saveState()">
                     <span class="text-sm text-gray-700 font-medium">处理所有模式</span>
                 </label>
                 <button 
                     id="cycle-reply-btn"
-                    onclick="startCycleReply()"
+                    onclick="window.startProcessCandidate()"
                     title="处理候选人：&#10;&#10;• 未勾选"处理所有模式"：只处理当前模式的候选人&#10;• 勾选"处理所有模式"：自动循环处理所有4个模式（推荐牛人、新招呼、沟通中、牛人已读未回）&#10;&#10;处理流程：&#10;1. 加载在线简历（如未加载）&#10;2. 初始化对话（如未初始化）&#10;3. 进行AI分析（如未分析）&#10;4. 根据匹配度阈值生成消息或发送招呼&#10;5. 更新候选人卡片状态&#10;&#10;提示：确保已选择岗位并设置好阈值参数"
                     class="px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition disabled:opacity-50 disabled:cursor-not-allowed">
                     🔄 开始处理
@@ -129,8 +129,7 @@
                 <label class="block text-sm font-medium text-gray-700 mb-2">岗位</label>
                 <select id="job-selector" name="job_id" class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
                         hx-get="/jobs/list-simple" hx-trigger="load" hx-swap="innerHTML"
-                        hx-on::after-swap="window.updateCandidateURL && window.updateCandidateURL()"
-                        @change="updateURL()">
+                        @change="saveState()">
                     <option>加载中...</option>
                 </select>
             </div>
@@ -142,7 +141,7 @@
                 <input type="number" id="threshold-chat" name="threshold_chat" 
                        value="6.0" 
                        min="1" max="10" step="0.5"
-                       @change="updateURL()"
+                       @change="saveState()"
                        class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
             </div>
             <div>
@@ -153,7 +152,7 @@
                 <input type="number" id="threshold-borderline" name="threshold_borderline" 
                        value="7.0" 
                        min="1" max="10" step="0.5"
-                       @change="updateURL()"
+                       @change="saveState()"
                        class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
             </div>
             <div>
@@ -164,7 +163,7 @@
                 <input type="number" id="threshold-seek" name="threshold_seek" 
                        value="8.0" 
                        min="1" max="10" step="0.5"
-                       @change="updateURL()"
+                       @change="saveState()"
                        class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
             </div>
         </div>
@@ -196,7 +195,7 @@
                                 min="1" 
                                 max="999" 
                                 step="1"
-                                @change="updateURL()"
+                                @change="saveState()"
                                 class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
                         </div>
                     <button 
@@ -232,6 +231,8 @@
 // Candidate Tabs Component
 // ============================================================================
 
+const CANDIDATE_STORAGE_KEY = 'candidate_page_state';
+
 // Candidate tabs component
 function candidateTabs() {
     return {
@@ -239,54 +240,96 @@ function candidateTabs() {
         loading: false,
         
         init() {
-            // Read URL parameters on page load
-            this.restoreFromURL();
+            // Restore state from localStorage or URL on page load
+            this.restoreState();
             
             // Listen for browser back/forward buttons
             window.addEventListener('popstate', () => {
-                this.restoreFromURL();
+                this.restoreState();
             });
         },
         
-        restoreFromURL() {
-            const urlParams = new URLSearchParams(window.location.search);
+        saveState() {
+            const state = {
+                tab: this.activeTab,
+                threshold_chat: document.getElementById('threshold-chat')?.value,
+                threshold_borderline: document.getElementById('threshold-borderline')?.value,
+                threshold_seek: document.getElementById('threshold-seek')?.value,
+                job_id: document.getElementById('job-selector')?.value,
+                limit: document.getElementById('limit-input')?.value,
+                auto_send: document.getElementById('auto-send-checkbox')?.checked ? 'true' : 'false',
+                process_all_modes: document.getElementById('process-all-modes-checkbox')?.checked ? 'true' : 'false'
+            };
             
-            // Set active tab from URL
-            const tab = urlParams.get('tab');
+            // Only save non-empty values
+            const cleanedState = {};
+            for (const [key, value] of Object.entries(state)) {
+                if (value && value !== '加载中...') {
+                    cleanedState[key] = value;
+                }
+            }
+            
+            localStorage.setItem(CANDIDATE_STORAGE_KEY, JSON.stringify(cleanedState));
+        },
+        
+        restoreState() {
+            // First, try to get values from URL parameters
+            const urlParams = new URLSearchParams(window.location.search);
+            let state = {};
+            
+            // Check if URL has query parameters
+            const hasUrlParams = Array.from(urlParams.keys()).length > 0;
+            
+            if (hasUrlParams) {
+                // Restore from URL parameters
+                for (const [key, value] of urlParams.entries()) {
+                    state[key] = value;
+                }
+                // Save URL params to localStorage
+                localStorage.setItem(CANDIDATE_STORAGE_KEY, JSON.stringify(state));
+            } else {
+                // Restore from localStorage
+                const saved = localStorage.getItem(CANDIDATE_STORAGE_KEY);
+                if (saved) {
+                    try {
+                        state = JSON.parse(saved);
+                    } catch (e) {
+                        console.error('Failed to parse saved candidate state:', e);
+                    }
+                }
+            }
+            
+            // Apply saved values
+            // Set active tab
+            const tab = state.tab;
             if (tab && ['recommend', 'greet', 'chat', 'followup'].includes(tab)) {
                 this.activeTab = tab;
             }
             
-            // Set thresholds from URL
-            const thresholdChat = urlParams.get('threshold_chat');
-            if (thresholdChat) {
+            // Set thresholds
+            if (state.threshold_chat) {
                 const chatInput = document.getElementById('threshold-chat');
-                if (chatInput) chatInput.value = thresholdChat;
+                if (chatInput) chatInput.value = state.threshold_chat;
             }
             
-            const thresholdBorderline = urlParams.get('threshold_borderline');
-            if (thresholdBorderline) {
+            if (state.threshold_borderline) {
                 const borderlineInput = document.getElementById('threshold-borderline');
-                if (borderlineInput) borderlineInput.value = thresholdBorderline;
+                if (borderlineInput) borderlineInput.value = state.threshold_borderline;
             }
             
-            const thresholdSeek = urlParams.get('threshold_seek');
-            if (thresholdSeek) {
+            if (state.threshold_seek) {
                 const seekInput = document.getElementById('threshold-seek');
-                if (seekInput) seekInput.value = thresholdSeek;
+                if (seekInput) seekInput.value = state.threshold_seek;
             }
             
-            // Set job selector from URL (after jobs are loaded)
-            const jobId = urlParams.get('job_id');
-            if (jobId) {
-                // Wait for job selector to be populated
+            // Set job selector (after jobs are loaded)
+            if (state.job_id) {
                 const checkJobSelector = setInterval(() => {
                     const jobSelector = document.getElementById('job-selector');
                     if (jobSelector && jobSelector.options.length > 1) {
-                        // Check if the job_id exists in options
                         for (let option of jobSelector.options) {
-                            if (option.value === jobId) {
-                                jobSelector.value = jobId;
+                            if (option.value === state.job_id) {
+                                jobSelector.value = state.job_id;
                                 clearInterval(checkJobSelector);
                                 break;
                             }
@@ -294,53 +337,28 @@ function candidateTabs() {
                         clearInterval(checkJobSelector);
                     }
                 }, 100);
-                
-                // Stop checking after 5 seconds
                 setTimeout(() => clearInterval(checkJobSelector), 5000);
             }
             
-            // Set limit from URL
-            const limit = urlParams.get('limit');
-            if (limit) {
+            // Set limit
+            if (state.limit) {
                 const limitInput = document.getElementById('limit-input');
-                if (limitInput) limitInput.value = limit;
+                if (limitInput) limitInput.value = state.limit;
+            }
+            
+            // Set auto-send checkbox
+            const autoSendCheckbox = document.getElementById('auto-send-checkbox');
+            if (autoSendCheckbox) {
+                autoSendCheckbox.checked = state.auto_send === 'true';
+            }
+            
+            // Set process-all-modes checkbox
+            const processAllModesCheckbox = document.getElementById('process-all-modes-checkbox');
+            if (processAllModesCheckbox) {
+                processAllModesCheckbox.checked = state.process_all_modes === 'true';
             }
         },
         
-        updateURL() {
-            const params = new URLSearchParams();
-            
-            // Add tab
-            params.set('tab', this.activeTab);
-            
-            // Add thresholds
-            const thresholdChat = document.getElementById('threshold-chat')?.value;
-            if (thresholdChat) params.set('threshold_chat', thresholdChat);
-            
-            const thresholdBorderline = document.getElementById('threshold-borderline')?.value;
-            if (thresholdBorderline) params.set('threshold_borderline', thresholdBorderline);
-            
-            const thresholdSeek = document.getElementById('threshold-seek')?.value;
-            if (thresholdSeek) params.set('threshold_seek', thresholdSeek);
-            
-            // Add job_id
-            const jobSelector = document.getElementById('job-selector');
-            const jobId = jobSelector?.value;
-            if (jobId && jobId !== '加载中...') {
-                params.set('job_id', jobId);
-            }
-            
-            // Add limit
-            const limitInput = document.getElementById('limit-input');
-            const limit = limitInput?.value;
-            if (limit) {
-                params.set('limit', limit);
-            }
-            
-            // Update URL without page reload
-            const newURL = window.location.pathname + (params.toString() ? '?' + params.toString() : '');
-            window.history.pushState({}, '', newURL);
-        },
         
         switchTab(tab) {
             // If the tab is already active, keep the list and do nothing
@@ -363,182 +381,145 @@ function candidateTabs() {
                 list.appendChild(initialMsg);
             }
             // Batch analyze button has been removed - no longer needed
-            // Update URL
-            this.updateURL();
+            // Save state to localStorage
+            this.saveState();
             // Automatically reload candidates when switching tabs
             // this.loadCandidates();
         },
         
         loadCandidates() {
-            
             this.loading = true;
-            
-            const jobSelector = document.getElementById('job-selector');
-            const job_id = jobSelector?.value || jobSelector?.options[0]?.value;
-            const job_title = jobSelector?.selectedOptions[0]?.getAttribute("data-title");
-            
-            // Check if job title is valid
-            if (!job_title || job_title === '加载中...') {
-                console.error('Job title not loaded yet');
-                this.loading = false;
-                showToast('请等待岗位列表加载完成后再查询', 'warning');
-                return;
-            }
-            
-            let mode, chat_type;
-            if (this.activeTab === 'recommend') {
-                mode = 'recommend';
-                chat_type = '';
-            } else {
-                mode = this.activeTab; // Use the tab name directly as mode
-                const tabMap = {
-                    'greet': '新招呼',
-                    'chat': '沟通中',
-                    'followup': '牛人已读未回'
-                };
-                chat_type = tabMap[this.activeTab] || '新招呼';
-            }
-            
-            // Get limit from input
-            const limitInput = document.getElementById('limit-input');
-            const limit = limitInput?.value || '50';
-
-            const params = new URLSearchParams({
-                mode: mode,
-                chat_type: chat_type,
-                job_applied: job_title,
-                job_id: job_id,
-                limit: limit
-            });
-            
-            console.log('Loading candidates, activeTab:', this.activeTab, 'params:', params);
-            const url = `/candidates/list?${params.toString()}`;
-            console.log('Fetching:', url);
-            
-            const candidateList = document.getElementById('candidate-list');
-            
-            // Clear all non-candidate content (error messages, initial messages, empty messages)
-            // Keep only candidate cards if we're appending
-            const initialMsg = document.getElementById('initial-message');
-            if (initialMsg) {
-                initialMsg.remove();
-            }
-            const emptyMsg = document.getElementById('empty-message');
-            if (emptyMsg) {
-                emptyMsg.remove();
-            }
-            
-            // Remove any error messages (divs with text-red-500 or containing error indicators)
-            const errorMessages = candidateList.querySelectorAll('.text-red-500, [class*="error"], [class*="失败"]');
-            errorMessages.forEach(msg => {
-                // Only remove if it's not a candidate card
-                if (!msg.closest('.candidate-card')) {
-                    msg.remove();
-                }
-            });
-            
-            // Use a custom handler to detect errors and handle swap accordingly
-            fetch(url)
-                .then(async (response) => {
-                    const html = await response.text();
-                    const candidateList = document.getElementById('candidate-list');
-                    
-                    // Check if response is an error message
-                    if (!response.ok) {
-                        // Error: replace list content with error message
-                        candidateList.innerHTML = html;
-                        this.loading = false;
-                        showToast('获取候选人列表失败，请重试', 'error');
-                        return;
-                    }
-                    
-                    // Success: replace the entire list with new candidate cards
-                    // Use the HTML response directly
-                    candidateList.innerHTML = html;
-                    
-                    // Tell HTMX to process the new content
-                    htmx.process(candidateList);
-                    
-                    const loadedCount = candidateList.querySelectorAll('.candidate-card').length;
-                    console.log(`Loaded ${loadedCount} candidate cards`);
-                    
+            loadCandidatesList(this.activeTab)
+                .then(() => {
                     this.loading = false;
-                    
-                    // Count how many candidates are in the list now - use a fresh query after all updates
-                    // Use requestAnimationFrame to ensure DOM is updated before counting
-                    const self = this;
-                    requestAnimationFrame(() => {
-                        const count = candidateList.querySelectorAll('.candidate-card').length;
-                        // Batch analyze button has been removed - no longer needed
-                        
-                        if (count === 0) {
-                            // Show empty state message
-                            const emptyMsg = document.createElement('div');
-                            emptyMsg.id = 'empty-message';
-                            emptyMsg.className = 'text-center text-gray-500 py-12';
-                            emptyMsg.innerHTML = `
-                                <div class="space-y-2">
-                                    <p class="text-lg">😔 未找到符合条件的候选人</p>
-                                    <p class="text-sm">请尝试切换标签或岗位</p>
-                                </div>
-                            `;
-                            candidateList.appendChild(emptyMsg);
-                            showToast('未找到候选人', 'warning');
-                        } else {
-                            // Remove empty message if it exists
-                            const emptyMsg = document.getElementById('empty-message');
-                            if (emptyMsg) {
-                                emptyMsg.remove();
-                            }
-                            
-                            // Show toast with count
-                            showToast(`加载完成，共 ${count} 个候选人`, 'success');
-                        }
-                    });
                 })
-                .catch((err) => {
-                    console.error('Failed:', err);
+                .catch(() => {
                     this.loading = false;
-                    const candidateList = document.getElementById('candidate-list');
-                    candidateList.innerHTML = `
-                        <div class="text-center text-red-500 py-12">
-                            <p class="text-lg">❌ 请求失败</p>
-                            <p class="text-sm mt-2">${err.message}</p>
-                        </div>
-                    `;
-                    showToast('加载失败: ' + err.message, 'error');
                 });
         }
     };
 }
 
-// Global function for HTMX events to call updateURL
-window.updateCandidateURL = function() {
-    // First, restore job selector value from URL if it exists
-    const urlParams = new URLSearchParams(window.location.search);
-    const jobId = urlParams.get('job_id');
-    if (jobId) {
-        const jobSelector = document.getElementById('job-selector');
-        if (jobSelector && jobSelector.options.length > 1) {
-            // Check if the job_id exists in options
-            for (let option of jobSelector.options) {
-                if (option.value === jobId) {
-                    jobSelector.value = jobId;
-                    break;
-                }
-            }
-        }
+// ============================================================================
+// Load Candidates Function
+// ============================================================================
+
+/**
+ * Load candidates list for the given tab/mode
+ * @param {string} activeTab - The active tab name ('recommend', 'greet', 'chat', 'followup')
+ * @returns {Promise<void>}
+ */
+async function loadCandidatesList(activeTab) {
+    const jobSelector = document.getElementById('job-selector');
+    const job_id = jobSelector?.value || jobSelector?.options[0]?.value;
+    const job_title = jobSelector?.selectedOptions[0]?.getAttribute("data-title");
+    
+    // Check if job title is valid
+    if (!job_title || job_title === '加载中...') {
+        console.error('Job title not loaded yet');
+        showToast('请等待岗位列表加载完成后再查询', 'warning');
+        throw new Error('Job title not loaded');
     }
     
-    // Find the Alpine component instance
-    const candidateTabsElement = document.querySelector('[x-data*="candidateTabs"]');
-    if (candidateTabsElement && candidateTabsElement._x_dataStack) {
-        const component = candidateTabsElement._x_dataStack[0];
-        if (component && component.updateURL) {
-            component.updateURL();
-        }
+    let mode, chat_type;
+    if (activeTab === 'recommend') {
+        mode = 'recommend';
+        chat_type = '';
+    } else {
+        mode = activeTab; // Use the tab name directly as mode
+        const tabMap = {
+            'greet': '新招呼',
+            'chat': '沟通中',
+            'followup': '牛人已读未回'
+        };
+        chat_type = tabMap[activeTab] || '新招呼';
     }
-};
+    
+    // Get limit from input
+    const limitInput = document.getElementById('limit-input');
+    const limit = limitInput?.value || '50';
+
+    const params = new URLSearchParams({
+        mode: mode,
+        chat_type: chat_type,
+        job_applied: job_title,
+        job_id: job_id,
+        limit: limit
+    });
+    
+    console.log('Loading candidates, activeTab:', activeTab, 'params:', params);
+    const url = `/candidates/list?${params.toString()}`;
+    console.log('Fetching:', url);
+    
+    const candidateList = document.getElementById('candidate-list');
+    
+    // Clear all non-candidate content (error messages, initial messages, empty messages)
+    // Keep only candidate cards if we're appending
+    const initialMsg = document.getElementById('initial-message');
+    if (initialMsg) {
+        initialMsg.remove();
+    }
+    const emptyMsg = document.getElementById('empty-message');
+    if (emptyMsg) {
+        emptyMsg.remove();
+    }
+    
+    // Remove any error messages (divs with text-red-500 or containing error indicators)
+    const errorMessages = candidateList.querySelectorAll('.text-red-500, [class*="error"], [class*="失败"]');
+    errorMessages.forEach(msg => {
+        // Only remove if it's not a candidate card
+        if (!msg.closest('.candidate-card')) {
+            msg.remove();
+        }
+    });
+    
+    // Use a custom handler to detect errors and handle swap accordingly
+    const response = await fetch(url);
+    const html = await response.text();
+    
+    // Check if response is an error message
+    if (!response.ok) {
+        // Error: replace list content with error message
+        candidateList.innerHTML = html;
+        showToast('获取候选人列表失败，请重试', 'error');
+        throw new Error('Failed to load candidates');
+    }
+    
+    // Success: replace the entire list with new candidate cards
+    // Use the HTML response directly
+    candidateList.innerHTML = html;
+    
+    // Tell HTMX to process the new content
+    htmx.process(candidateList);
+    
+    const loadedCount = candidateList.querySelectorAll('.candidate-card').length;
+    console.log(`Loaded ${loadedCount} candidate cards`);
+    
+    // If no candidates, show empty state message immediately (synchronously)
+    if (loadedCount === 0) {
+        const emptyMsg = document.createElement('div');
+        emptyMsg.id = 'empty-message';
+        emptyMsg.className = 'text-center text-gray-500 py-12';
+        emptyMsg.innerHTML = `
+            <p class="text-lg mb-2">📭 暂无候选人</p>
+            <p class="text-sm">当前筛选条件下没有找到候选人</p>
+        `;
+        candidateList.appendChild(emptyMsg);
+    }
+    
+    // Dispatch event to notify that candidate list has been loaded
+    // This allows other parts of the UI to react to the list update
+    document.dispatchEvent(new CustomEvent('candidates:list-loaded', {
+        detail: {
+            count: loadedCount,
+            hasEmptyMessage: loadedCount === 0
+        }
+    }));
+}
+
+// Function is already global (defined with 'async function' keyword)
+// It can be accessed via window.loadCandidatesList or directly as loadCandidatesList
+
 
 // ============================================================================
 // Candidate Selection Management
@@ -587,326 +568,26 @@ function enableAllCards() {
         card.style.opacity = '';
     });
 }
-// 将函数暴露到 window 对象
-window.disableAllCards = disableAllCards;
-window.enableAllCards = enableAllCards;
+// Functions are already global (defined with 'function' keyword)
+// They can be accessed via window.disableAllCards or directly as disableAllCards
 
 // ============================================================================
-// Batch Processing Functions
+// Processing Cancellation Listeners
 // ============================================================================
 
-// Global flags for batch processing control
-window.batchProcessingActive = false;
-window.stopBatchProcessing = false;
+// Don't cancel processing when tab becomes hidden - allow switching tabs
+// Processing will continue in the background
 
-/**
- * Check if currently on the candidate page
- */
-function isOnCandidatePage() {
-    return window.location.pathname.includes('/candidates') || 
-           window.location.pathname === '/candidates';
-}
-
-/**
- * Check if batch processing should be cancelled
- * Returns true if we should stop processing
- * Only checks page navigation, not tab visibility
- */
-function shouldCancelBatchProcessing() {
-    // Check if not on candidate page
-    if (!isOnCandidatePage()) {
-        return true;
-    }
-    
-    // Don't cancel based on tab visibility - allow switching tabs
-    return false;
-}
-
-/**
- * Process all candidate cards sequentially
- */
-window.processAllCandidates = async function processAllCandidates() {
-    const cards = document.querySelectorAll('.candidate-card');
-    if (cards.length === 0) {
-        showToast('没有找到候选人', 'warning');
-        return;
-    }
-    
-    // Find the currently selected card (has blue selection classes)
-    // If found, start from next; otherwise start from beginning
-    let startIndex = 0;
-    const selectedCard = Array.from(cards).find(card => 
-        card.classList.contains('bg-blue-50') || 
-        card.classList.contains('border-blue-500')
-    );
-    if (selectedCard) {
-        const selectedIndex = Array.from(cards).indexOf(selectedCard);
-        startIndex = selectedIndex + 1; // Start from next card
-        if (startIndex >= cards.length) {
-            showToast('当前已是最后一个候选人，将从第一个开始', 'info');
-            startIndex = 0;
-        }
-    }
-    
-    const total = cards.length;
-    const remaining = total - startIndex;
-    let processed = 0;
-    let failed = 0;
-    let skipped = 0; // Count skipped candidates (viewed)
-    
-    // Set batch processing flag
-    window.batchProcessingActive = true;
-    window.stopBatchProcessing = false;
-    
-    // Disable all candidate cards
-    disableAllCards();
-    
-    // Update cycle reply button to show stop state
-    let cycleReplyBtn = document.getElementById('cycle-reply-btn');
-    if (cycleReplyBtn) {
-        cycleReplyBtn.textContent = '⏸ 停止处理';
-    }
-    
-    if (startIndex > 0) {
-        showToast(`开始批量处理 ${remaining} 个候选人 (从第 ${startIndex + 1} 个开始)`, 'info');
-    } else {
-        showToast(`开始批量处理 ${total} 个候选人`, 'info');
-    }
-    
-    for (let i = startIndex; i < cards.length; i++) {
-        // Check if user requested stop
-        if (window.stopBatchProcessing) {
-            showToast(`批量处理已停止 (${processed}/${total} 完成)`, 'warning');
-            break;
-        }
-        
-        // Check if we should cancel due to page/tab change
-        if (shouldCancelBatchProcessing()) {
-            // Only show toast if it's a page navigation, not tab visibility change
-            if (!isOnCandidatePage()) {
-                showToast(`批量处理已取消 (已离开候选人页面)`, 'warning');
-            }
-            window.stopBatchProcessing = true;
-            break;
-        }
-        
-        const card = cards[i];
-        const cardData = JSON.parse(card.getAttribute('hx-vals'));
-        const candidate = cardData.candidate || {};
-        const name = candidate.name || cardData.name || `候选人 ${i + 1}`;
-        const currentPosition = i + 1;
-        
-        // Skip if candidate is already viewed
-        if (candidate.viewed === true || candidate.viewed === 'true') {
-            skipped++;
-            console.log(`[批量处理] 跳过已查看的候选人: ${name} (${skipped} 已跳过)`);
-            continue;
-        }
-        
-        showToast(`正在处理候选人 ${currentPosition}/${total}: ${name}`, 'info');
-        
-        try {
-            // Get detailPane reference - check if it exists and is stable
-            let detailPane = document.getElementById('detail-pane');
-            if (!detailPane) {
-                throw new Error('Detail pane not found');
-            }
-            
-            // Set up event listeners BEFORE triggering HTMX click
-            // This ensures we catch the event even if process_candidate() completes quickly
-            const processingPromise = new Promise((resolve, reject) => {
-                const timeout = setTimeout(() => {
-                    document.removeEventListener('candidate:processing-complete', onComplete);
-                    document.removeEventListener('candidate:processing-error', onError);
-                    reject(new Error('Processing timeout (180s)'));
-                }, 180000); // 180s timeout to avoid hanging batch loops
-                
-                const onComplete = (event) => {
-                    clearTimeout(timeout);
-                    document.removeEventListener('candidate:processing-complete', onComplete);
-                    document.removeEventListener('candidate:processing-error', onError);
-                    resolve(event.detail);
-                };
-                
-                const onError = (event) => {
-                    clearTimeout(timeout);
-                    document.removeEventListener('candidate:processing-complete', onComplete);
-                    document.removeEventListener('candidate:processing-error', onError);
-                    // Stop batch processing on processing error
-                    window.stopBatchProcessing = true;
-                    reject(new Error(event.detail.error || 'Processing failed'));
-                };
-                
-                document.addEventListener('candidate:processing-complete', onComplete, { once: true });
-                document.addEventListener('candidate:processing-error', onError, { once: true });
-            });
-            
-            // Wait for HTMX swap to complete
-            await new Promise((resolve, reject) => {
-                const timeout = setTimeout(() => {
-                    cleanup();
-                    reject(new Error('HTMX swap timeout'));
-                }, 1000); // 1 second timeout for swap
-                
-                const cleanup = () => {
-                    clearTimeout(timeout);
-                    detailPane.removeEventListener('htmx:afterSwap', onSwap);
-                    detailPane.removeEventListener('htmx:responseError', onResponseError);
-                    detailPane.removeEventListener('htmx:sendError', onSendError);
-                    detailPane.removeEventListener('htmx:swapError', onSwapError);
-                };
-                
-                const onSwap = () => {
-                    cleanup();
-                    // Wait a bit for DOM to be ready
-                    setTimeout(resolve, 200);
-                };
-                
-                const onResponseError = (evt) => {
-                    cleanup();
-                    // Stop event propagation to prevent global handler from catching it
-                    evt.stopPropagation();
-                    const errorMsg = evt.detail?.error || evt.detail?.message || 'HTMX request failed';
-                    reject(new Error(errorMsg));
-                };
-                
-                const onSendError = (evt) => {
-                    cleanup();
-                    // Stop event propagation to prevent global handler from catching it
-                    evt.stopPropagation();
-                    const errorMsg = evt.detail?.error || evt.detail?.message || evt.detail?.failed || 'HTMX send failed';
-                    reject(new Error(errorMsg));
-                };
-                
-                const onSwapError = (evt) => {
-                    cleanup();
-                    // Stop event propagation to prevent global handler from catching it
-                    evt.stopPropagation();
-                    const errorMsg = evt.detail?.error || evt.detail?.message || 'HTMX swap failed';
-                    reject(new Error(errorMsg));
-                };
-                
-                detailPane.addEventListener('htmx:afterSwap', onSwap, { once: true });
-                detailPane.addEventListener('htmx:responseError', onResponseError, { once: true });
-                detailPane.addEventListener('htmx:sendError', onSendError, { once: true });
-                detailPane.addEventListener('htmx:swapError', onSwapError, { once: true });
-                
-                // Scroll card into view before triggering click
-                card.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
-                
-                // Trigger HTMX click (htmx:beforeRequest will handle highlighting)
-                htmx.trigger(card, 'click');
-            });
-            
-            // Wait for process_candidate() to complete
-            await processingPromise;
-            
-            // Check again after processing completes
-            if (shouldCancelBatchProcessing()) {
-                // Only show toast if it's a page navigation, not tab visibility change
-                if (!isOnCandidatePage()) {
-                    showToast(`批量处理已取消 (已离开候选人页面)`, 'warning');
-                }
-                window.stopBatchProcessing = true;
-                break;
-            }
-            
-            processed++;
-            // Update last processed time for cycle reply idle timeout
-            if (window.cycleReplyState) {
-                window.cycleReplyState.lastProcessedTime = Date.now();
-            }
-            showToast(`✅ ${name} 处理完成 (${processed}/${total})`, 'success');
-        } catch (error) {
-            failed++;
-            const errorMessage = error?.message || error?.toString() || '未知错误';
-            console.error(`Failed to process candidate ${i + 1}:`, error);
-            
-            // Check if it's a connection/network error (transient error)
-            const isConnectionError = errorMessage.includes('ERR_CONNECTION_REFUSED') ||
-                                     errorMessage.includes('Connection refused') ||
-                                     errorMessage.includes('HTMX') ||
-                                     errorMessage.includes('network') ||
-                                     errorMessage.includes('NetworkError') ||
-                                     errorMessage.includes('Failed to fetch');
-            
-            if (isConnectionError) {
-                showToast(`⚠️ ${name} 连接失败，跳过: ${errorMessage}`, 'warning');
-            } else {
-                showToast(`❌ ${name} 处理失败: ${errorMessage}`, 'error');
-            }
-            
-            // Stop batch processing only if explicitly requested, otherwise continue
-            if (window.stopBatchProcessing) {
-                showToast(`批量处理已停止 (${processed}/${total} 完成, ${failed} 失败)`, 'warning');
-                break;
-            }
-            // Otherwise continue to next candidate
-        }
-    }
-    
-    // Re-enable candidate cards
-    enableAllCards();
-    
-    // Reset batch processing flag
-    window.batchProcessingActive = false;
-    window.stopBatchProcessing = false;
-    
-    // Reset cycle reply button
-    cycleReplyBtn = document.getElementById('cycle-reply-btn');
-    if (cycleReplyBtn) {
-        cycleReplyBtn.textContent = '🔄 开始处理';
-    }
-    
-    // Final summary
-    const summary = `批量处理完成: 成功 ${processed}/${total}, 失败 ${failed}${skipped > 0 ? `, 跳过 ${skipped}` : ''}`;
-    showToast(summary, processed === total ? 'success' : 'warning');
-}
-
-function stopBatchProcessingHandler() {
-    window.stopBatchProcessing = true;
-    const cycleBtn = document.getElementById('cycle-reply-btn');
-    if (cycleBtn) {
-        cycleBtn.textContent = '⏹️ 正在停止...';
-    }
-    showToast('正在停止批量处理...', 'info');
-}
-
-// ============================================================================
-// Batch Processing Cancellation Listeners
-// ============================================================================
-
-// Don't cancel batch processing when tab becomes hidden - allow switching tabs
-// Batch processing will continue in the background
-
-// Cancel batch processing when navigating away from candidate page
-// Check after HTMX swaps complete
-document.body.addEventListener('htmx:afterSwap', () => {
-    if (window.batchProcessingActive && !isOnCandidatePage()) {
-        window.stopBatchProcessing = true;
-        showToast('批量处理已取消 (已离开候选人页面)', 'warning');
-    }
-});
-
-// Cancel batch processing on browser navigation (back/forward)
-window.addEventListener('popstate', () => {
-    if (window.batchProcessingActive && !isOnCandidatePage()) {
-        window.stopBatchProcessing = true;
-        showToast('批量处理已取消 (已离开候选人页面)', 'warning');
-    }
-});
-
-// Cancel batch processing on page unload
+// Cancel processing on page unload
 window.addEventListener('beforeunload', () => {
-    if (window.batchProcessingActive) {
-        window.stopBatchProcessing = true;
+    if (window.cycleReplyState?.running) {
+        window.cycleReplyState.stopRequested = true;
     }
 });
 
 // ============================================================================
 // Candidate Card Update Functions
 // ============================================================================
-
 /**
  * Update a candidate card with the given updates
  */
@@ -1059,11 +740,30 @@ document.addEventListener('candidate:update', function(event) {
     });
 
     if (!card) {
+        debugger;
         console.warn('candidate:update: no matching card found', identifiers);
         return;
     }
     
     applyCardUpdate(card, updates, identifiers);
+});
+
+// Event listener for candidate list loaded - re-apply UI state
+document.addEventListener('candidates:list-loaded', function(event) {
+    // Re-apply mask if batch processing is active
+    if (window.cycleReplyState?.running) {
+        document.dispatchEvent(new CustomEvent('candidates:disable-cards'));
+    }
+});
+
+// Event listener for disabling candidate cards
+document.addEventListener('candidates:disable-cards', function(event) {
+    disableAllCards();
+});
+
+// Event listener for enabling candidate cards
+document.addEventListener('candidates:enable-cards', function(event) {
+    enableAllCards();
 });
 
 /**
@@ -1079,10 +779,116 @@ function idMatched(data, identifiers) {
     if (identifiers.name && data.name === identifiers.name) {
         return true;
     }
-    if (identifiers.index && data.index === identifiers.index) {
+    if (identifiers.index !== null && data.index === identifiers.index) {
         return true;
     }
     return false;
 }
+
+/**
+ * Process a single candidate card
+ */
+async function processCandidateCard(card, index, total) {
+    const cardData = JSON.parse(card.getAttribute('hx-vals'));
+    const candidate = cardData.candidate || {};
+    const name = candidate.name || cardData.name || `候选人 ${index + 1}`;
+    
+    // Skip only if candidate is both viewed AND analyzed
+    if (candidate.viewed && candidate.analysis) {
+        return { skipped: true, name };
+    }
+    
+    showToast(`正在处理候选人 ${index + 1}/${total}: ${name}`, 'info');
+    
+    // Get detailPane reference
+    const detailPane = document.getElementById('detail-pane');
+    
+    // Set up event listeners BEFORE triggering HTMX click
+    const processingPromise = new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+            document.removeEventListener('candidate:processing-complete', onComplete);
+            document.removeEventListener('candidate:processing-error', onError);
+            reject(new Error('Processing timeout (180s)'));
+        }, 180000); // 180s timeout
+        
+        const onComplete = (event) => {
+            clearTimeout(timeout);
+            document.removeEventListener('candidate:processing-complete', onComplete);
+            document.removeEventListener('candidate:processing-error', onError);
+            resolve(event.detail);
+        };
+        
+        const onError = (event) => {
+            clearTimeout(timeout);
+            document.removeEventListener('candidate:processing-complete', onComplete);
+            document.removeEventListener('candidate:processing-error', onError);
+            reject(new Error(event.detail.error || 'Processing failed'));
+        };
+        
+        document.addEventListener('candidate:processing-complete', onComplete, { once: true });
+        document.addEventListener('candidate:processing-error', onError, { once: true });
+    });
+    
+    // Set up HTMX swap listeners BEFORE triggering click
+    const swapPromise = new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+            cleanup();
+            reject(new Error('HTMX swap timeout'));
+        }, 1000); // 1 second timeout for swap
+        
+        const cleanup = () => {
+            clearTimeout(timeout);
+            detailPane.removeEventListener('htmx:afterSwap', onSwap);
+            detailPane.removeEventListener('htmx:responseError', onResponseError);
+            detailPane.removeEventListener('htmx:sendError', onSendError);
+            detailPane.removeEventListener('htmx:swapError', onSwapError);
+        };
+        
+        const onSwap = () => {
+            cleanup();
+            setTimeout(resolve, 200);
+        };
+        
+        const onResponseError = (evt) => {
+            cleanup();
+            evt.stopPropagation();
+            const errorMsg = evt.detail.error || evt.detail.message || 'HTMX request failed';
+            reject(new Error(errorMsg));
+        };
+        
+        const onSendError = (evt) => {
+            cleanup();
+            evt.stopPropagation();
+            const errorMsg = evt.detail.error || evt.detail.message || evt.detail.failed || 'HTMX send failed';
+            reject(new Error(errorMsg));
+        };
+        
+        const onSwapError = (evt) => {
+            cleanup();
+            evt.stopPropagation();
+            const errorMsg = evt.detail.error || evt.detail.message || 'HTMX swap failed';
+            reject(new Error(errorMsg));
+        };
+        
+        detailPane.addEventListener('htmx:afterSwap', onSwap, { once: true });
+        detailPane.addEventListener('htmx:responseError', onResponseError, { once: true });
+        detailPane.addEventListener('htmx:sendError', onSendError, { once: true });
+        detailPane.addEventListener('htmx:swapError', onSwapError, { once: true });
+    });
+    
+    // Trigger HTMX click (htmx:beforeRequest will handle scrollIntoView and highlighting)
+    htmx.trigger(card, 'click');
+    
+    // Wait for HTMX swap to complete first
+    await swapPromise;
+    
+    // Then wait for process_candidate() to complete
+    await processingPromise;
+    
+    return { success: true, name };
+}
+
+// Expose to window for use in app.js
+window.processCandidateCard = processCandidateCard;
 </script>
 {% endblock %}

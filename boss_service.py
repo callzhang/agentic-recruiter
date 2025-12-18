@@ -473,7 +473,6 @@ class BossServiceAsync:
                 "zilliz_connected": zilliz_connected,
                 "zilliz_error": zilliz_error,
             }
-            logger.debug(f"Status response: {response_data}")
             return response_data
 
         @self.app.get("/version/check")

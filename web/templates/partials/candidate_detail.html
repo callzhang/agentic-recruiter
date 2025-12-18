@@ -148,7 +148,8 @@
         </div>
     </div>
 
-    <!-- 3. Generated Message Section (shown only if score >= borderline) -->
+    <!-- 3. Generated Message Section (shown only in interactive/write mode) -->
+    {% if view_mode != 'readonly' %}
     <div id="message-section" class="bg-white rounded-lg border shadow-sm">
         <div class="flex border-b bg-gray-100 items-center p-2">
             <h3 class="font-bold text-gray-800">✨ 自动生成消息</h3>
@@ -160,7 +161,7 @@
             </button>
         </div>
         <div id="message-content" class="p-2">
-            <textarea id="message-text" name="generated_message" class="w-full h-32 p-2 border rounded-lg text-center text-gray-500">
+            <textarea id="message-text" name="generated_message" class="w-full h-32 p-2 border rounded-lg text-gray-800">
                 {%- if generated_message not in ['', 'None', 'null', None] -%}{{ generated_message }}{%- else -%}⏳分析完成后，如果匹配度达标，将自动生成...{%- endif -%}
             </textarea>
         </div>
@@ -178,6 +179,65 @@
             </button>
         </div>
     </div>
+    {% endif %}
+
+    <!-- 4. Chat History Section (shown only in readonly mode) -->
+    {% if view_mode == 'readonly' %}
+    {% set chat_history = metadata.history if metadata and metadata.history else [] %}
+    {% if chat_history %}
+    <div id="chat-history-section" class="bg-white rounded-lg border shadow-sm">
+        <div class="flex border-b bg-gray-100 items-center p-2">
+            <h3 class="font-bold text-gray-800">💬 聊天历史</h3>
+        </div>
+        <div class="p-2 space-y-2 max-h-48 overflow-y-auto">
+            {% for msg in chat_history %}
+            {% set is_candidate = msg.role == 'user' %}
+            {% set is_developer = msg.role == 'developer' %}
+            {% if is_developer %}
+                <!-- Developer message: centered gray box -->
+                <div class="flex justify-center">
+                    <div class="bg-gray-200 rounded-lg p-2 max-w-[80%]">
+                        <p class="text-gray-600 whitespace-pre-wrap text-xs text-center">{{ msg.content or msg.message or '' }}</p>
+                    </div>
+                </div>
+            {% else %}
+                {% set bg_color = 'bg-blue-50' if is_candidate else 'bg-gray-50' %}
+                {% set icon = '👼' if is_candidate else '👨‍💻‍' %}
+                {% set align_class = 'justify-start' if is_candidate else 'justify-end' %}
+                {% set text_align = 'text-left' if is_candidate else 'text-right' %}
+                <div class="flex {{ align_class }}">
+                    <div class="{{ bg_color }} rounded-lg p-3 max-w-[80%]">
+                        <div class="flex items-start space-x-2 {{ 'flex-row-reverse' if not is_candidate else '' }}">
+                            <span class="text-lg">{{ icon }}</span>
+                            <div class="flex-1 {{ text_align }}">
+                                <div class="flex {{ 'justify-between' if is_candidate else 'justify-end' }} items-start mb-1">
+                                    {% if is_candidate %}
+                                        <span class="font-medium text-gray-900 text-xs">
+                                            {{ candidate.name or '候选人' }}
+                                        </span>
+                                        {% if msg.timestamp %}
+                                        <span class="text-xs text-gray-500 ml-2">{{ msg.timestamp }}</span>
+                                        {% endif %}
+                                    {% else %}
+                                        {% if msg.timestamp %}
+                                        <span class="text-xs text-gray-500">{{ msg.timestamp }}</span>
+                                        {% endif %}
+                                        <span class="font-medium text-gray-900 text-xs ml-2">
+                                            招聘顾问
+                                        </span>
+                                    {% endif %}
+                                </div>
+                                <p class="text-gray-700 whitespace-pre-wrap text-sm">{{ msg.content or msg.message or '' }}</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            {% endif %}
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+    {% endif %}
 
     {% if candidate.updated_at %}
     {% set display_time = candidate.updated_at.replace('T', ' ')[:19] %}
@@ -208,8 +268,11 @@ async function process_candidate() {
     };
     const { candidate_id, chat_id, conversation_id, job_applied, name } = getIdentifiers();
     const mode = getCandidateData('mode');
-    // Disable cards during processing
-    disableAllCards();
+    // Note: disableAllCards() is called by startProcessCandidate() for batch processing
+    // Only disable if not already disabled (for manual single candidate processing)
+    if (!window.cycleReplyState?.running) {
+        document.dispatchEvent(new CustomEvent('candidates:disable-cards'));
+    }
     try {
         // Step 1: Ensure resume is loaded
         const online_resume_div = document.getElementById('resume-textarea-online');
@@ -229,68 +292,42 @@ async function process_candidate() {
         }
         
         // Step 4: Check threshold and determine stage (sequential: chat → borderline → seek)
-        const analysis_container = document.querySelector('#analysis-content #analysis-result-container');
-        let analysis = analysis_container ? JSON.parse(analysis_container.getAttribute('data-analysis')) : null;
+        let [newStage, current_score, analysis] = determineStage();
         let is_full_analysis = analysis?.resume_type === 'full';
-        let current_score = analysis?.overall || 0;
-        const skill_score = analysis?.skill || 0;
-        const startup_fit_score = analysis?.startup_fit || 0;
-        const background_score = analysis?.background || 0;
-        const { chat_threshold, borderline_threshold, seek_threshold } = getThresholdValues();
-        let newStage = 'PASS'; // Default to PASS
-        // Step 4a: Check chat_threshold - generate message if above chat_threshold
-        if (current_score >= chat_threshold || skill_score >= seek_threshold || startup_fit_score >= seek_threshold || background_score >= seek_threshold) {
-            newStage = 'CHAT';
-            // const messageText = document.getElementById('message-text').value;
-            // if (messageText?.includes('⏳')) {
-            //     await generateMessage();
-            // }
-        } else {
-            showToast(`匹配度: ${current_score}, 未达最低值: ${chat_threshold}`, 'info');
-        }
         let need_reply = await shouldReply();
+        // Step 4a: chat with candidate only but no analysis with full resume
+        if (newStage === 'CHAT' && need_reply) {
+            await generateMessage();
+            await greetAndSendMessage();
+            need_reply = false;
+        }
         // Step 4b: Check borderline_threshold - try to get full resume and re-analyze
-        const auto_send = document.getElementById('auto-send-checkbox')?.checked ?? true;
-        if (current_score >= borderline_threshold || skill_score >= seek_threshold || startup_fit_score >= seek_threshold || background_score >= seek_threshold) {
-            newStage = 'SEEK';
+        if (['SEEK', 'CONTACT'].includes(newStage)) {
             // For chat mode, try to get full resume and re-analyze
-            if (mode !== 'recommend') {
-                let full_resume_text = document.getElementById('resume-textarea-full')?.value?.trim() || '';
-                if (full_resume_text.includes('⏳')) {
-                    await fetchFullResume();
-                    full_resume_text = document.getElementById('resume-textarea-full')?.value?.trim() || '';
+            let full_resume_text = document.getElementById('resume-textarea-full')?.value?.trim() || '';
+            if (full_resume_text.includes('⏳') || full_resume_text.length < 100) {
+                await fetchFullResume();
+                full_resume_text = document.getElementById('resume-textarea-full')?.value?.trim() || '';
+            }
+            // check if analysis is from full resume
+            if (! is_full_analysis && full_resume_text.length > 100 ) {
+                await startAnalysis();
+                [newStage, current_score, analysis] = determineStage();
+                if (['SEEK', 'CONTACT'].includes(newStage)) {
+                    need_reply = true; // generate a new message if full analysis is passed SEEK stage
+                    await sendDingNotification(analysis, name, getCandidateData('job_applied'));
                 }
-                // check if analysis is from full resume
-                if (! is_full_analysis && full_resume_text.length > 100 && !full_resume_text.includes('⏳')) {
-                    await startAnalysis();
-                    // Re-read analysis after full resume analysis
-                    const updated_analysis_container = document.querySelector('#analysis-content #analysis-result-container');
-                    analysis = JSON.parse(updated_analysis_container.getAttribute('data-analysis'));
-                    is_full_analysis = analysis.resume_type === 'full';
-                    current_score = analysis?.overall || current_score;
-                    if (current_score >= borderline_threshold) {
-                        await sendDingNotification(analysis, name, getCandidateData('job_applied'));
-                    }
-                }
-                if (need_reply && is_full_analysis && current_score >= borderline_threshold ) {
-                    // Step 4c: Send notification if analysis was updated
-                    await generateMessage();
-                    await greetAndSendMessage(autoSend=auto_send);
-                    need_reply = false;
-                }
+            }
+            // Step 4c: Send notification if candidate send new message or analysis was updated
+            if (need_reply) {
+                await generateMessage();
+                await greetAndSendMessage();
+                need_reply = false;
                 // Step 4d: Check seek_threshold - request contact if above
-                if (is_full_analysis && current_score >= seek_threshold) {
-                    newStage = 'CONTACT';
+                if (newStage === 'CONTACT') {
                     await sendDingNotification(analysis, name, getCandidateData('job_applied'));
                     await requestContact();
                 }
-            }
-
-            // Step 4e: Send message to candidate if still need to reply
-            if (need_reply) {
-                await generateMessage();
-                await greetAndSendMessage(autoSend=auto_send);
-                need_reply = false;
             }
         }
         // Update stage and card
@@ -321,10 +358,10 @@ async function process_candidate() {
         document.dispatchEvent(event);
     } finally {
         // Always re-enable cards after processing, even on error
-        // Use setTimeout to ensure this runs even if there are unhandled promise rejections
-        setTimeout(() => {
-            enableAllCards();
-        }, 0);
+        // Only re-enable if not in batch processing mode (startProcessCandidate handles it)
+        if (!window.cycleReplyState?.running) {
+            document.dispatchEvent(new CustomEvent('candidates:enable-cards'));
+        }
     }
 }
 
@@ -372,14 +409,12 @@ async function fetchOnlineResume() {
 }
 
 async function fetchFullResume() {
-    showToast('抓取完整简历...', 'info');
     const values = getCandidateData();
     const mode = values.mode;
     if (mode === 'recommend') {
-        const errorMsg = '完整简历不支持推荐模式';
-        showToast(errorMsg, 'warning');
-        throw new Error(errorMsg);
+        return;
     }
+    showToast('抓取完整简历...', 'info');
 
     await htmxAjaxPromise('POST', '/candidates/fetch-full-resume', {
         target: '#resume-full-container',
@@ -402,7 +437,8 @@ async function generateMessage() {
     await updateCandidateData({generated_message: result});
 }
 
-async function greetAndSendMessage(autoSend = true) {
+async function greetAndSendMessage() {
+    const autoSend = document.getElementById('auto-send-checkbox')?.checked ?? true;
     const message_textarea = document.getElementById('message-text');
     const message = autoSend ? message_textarea.value.trim() : '';
     let stage = getCandidateData('stage');
@@ -424,8 +460,8 @@ async function greetAndSendMessage(autoSend = true) {
         // showToast('消息长度不能为空', 'error');
         return;
     }
-    // if not auto send and not recommend mode, skip sending message
-    if (!autoSend && mode !== 'recommend') {
+    // if mode is other thanrecommend and auto send is false, skip sending message
+    if (mode !== 'recommend' && !autoSend) {
         return;
     }
     await htmxAjaxPromise('POST', '/candidates/send', {
@@ -500,45 +536,8 @@ function updateAnalysisResumeTypeBadge(analysis) {
 }
 
 /**
- * Check if we should reply based on chat history
- * Returns true if last message is from user, false if from assistant
+ * Request contact information from candidate
  */
-async function shouldReply() {
-    const values = getCandidateData();
-    const chat_id = values.chat_id;
-    const mode = values.mode;
-    const greeted = values.greeted;
-    const autoSend = document.getElementById('auto-send-checkbox')?.checked ?? true;
-    // If greeted and updated_at is less than 10 minutes ago, don't reply
-    const updatedAt = new Date(values.updated_at);
-    const now = new Date();
-    const diffMs = now - updatedAt;
-    const diffMinutes = diffMs / (1000 * 60);
-    if (greeted && values.updated_at) {
-        if (diffMinutes < 10) {
-            return false;
-        }
-    }
-    // For recommend mode, only rely on greeted flag
-    if (mode === 'recommend') {
-        return !greeted; // if not greeted, we need to reply
-    }else if (mode === 'followup' && diffMinutes > 60*24*1) {
-        return true; // if updated_at is more than 1 day ago, we need to reply
-    }
-    // for other modes, check if we should reply based on chat history
-    const response = await fetch('/candidates/should-reply', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ 
-            chat_id: chat_id,
-            mode: mode
-        })
-    });
-    const data = await window.handleApiResponse(response);
-    const should_reply = data.should_reply === true;
-    return should_reply;
-}
-
 async function requestContact() {
     const values = getCandidateData();
     const chat_id = values.chat_id;
@@ -677,6 +676,63 @@ async function initializeNewChat() {
 // ============================================================================
 // Candidate Detail Helper Functions
 // ============================================================================
+function determineStage() {
+    let stage = 'PASS';
+    const analysis_container = document.querySelector('#analysis-content #analysis-result-container');
+    const { chat_threshold, borderline_threshold, seek_threshold } = getThresholdValues();
+    const analysis = analysis_container ? JSON.parse(analysis_container.getAttribute('data-analysis')) : null;
+    const {overall, skill, startup_fit, background} = analysis || {};
+    if (overall >= seek_threshold){
+        stage =  'CONTACT';
+    } else if (overall >= borderline_threshold){
+        stage = 'SEEK';
+    } else if(overall >= chat_threshold || skill >= seek_threshold || startup_fit >= seek_threshold || background >= seek_threshold){
+        stage = 'CHAT';
+    }
+    return [stage, overall, analysis];
+}
+
+
+/**
+ * Check if we should reply based on chat history
+ * Returns true if last message is from user, false if from assistant
+ */
+async function shouldReply() {
+    const values = getCandidateData();
+    const chat_id = values.chat_id;
+    const mode = values.mode;
+    const greeted = values.greeted;
+    const autoSend = document.getElementById('auto-send-checkbox')?.checked ?? true;
+    // If greeted and updated_at is less than 10 minutes ago, don't reply
+    const updatedAt = new Date(values.updated_at);
+    const now = new Date();
+    const diffMs = now - updatedAt;
+    const diffMinutes = diffMs / (1000 * 60);
+    if (greeted && values.updated_at) {
+        if (diffMinutes < 10) {
+            return false;
+        }
+    }
+    // For recommend mode, only rely on greeted flag
+    if (mode === 'recommend') {
+        return !greeted; // if not greeted, we need to reply
+    }else if (mode === 'followup' && diffMinutes > 60*24*1) {
+        return true; // if updated_at is more than 1 day ago, we need to reply
+    }
+    // for other modes, check if we should reply based on chat history
+    const response = await fetch('/candidates/should-reply', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ 
+            chat_id: chat_id,
+            mode: mode
+        })
+    });
+    const data = await window.handleApiResponse(response);
+    const should_reply = data.should_reply === true;
+    return should_reply;
+}
+
 
 /**
  * Update candidate data in the form and broadcast update to card
@@ -828,8 +884,7 @@ function switchResumeTab(tab) {
         await process_candidate();
     }
     
-    // Use setTimeout instead of requestAnimationFrame to ensure it runs even in background tabs
-    // requestAnimationFrame is paused when the tab is not visible, but setTimeout is only throttled
+    // Use setTimes paused when the tab is not visible, but setTimeout is only throttled
     setTimeout(() => {
         runProcessCandidate();
     }, 100);

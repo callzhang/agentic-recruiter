@@ -307,9 +307,7 @@ window.fetch = function(...args) {
             activeFetchRequests--;
             if (activeFetchRequests <= 0) {
                 activeFetchRequests = 0;
-                if (loadingIndicator) {
-                    loadingIndicator.classList.remove('htmx-request');
-                }
+                loadingIndicator.classList.remove('htmx-request');
             }
             throw error;
         });
@@ -355,7 +353,7 @@ document.body.addEventListener('htmx:responseError', function(evt) {
 document.body.addEventListener('htmx:sendError', function(evt) {
     console.error('HTMX send error:', evt.detail);
     // Only show toast if not already handled by htmxAjaxPromise
-    if (!evt.detail?.handled) {
+    if (!evt.detail.handled) {
         showToast('网络请求失败，请重试', 'error');
     }
 });
@@ -392,11 +390,11 @@ window.handleApiResponse = async function handleApiResponse(response) {
         return await response.json();
     }
     
-    // Try to parse JSON error body, fallback to status text if parsing fails
-    const errorData = await response.json().catch(() => null);
+    // Try to parse JSON error body
+    const errorData = await response.json();
     
     // 422: ValidationError or custom detail structure
-    if (response.status === 422 && errorData?.detail) {
+    if (response.status === 422 && errorData.detail) {
         const errors = errorData.detail
             .map(e => `${e.loc.join('.')}: ${e.msg}`)
             .join(', ');
@@ -404,7 +402,7 @@ window.handleApiResponse = async function handleApiResponse(response) {
     }
     
     // Other server errors
-    const message = errorData?.error || errorData?.detail || response.statusText;
+    const message = errorData.error || errorData.detail || response.statusText;
     throw new Error(`Server error (${response.status}): ${message}`);
 }
 
@@ -462,12 +460,17 @@ window.htmxAjaxPromise = function htmxAjaxPromise(method, url, options) {
 const CYCLE_MODES = ['recommend', 'greet', 'chat', 'followup'];
 
 const cycleReplyState = {
-    running: false,
-    stopRequested: false,
-    modeIndex: 0,
-    errorStreak: 0,
-    serverErrorStreak: 0,  // Separate counter for 500 server errors
-    lastProcessedTime: null  // Track last time a candidate was processed (for idle timeout)
+    // Control flags
+    running: false,              // Whether candidate processing is running
+    stopRequested: false,         // Whether stop has been requested (graceful shutdown)
+    
+    // Progress tracking
+    modeIndex: 0,                 // Current mode index in cycle (0-3)
+    lastProcessedTime: null,      // Last time a candidate was processed (for idle timeout)
+    
+    // Error tracking (separate counters for different error types)
+    errorStreak: 0,               // Consecutive non-server errors (stops at 2)
+    serverErrorStreak: 0          // Consecutive server/network errors (stops at 5-10, transient)
 };
 
 const CycleReplyHelpers = {
@@ -477,41 +480,15 @@ const CycleReplyHelpers = {
     
     setButton(isRunning, label = null) {
         const btn = this.getButton();
-        if (!btn) return;
-        
         btn.disabled = false;
         btn.textContent = label || (isRunning ? '⏸️ 停止循环' : '🔄 循环回复');
         btn.classList.toggle('opacity-60', isRunning && cycleReplyState.stopRequested);
     },
     
-    async requestStop(message = '循环回复即将停止...') {
+    async requestStop(message = '处理即将停止...') {
         cycleReplyState.stopRequested = true;
         this.setButton(true, '⏹️ 正在停止...');
-        
-        // If batch processing is active, stop it first
-        if (window.batchProcessingActive) {
-            showToast('正在停止批处理，然后停止循环处理', 'info');
-            
-            // Call stop batch processing handler
-            stopBatchProcessingHandler();
-            
-            // Wait for batch processing to complete (up to 5 minutes)
-            // Use ignoreStopRequest=true to ensure we actually wait for batch processing to finish
-            const waitResult = await this.waitUntil(
-                () => !window.batchProcessingActive,
-                { timeoutMs: 300000, stepMs: 500, ignoreStopRequest: true } // Wait up to 5 minutes, ignore stop request
-            );
-            
-            if (waitResult.timeout) {
-                showToast('等待批处理停止超时，循环处理已停止', 'warning');
-            } else if (waitResult.stopped) {
-                showToast('循环处理已停止（批处理仍在运行）', 'warning');
-            } else {
-                showToast('批处理已停止，循环处理已停止', 'info');
-            }
-        } else {
         showToast(message, 'info');
-        }
     },
     
     sleep(ms) {
@@ -537,13 +514,10 @@ const CycleReplyHelpers = {
     
     getCandidateTabs() {
         const element = document.querySelector('[x-data*="candidateTabs"]');
-        if (element?.__x?.$data) {
+        if (element.__x?.$data) {
             return element.__x.$data;
         }
-        if (element?._x_dataStack?.[0]) {
-            return element._x_dataStack[0];
-        }
-        throw new Error('无法访问 candidateTabs 实例');
+        return element._x_dataStack[0];
     },
     
     async ensureCandidatesLoaded(mode, candidateTabs) {
@@ -554,103 +528,80 @@ const CycleReplyHelpers = {
         
         let candidateCards = candidateList.querySelectorAll('.candidate-card');
         
-        if (!candidateCards || candidateCards.length === 0) {
-            showToast(`查询候选人: ${mode}`, 'info');
+        if (candidateCards.length === 0) {
+            console.log(`查询候选人: ${mode}`);
             
-            candidateTabs.loadCandidates();
-            const loadResult = await this.waitUntil(() => !candidateTabs.loading, { timeoutMs: 20000 });
-            if (!loadResult.success) {
-                return loadResult;
+            // Use the activeTab from candidateTabs component, fallback to mode
+            const activeTab = candidateTabs?.activeTab || mode;
+            
+            // load candidates list
+            try {
+                await window.loadCandidatesList(activeTab);
+                // await this.waitUntil(
+                //     () => candidateList.querySelectorAll('.candidate-card').length > 0 || candidateList.querySelector('#empty-message'),
+                //     { timeoutMs: 5000 }
+                // );
+            } catch (error) {
+                return { success: false, error: error };
             }
-            
-            await this.waitUntil(
-                () => candidateList.querySelectorAll('.candidate-card').length > 0 || candidateList.querySelector('#empty-message'),
-                { timeoutMs: 5000 }
-            );
             
             candidateCards = candidateList.querySelectorAll('.candidate-card');
         } else {
-            showToast(`列表已有 ${candidateCards.length} 人，跳过查询`, 'info');
+            console.log(`列表已有 ${candidateCards.length} 人，跳过查询`);
         }
         
         return { success: true, candidateCards };
     },
     
-    // waitForBatchButton removed - no longer needed as we call processAllCandidates directly
-    
-    async waitForBatchProcessingComplete(numberOfCandidates = 1) {
-        // Calculate timeout as number of candidates * 180 seconds (in milliseconds)
-        const timeoutMs = numberOfCandidates * 180000;
-        const start = performance.now();
-        let lastActiveCheck = start;
-        
-        while (window.batchProcessingActive && !cycleReplyState.stopRequested) {
-            if (performance.now() - start >= timeoutMs) {
-                return { success: false, timeout: true };
-            }
-            await this.sleep(600);
-        }
-        
-        if (cycleReplyState.stopRequested) {
-            return { success: false, stopped: true };
-        }
-        
-        // Let UI settle
-        await this.sleep(400);
-        return { success: true };
-    },
-    
-    async processAllCandidatesForMode(mode, candidateCards) {
-        if (!candidateCards || candidateCards.length === 0) {
-            showToast(`没有找到候选人: ${mode}`, 'info');
-            return { success: true, skipped: true };
-        }
-        
-        if (cycleReplyState.stopRequested) {
-            return { success: false, stopped: true };
-        }
-        
-        // Directly start batch processing without needing the batch button
-        // processAllCandidates() is async and will wait for all candidates to complete
-        await processAllCandidates();
-        
-        // processAllCandidates() sets batchProcessingActive = false when done
-        return { success: true };
-    },
     
     async processMode(mode, candidateTabs) {
         const isCurrentTab = candidateTabs.activeTab === mode;
         
         if (!isCurrentTab) {
-        showToast(`循环回复: 切换到 ${mode}`, 'info');
-        candidateTabs.switchTab(mode);
-        await this.sleep(350);
+            showToast(`处理: 切换到 ${mode}`, 'info');
+            candidateTabs.switchTab(mode);
+            await this.sleep(350);
         } else {
             // If already on this tab, preserve the existing candidate list
-            showToast(`循环回复: 处理当前模式 ${mode}`, 'info');
+            showToast(`处理: 当前模式 ${mode}`, 'info');
         }
         
         const loadResult = await this.ensureCandidatesLoaded(mode, candidateTabs);
         if (!loadResult.success) {
-            return loadResult;
+            const error = loadResult.error;
+            const errorMessage = error.message || error.toString() || JSON.stringify(error);
+            const errorStatus = error.status || error.statusCode || loadResult.status;
+            const isServerError = errorStatus >= 500 ||
+                                errorMessage.includes('500') || 
+                                errorMessage.includes('Server error (500)') ||
+                                errorMessage.includes('Internal Server Error') ||
+                                errorMessage.includes('ERR_CONNECTION_REFUSED') ||
+                                errorMessage.includes('Connection refused') ||
+                                errorMessage.includes('HTMX') ||
+                                errorMessage.includes('network') ||
+                                errorMessage.includes('NetworkError') ||
+                                errorMessage.includes('Failed to fetch');
+            
+            return {
+                success: false,
+                error: error,
+                isServerError: isServerError,
+                errorMessage: errorMessage
+            };
         }
         
-        return this.processAllCandidatesForMode(mode, loadResult.candidateCards);
+        return { success: true, candidateCards: loadResult.candidateCards };
     },
     
     resetState() {
         cycleReplyState.running = false;
         cycleReplyState.stopRequested = false;
         // Start from current tab instead of always starting from index 0
-        try {
-            const candidateTabs = this.getCandidateTabs();
-            const currentTab = candidateTabs.activeTab || 'recommend';
-            cycleReplyState.modeIndex = CYCLE_MODES.indexOf(currentTab);
-            if (cycleReplyState.modeIndex === -1) {
-                cycleReplyState.modeIndex = 0; // Fallback to first mode if current tab not found
-            }
-        } catch (error) {
-            cycleReplyState.modeIndex = 0; // Fallback to first mode on error
+        const candidateTabs = this.getCandidateTabs();
+        const currentTab = candidateTabs.activeTab || 'recommend';
+        cycleReplyState.modeIndex = CYCLE_MODES.indexOf(currentTab);
+        if (cycleReplyState.modeIndex === -1) {
+            cycleReplyState.modeIndex = 0;
         }
         cycleReplyState.errorStreak = 0;
         cycleReplyState.serverErrorStreak = 0;
@@ -658,41 +609,12 @@ const CycleReplyHelpers = {
     }
 };
 
-async function startCycleReply() {
-    if (!isOnCandidatePage()) {
-        showToast('请在候选人页面使用循环回复', 'warning');
-        return;
-    }
-    
+/**
+ * Start processing candidates
+ */
+async function startProcessCandidate() {
     if (cycleReplyState.running) {
-        await CycleReplyHelpers.requestStop();
-        return;
-    }
-    
-    // If batch processing is active, stop it and wait for it to complete
-    if (window.batchProcessingActive) {
-        CycleReplyHelpers.setButton(true, '⏹️ 正在停止...');
-        showToast('正在停止批处理，然后停止循环处理', 'info');
-        
-        // Mark batch processing to stop
-        window.stopBatchProcessing = true;
-        
-        // Wait for batch processing to complete
-        const waitResult = await CycleReplyHelpers.waitUntil(
-            () => !window.batchProcessingActive,
-            { timeoutMs: 300000, stepMs: 500 } // Wait up to 5 minutes
-        );
-        
-        if (!waitResult.success) {
-            showToast('等待批处理停止超时，循环处理已取消', 'warning');
-            CycleReplyHelpers.setButton(false);
-        return;
-    }
-    
-        // Now stop the cycle reply
-        CycleReplyHelpers.resetState();
-        CycleReplyHelpers.setButton(false);
-        showToast('循环处理已停止', 'info');
+        await stopProcessCandidate();
         return;
     }
     
@@ -703,130 +625,143 @@ async function startCycleReply() {
     cycleReplyState.running = true;
     CycleReplyHelpers.setButton(true);
     
+    // Disable all candidate cards via event
+    document.dispatchEvent(new CustomEvent('candidates:disable-cards'));
+    let total_processed = 0;
+    let total_failed = 0;
+    let total_skipped = 0;
     try {
-        if (processAllModes) {
-            // Process all modes in cycle
-        while (!cycleReplyState.stopRequested) {
+        while (cycleReplyState.running && !cycleReplyState.stopRequested) {
             // Check if 5 minutes have passed without processing any candidate
-            if (cycleReplyState.lastProcessedTime !== null) {
-                const idleTime = Date.now() - cycleReplyState.lastProcessedTime;
-                const IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
-                if (idleTime >= IDLE_TIMEOUT_MS) {
-                    showToast('5分钟没有处理任何候选人，循环回复已停止', 'warning');
-                    break;
-                }
+            const idleTime = Date.now() - cycleReplyState.lastProcessedTime;
+            const IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+            if (idleTime >= IDLE_TIMEOUT_MS) {
+                showToast('5分钟没有处理任何候选人，处理已停止', 'warning');
+                break;
             }
             
-            const mode = CYCLE_MODES[cycleReplyState.modeIndex];
-            let result;
+            // Determine current mode
+            const candidateTabs = CycleReplyHelpers.getCandidateTabs();
+            const mode = processAllModes 
+                ? CYCLE_MODES[cycleReplyState.modeIndex]
+                : (candidateTabs.activeTab || 'recommend');
             
-            try {
-                const candidateTabs = CycleReplyHelpers.getCandidateTabs();
-                result = await CycleReplyHelpers.processMode(mode, candidateTabs);
-            } catch (error) {
-                result = { success: false, error };
-            }
+            // Process mode (switch tab if needed)
+            const result = await CycleReplyHelpers.processMode(mode, candidateTabs);
             
             if (result.stopped) {
                 break;
             }
-                // handle timeout and other errors
+            
+            // Handle errors
             if (result.success === false) {
-                    // Handle timeout as transient error - batch processing may have completed but flag not reset
-                if (result.timeout) {
-                        cycleReplyState.serverErrorStreak += 1;
-                        console.warn(`[循环回复] 批处理超时 (${cycleReplyState.serverErrorStreak}/5): 可能已完成，继续下一模式`, result);
-                        showToast(`批处理超时 (${cycleReplyState.serverErrorStreak}/5): 继续下一模式`, 'warning');
-                        
-                        // Only stop after 5 consecutive timeouts
-                        if (cycleReplyState.serverErrorStreak >= 5) {
-                            showToast('连续批处理超时超过 5 次，循环回复已停止', 'error');
+                if (result.isServerError) {
+                    cycleReplyState.serverErrorStreak += 1;
+                    console.warn(`[处理] 服务器错误 (${cycleReplyState.serverErrorStreak}/10): ${result.errorMessage}`);
+                    showToast(`服务器错误 (${cycleReplyState.serverErrorStreak}/10): 跳过当前模式，继续处理`, 'warning');
+                    if (cycleReplyState.serverErrorStreak >= 10) {
+                        showToast('连续服务器错误超过 10 次，处理已停止', 'error');
+                        break;
+                    }
+                } else {
+                    cycleReplyState.errorStreak += 1;
+                    console.error(`[处理] 处理模式 ${mode} 出错:`, result.error);
+                    showToast(`处理错误(${cycleReplyState.errorStreak}/2): ${result.errorMessage}`, 'error');
+                    if (cycleReplyState.errorStreak >= 2) {
+                        showToast('连续错误超过 2 次，处理已停止', 'error');
+                        break;
+                    }
+                }
+                // Move to next mode if processing all modes
+                if (processAllModes) {
+                    cycleReplyState.modeIndex = (cycleReplyState.modeIndex + 1) % CYCLE_MODES.length;
+                    await CycleReplyHelpers.sleep(1000);
+                }
+                continue;
+            }
+            
+            // Process candidates in current mode
+            const cards = result.candidateCards || document.querySelectorAll('.candidate-card');
+            
+            // Find starting index
+            let startIndex = 0;
+            const selectedCard = Array.from(cards).find(card => 
+                card.classList.contains('bg-blue-50') || 
+                card.classList.contains('border-blue-500')
+            );
+            if (selectedCard) {
+                const selectedIndex = Array.from(cards).indexOf(selectedCard);
+                startIndex = (selectedIndex + 1) % cards.length;
+            }
+            
+            const total = cards.length;
+            let processed = 0;
+            let failed = 0;
+            let skipped = 0;
+            
+            // Process each candidate
+            showToast(`开始处理 ${total - startIndex} 个候选人 (从第 ${startIndex + 1} 个开始)`, 'info');
+            for (let i = startIndex; i < cards.length; i++) {
+                if (!cycleReplyState.running || cycleReplyState.stopRequested) {
                     break;
                 }
-                        
-                        // Reset regular error streak on timeout (they're different issues)
-                        cycleReplyState.errorStreak = 0;
-                        // Don't reset serverErrorStreak - let it accumulate
+                // 处理每个候选人
+                try {
+                    const result = await window.processCandidateCard(cards[i], i, total);
+                    if (result.skipped) {
+                        skipped++;
+                        total_skipped++;
+                        console.log(`[处理] 跳过已查看的候选人: ${result.name} (${skipped} 已跳过)`);
+                    } else if (result.success) {
+                        processed++;
+                        cycleReplyState.lastProcessedTime = Date.now();
+                        console.log(`✅ ${result.name} 处理完成 (${processed}/${total})`);
+                        total_processed++;
                     } else {
-                        const errorMessage = result.error?.message || result.error?.toString() || JSON.stringify(result.error) || '未知错误';
-                        const errorStatus = result.error?.status || result.error?.statusCode || result.status;
-                        const isServerError = errorStatus === 500 ||
-                                            errorMessage.includes('500') || 
-                                            errorMessage.includes('Server error (500)') ||
-                                            errorMessage.includes('Internal Server Error') ||
-                                            errorMessage.includes('ERR_CONNECTION_REFUSED') ||
-                                            errorMessage.includes('Connection refused') ||
-                                            errorMessage.includes('HTMX') ||
-                                            errorMessage.includes('network') ||
-                                            errorMessage.includes('NetworkError') ||
-                                            errorMessage.includes('Failed to fetch');
-                        
-                        if (isServerError) {
-                            // Handle 500 server errors separately - they're transient and shouldn't stop the loop
-                            cycleReplyState.serverErrorStreak += 1;
-                            console.warn(`[循环回复] 服务器错误 (${cycleReplyState.serverErrorStreak}/10): ${errorMessage}`);
-                            showToast(`服务器错误 (${cycleReplyState.serverErrorStreak}/10): 跳过当前模式，继续处理`, 'warning');
-                            
-                            // Only stop after 10 consecutive 500 errors
-                            if (cycleReplyState.serverErrorStreak >= 10) {
-                                showToast('连续服务器错误超过 10 次，循环回复已停止', 'error');
-                                break;
-                            }
-                            
-                            // Reset regular error streak on server error (they're different issues)
-                            // Don't reset serverErrorStreak - let it accumulate
-                        } else {
-                            // Handle non-500 errors normally
-                            cycleReplyState.errorStreak += 1;
-                            cycleReplyState.serverErrorStreak = 0; // Reset server error streak on non-server error
-                            console.error(`[循环回复] 处理模式 ${mode} 出错:`, result.error || result);
-                            showToast(`循环回复错误(${cycleReplyState.errorStreak}/2): ${errorMessage}`, 'error');
-                
-                if (cycleReplyState.errorStreak >= 2) {
-                    showToast('连续错误超过 2 次，循环回复已停止', 'error');
-                    break;
-                            }
-                        }
-                }
+                        // this will never happen, because always return a success result
+                        failed++;
+                        total_failed++;
+                        console.error(`❌ ${result.name} 处理失败: ${result.error || '未知错误'}`);
+                    }
+                } catch (error) {
+                    failed++;
+                    total_failed++;
+                    console.error(`❌ ${cards[i].name} 处理失败: ${error || '未知错误'}`);
+                } 
+            }
+            
+            // Show summary for current mode
+            const summary = `模式 ${mode} 完成: 成功 ${processed}/${total}, 失败 ${failed}${skipped > 0 ? `, 跳过 ${skipped}` : ''}`;
+            showToast(summary, failed ? 'success' : 'warning');
+            
+            // Move to next mode if processing all modes
+            if (processAllModes) {
+                cycleReplyState.modeIndex = (cycleReplyState.modeIndex + 1) % CYCLE_MODES.length;
+                await CycleReplyHelpers.sleep(1000);
             } else {
-                    // Success - reset both error counters
-                cycleReplyState.errorStreak = 0;
-                    cycleReplyState.serverErrorStreak = 0;
-            }
-            cycleReplyState.modeIndex = (cycleReplyState.modeIndex + 1) % CYCLE_MODES.length;
-            await CycleReplyHelpers.sleep(900);
-            }
-        } else {
-            // Process only current mode
-            const candidateTabs = CycleReplyHelpers.getCandidateTabs();
-            const currentMode = candidateTabs.activeTab || 'recommend';
-            
-            showToast(`开始处理当前模式: ${currentMode}`, 'info');
-            
-            let result;
-            try {
-                result = await CycleReplyHelpers.processMode(currentMode, candidateTabs);
-            } catch (error) {
-                result = { success: false, error };
-            }
-            
-            if (result.success === false) {
-                const errorMessage = result.error?.message || result.error?.toString() || '未知错误';
-                showToast(`处理失败: ${errorMessage}`, 'error');
-            } else {
-                showToast('处理完成', 'success');
+                break;
             }
         }
     } finally {
+        // Re-enable candidate cards via event
+        document.dispatchEvent(new CustomEvent('candidates:enable-cards'));
         CycleReplyHelpers.resetState();
         CycleReplyHelpers.setButton(false);
         const processAllModes = document.getElementById('process-all-modes-checkbox')?.checked || false;
-        showToast(processAllModes ? '循环回复已停止' : '处理已停止', 'info');
+        showToast(processAllModes ? '循环处理已完成' : '批量处理已完成', total_failed > 0 ? 'error' : 'success');
     }
 }
 
+/**
+ * Stop processing candidates
+ */
+async function stopProcessCandidate() {
+    await CycleReplyHelpers.requestStop('处理即将停止...');
+}
+
 // Expose to window for inline handlers
-window.startCycleReply = startCycleReply;
+window.startProcessCandidate = startProcessCandidate;
+window.stopProcessCandidate = stopProcessCandidate;
 window.CycleReplyHelpers = CycleReplyHelpers;
 window.cycleReplyState = cycleReplyState; // Expose for candidates.html to update lastProcessedTime
 
