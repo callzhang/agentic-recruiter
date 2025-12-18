@@ -16,6 +16,10 @@ service:
   base_url: http://127.0.0.1:5001
   criteria_path: config/jobs.yaml
 
+# Vercel部署配置
+vercel:
+  url: https://boss-hunter.vercel.app/  
+
 # 浏览器配置
 browser:
   storage_state: data/state.json

@@ -20,3 +20,4 @@ start.ps1
 .vercel
 .vercel.bak
 vercel/.vercel.bak
+test/__pycache__/test_watcher.cpython-310-pytest-7.4.3.pyc

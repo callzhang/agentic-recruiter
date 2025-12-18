@@ -365,10 +365,14 @@ def search_candidates_advanced(
         "candidate_id",
         "chat_id",
         "conversation_id",
+        "contact",  # Special field for sorting by contact info availability
     }
     sort_by_normalized = sort_by if sort_by in sortable_fields else "updated_at"
     sort_dir = "DESC" if sort_direction.lower() != "asc" else "ASC"
-    order_clause = f"{sort_by_normalized} {sort_dir}"
+    # Only use order_clause for Milvus if the field is a real database field
+    # "contact" is a computed field, so we'll sort in Python instead
+    use_milvus_order = sort_by_normalized != "contact"
+    order_clause = f"{sort_by_normalized} {sort_dir}" if use_milvus_order else None
 
     try:
         # Cap the limit to stay within Milvus's max query result window of 16384
@@ -386,13 +390,16 @@ def search_candidates_advanced(
                 similarity_threshold=0.5,
             )
         else:
-            results = _client.query(
-                collection_name=_collection_name,
-                filter=filter_expr,
-                output_fields=fields,
-                limit=effective_limit,
-                output_fields_order=order_clause,
-            )
+            query_params = {
+                "collection_name": _collection_name,
+                "filter": filter_expr,
+                "output_fields": fields,
+                "limit": effective_limit,
+            }
+            # Only add order_by if it's a real database field
+            if order_clause:
+                query_params["output_fields_order"] = order_clause
+            results = _client.query(**query_params)
         
         candidates = [{k: v for k, v in result.items() if v or v == 0} for result in results or []]
         
@@ -400,7 +407,18 @@ def search_candidates_advanced(
             candidate["score"] = candidate.get("analysis", {}).get("overall")
 
         reverse = sort_direction.lower() != "asc"
-        candidates.sort(key=lambda c: c.get(sort_by_normalized) or "", reverse=reverse)
+        
+        # Special handling for contact field (derived from metadata)
+        if sort_by_normalized == "contact":
+            def get_contact_value(c):
+                metadata = c.get("metadata") or {}
+                has_phone = bool(metadata.get("phone_number"))
+                has_wechat = bool(metadata.get("wechat_number"))
+                # Return 1 if has contact, 0 if not (for sorting)
+                return 1 if (has_phone or has_wechat) else 0
+            candidates.sort(key=get_contact_value, reverse=reverse)
+        else:
+            candidates.sort(key=lambda c: c.get(sort_by_normalized) or "", reverse=reverse)
 
         return candidates[:limit] if limit else candidates
     except Exception as exc:
