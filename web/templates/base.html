@@ -24,6 +24,24 @@
     
     <!-- Custom CSS -->
     <link rel="stylesheet" href="/static/css/custom.css">
+    
+    <!-- Public URL configuration -->
+    <script>
+        // Initialize public URL - will be set from config on page load
+        window.__public_url = window.__public_url || '';
+        
+        // Fetch public URL from config on page load
+        (function() {
+            fetch('/api/public-url')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.public_url) {
+                        window.__public_url = data.public_url;
+                    }
+                })
+                .catch(err => console.warn('Failed to load public URL:', err));
+        })();
+    </script>
 </head>
 <body class="bg-gray-50 min-h-screen">
     <!-- Navigation bar -->

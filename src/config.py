@@ -54,3 +54,8 @@ def get_dingtalk_config() -> Dict[str, str]:
 def get_sentry_config() -> Dict[str, Any]:
     """Get Sentry configuration."""
     return _secrets_values["sentry"]
+
+
+def get_vercel_config() -> Dict[str, str]:
+    """Get Vercel configuration."""
+    return _config_values.get("vercel", {})

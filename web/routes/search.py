@@ -86,6 +86,11 @@ async def search_candidates(
             notified_bool = False
 
     # Search candidates (database query, no browser lock needed)
+    # Exclude large fields to prevent gRPC message size limit errors
+    from src.candidate_store import _readable_fields
+    fields_to_remove = {"resume_vector", "full_resume", "resume_text"}
+    fields = [f for f in _readable_fields if f not in fields_to_remove]
+    
     candidates = search_candidates_advanced(
         names=[name.strip()] if name and name.strip() else None,
         job_applied=job_applied.strip() if job_applied else None,
@@ -99,6 +104,7 @@ async def search_candidates(
         limit=limit,
         sort_by=sort_by,
         sort_direction=sort_dir,
+        fields=fields,
     )
 
     # Render template content in thread pool to avoid blocking event loop

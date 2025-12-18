@@ -1025,6 +1025,15 @@ async def chrome_devtools_config():
     """
     return {}
 
+# Public URL configuration endpoint
+@app.get("/api/public-url", tags=["web"])
+async def get_public_url():
+    """Get public URL for candidate detail links."""
+    from src.config import get_vercel_config
+    vercel_config = get_vercel_config()
+    public_url = vercel_config.get("url", "").rstrip('/')
+    return {"public_url": public_url}
+
 # Favicon endpoints (browsers check these paths automatically)
 @app.get("/favicon.ico", tags=["web"])
 @app.get("/favicon.svg", tags=["web"])

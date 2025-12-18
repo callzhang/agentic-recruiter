@@ -27,7 +27,8 @@ import boss_service
 
 router = APIRouter()
 templates = Jinja2Templates(directory="web/templates")
-
+from src.config import get_vercel_config
+vercel_url = get_vercel_config().get("url", "").rstrip('/')
 
 def load_jobs() -> list[dict]:
     """Load job configurations from Zilliz Cloud."""
@@ -175,8 +176,10 @@ async def list_candidates(
             candidate["score"] = stored_candidate.get("analysis", {}).get("overall", None)
             # update greeted status if the candidate is in chat, greet, or seek stage
             candidate['greeted'] = candidate.get('greeted', False)
+            # ensure notified field is properly set (default to False if not present)
+            candidate['notified'] = candidate.get('notified', False)
             restored += 1
-        elif mode in ['greet', 'followup']:
+        elif mode in ['chat', 'followup']:
             found_candidates = [c for c in stored_candidates if c['name'] == candidate['name']]
             logger.error(f"Candidate {candidate} \n not matched, found: {json.dumps(found_candidates, indent=2, ensure_ascii=False)}")
 
@@ -418,59 +421,52 @@ async def generate_message(
     purpose: str = Form(...),
 ):
     """Generate message for candidate. Requires conversation_id to be initialized first."""
-
-    # ROLE_MAPPING = {'candidate': 'user', 'recruiter': 'assistant', 'system': 'developer'}
-
     # Get chat history
     default_user_message = {"content": f"请问你有什么问题可以让我进一步解答吗？", "role": "user"}
-    new_messages = []
-    last_assistant_message = ''
-    page = await boss_service.service._ensure_browser_session()
     # { "type": "candidate/recruiter", "timestamp": "2025-11-10 10:00:00", "message": "你好，我叫张三", "status": "未读" }
     if mode == "recommend":
         # assert index is not None, "index is required for recommend mode"
         chat_history = [default_user_message]
-        new_messages = [default_user_message]
-    else:
-        # get chat history from browser
-        if chat_id:
-            chat_history = await chat_actions.get_chat_history_action(page, chat_id)
-            for msg in chat_history[::-1]:
-                role = msg.get("role")
-                content = msg.get("content")
-                if role == "assistant":
-                    if not content.startswith("方便发一份简历过来吗"):
-                        last_assistant_message = content
-                        break
-                else:
-                    new_messages.insert(0, {"content": content, "role": role})
-        else:
-            # No chat_id, use default message
-            chat_history = []
-            new_messages = [default_user_message]
+        new_user_messages = [default_user_message]
+    elif chat_id:
+        new_user_messages = []
+        page = await boss_service.service._ensure_browser_session()
+        chat_history = await chat_actions.get_chat_history_action(page, chat_id)
+        for msg in chat_history[::-1]:
+            role = msg.get("role")
+            content = msg.get("content")
+            if role == "assistant":
+                if not content.startswith("方便发一份简历过来吗"):
+                    break
+            elif role == "user":
+                new_user_messages.insert(0, {"content": content, "role": role})
+            else:
+                pass # developer message
+    else: # No chat_id, use default message
+        chat_history = []
+        new_user_messages = [default_user_message]
     
     # generate message if there is new message from user(candidate)
-    if [m for m in new_messages if m.get('role') == 'user']:
+    if (new_user_messages and purpose == "CHAT_ACTION") or purpose == "FOLLOWUP_ACTION":
         # Generate message in thread pool to avoid blocking event loop (OpenAI API call)
         message = await asyncio.to_thread(
             assistant_actions.generate_message,
-            input_message=new_messages,
+            input_message=new_user_messages if new_user_messages else '[沉默]',
             conversation_id=conversation_id,
-            purpose=purpose
+            purpose=purpose # prompt will be determined by purpose
         )
         logger.debug("Generated message: %s", message)
-        
-        # append the new message to the chat_history from DOM
-        new_message = {"role": "assistant", "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "content": message}
+        # append the new message to the chat_history
+        generated_message = {"role": "assistant", "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "content": message}
         # Save to database (database operation, no browser lock needed)
         upsert_candidate(
             candidate_id=candidate_id,
-            # last_message=message, # last_message is used to identify the candidate in recommend mode
             chat_id=chat_id,
             mode=mode,
             conversation_id=conversation_id,
+            # last_message=message, # last_message is used to identify the candidate in recommend mode
             generated_message=message,
-            metadata={'history': chat_history + [new_message]},
+            metadata={'history': chat_history + [generated_message]},
         )
     else:
         logger.warning("No new message found for conversation_id: %s", conversation_id)
@@ -618,6 +614,11 @@ async def notify_hr(
     name = candidate.get("name", "未知候选人")
     job_applied = candidate.get("job_applied", "未指定岗位")
     resume_type = '完整简历' if analysis.get('resume_type') == 'full' else '在线简历'
+    
+    # Get Vercel URL and generate candidate detail link
+    candidate_id = candidate.get('candidate_id')
+    candidate_link = f"{vercel_url}/candidate/{candidate_id}" if vercel_url and candidate_id else ""
+    
     message = f"""**候选人**: {name}
 **岗位**: {job_applied}
 
@@ -633,6 +634,10 @@ async def notify_hr(
 **跟进建议**:
 {analysis.get('followup_tips', '暂无')}"""
     
+    # Add candidate detail link if available
+    if candidate_link:
+        message += f"\n\n[查看候选人详情]({candidate_link})"
+    
     title = f"候选人 {name} 通过筛选（{resume_type}）"
     
     # Send notification with job_id support
@@ -644,7 +649,6 @@ async def notify_hr(
         return {"success": True, "message": "通知发送成功"}
     else:
         return {"success": False, "error": "通知发送失败"}
-
 
 @router.post("/fetch-online-resume", response_class=HTMLResponse)
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))

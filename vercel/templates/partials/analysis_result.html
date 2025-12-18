@@ -1,0 +1,62 @@
+<!-- Analysis result display -->
+<div class="space-y-4" 
+     id="analysis-result-container"
+     data-analysis='{{ analysis | tojson }}'>
+    <!-- Resume Type Badge - update badge immediately when this partial is loaded -->
+    <script>
+    (function() {
+        // Update badge immediately (works for both initial load and HTMX swaps)
+        const container = document.getElementById('analysis-result-container');
+        if (container) {
+            const analysisData = container.dataset.analysis;
+            if (analysisData) {
+                const analysis = JSON.parse(analysisData);
+                // Ensure updateAnalysisResumeTypeBadge function exists before calling
+                if (typeof updateAnalysisResumeTypeBadge === 'function') {
+                    updateAnalysisResumeTypeBadge(analysis);
+                } else {
+                    // Fallback: update badge directly if function not available
+                    const badgeContainer = document.getElementById('analysis-resume-type-badge');
+                    if (badgeContainer && analysis) {
+                        const resumeType = analysis.resume_type || 'online';
+                        const badgeClass = resumeType === 'full' 
+                            ? 'inline-block px-3 py-1 text-xs font-medium rounded-full bg-indigo-100 text-indigo-700'
+                            : 'inline-block px-3 py-1 text-xs font-medium rounded-full bg-blue-100 text-blue-700';
+                        const badgeText = resumeType === 'full' ? '📄 完整简历' : '🌐 在线简历';
+                        badgeContainer.innerHTML = `<span class="${badgeClass}">${badgeText}</span>`;
+                    }
+                }
+            }
+        }
+    })();
+    </script>
+    <div class="grid grid-cols-4 gap-4">
+        <div class="bg-white border rounded-lg p-4 text-center">
+            <div class="text-2xl font-bold text-blue-600">{{ analysis.skill or 0 }}</div>
+            <div class="text-sm text-gray-600 mt-1">技能匹配</div>
+        </div>
+        <div class="bg-white border rounded-lg p-4 text-center">
+            <div class="text-2xl font-bold text-green-600">{{ analysis.startup_fit or 0 }}</div>
+            <div class="text-sm text-gray-600 mt-1">创业契合</div>
+        </div>
+        <div class="bg-white border rounded-lg p-4 text-center">
+            <div class="text-2xl font-bold text-yellow-600">{{ analysis.background or 0 }}</div>
+            <div class="text-sm text-gray-600 mt-1">基础背景</div>
+        </div>
+        <div class="bg-white border rounded-lg p-4 text-center">
+            <div class="text-2xl font-bold text-purple-600">{{ analysis.overall or 0 }}</div>
+            <div class="text-sm text-gray-600 mt-1">综合评分</div>
+        </div>
+    </div>
+
+    <div class="bg-white border rounded-lg p-4">
+        <h4 class="font-bold text-gray-800 mb-2">分析总结</h4>
+        <p class="text-gray-700 whitespace-pre-wrap text-left">{{ analysis.summary or '暂无总结' }}</p>
+    </div>
+
+    <div class="bg-white border rounded-lg p-4">
+        <h4 class="font-bold text-gray-800 mb-2">后续沟通策略</h4>
+        <p class="text-gray-700 whitespace-pre-wrap text-left">{{ analysis.followup_tips or '暂无策略' }}</p>
+    </div>
+</div>
+

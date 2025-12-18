@@ -1,6 +1,8 @@
 {
   "version": 2,
   "outputDirectory": "public",
+  "buildCommand": null,
+  "framework": null,
 
   "rewrites": [
     {
@@ -20,8 +22,16 @@
       "destination": "/api/stats.py"
     },
     {
+      "source": "/api/public-url",
+      "destination": "/api/stats.py"
+    },
+    {
       "source": "/jobs",
       "destination": "/jobs.html"
+    },
+    {
+      "source": "/candidate/:candidate_id",
+      "destination": "/api/candidate.py"
     }
   ],
   "headers": [

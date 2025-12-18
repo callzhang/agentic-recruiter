@@ -1143,6 +1143,27 @@ class handler(BaseHTTPRequestHandler):
                 _send_json(self, 200, res)
                 return
 
+            if path == '/api/public-url':
+                # Get public URL from environment variables (most reliable in Vercel)
+                public_url = ""
+                
+                # Try environment variables in order of preference
+                env_vars = ["VERCEL_PUBLIC_URL", "PUBLIC_URL", "VERCEL_URL"]
+                for env_var in env_vars:
+                    value = _env_str(env_var)
+                    if value:
+                        public_url = str(value).strip()
+                        break
+                
+                # Format URL if needed
+                if public_url:
+                    if not public_url.startswith('http'):
+                        public_url = f"https://{public_url}"
+                    public_url = public_url.rstrip('/')
+                
+                _send_json(self, 200, {"public_url": public_url})
+                return
+
             _send_json(self, 404, {'success': False, 'error': 'Not found'})
         except Exception as e:
             _send_json(self, 500, {'success': False, 'error': f"{type(e).__name__}: {e}"})
