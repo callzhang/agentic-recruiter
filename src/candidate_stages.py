@@ -27,7 +27,7 @@ STAGES = {
     },
     "CHAT": {
         "name": "CHAT",
-        "description": "分数高于 chat_threshold，沟通中",
+        "description": "分数高于 chat_threshold，需要进一步通过沟通挖掘匹配情况",
         "in_flow": True,
     },
     "SEEK": {

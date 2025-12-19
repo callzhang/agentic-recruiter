@@ -425,13 +425,13 @@ async def generate_message(
     # Get chat history
     default_user_message = {"content": f"请问你有什么问题可以让我进一步解答吗？", "role": "user"}
     # { "type": "candidate/recruiter", "timestamp": "2025-11-10 10:00:00", "message": "你好，我叫张三", "status": "未读" }
+    page = await boss_service.service._ensure_browser_session()
     if mode == "recommend":
         # assert index is not None, "index is required for recommend mode"
         chat_history = [default_user_message]
         new_user_messages = [default_user_message]
     elif chat_id:
         new_user_messages = []
-        page = await boss_service.service._ensure_browser_session()
         chat_history = await chat_actions.get_chat_history_action(page, chat_id)
         for msg in chat_history[::-1]:
             role = msg.get("role")
@@ -576,19 +576,6 @@ async def send_message(
         )
 
 #--------------------------------------------------
-# 简历请求
-#--------------------------------------------------
-# @router.post("/request-full_resume", response_class=HTMLResponse)
-# async def request_resume(chat_id: str = Form(...)):
-#     """Request full resume from candidate."""
-#     page = await boss_service.service._ensure_browser_session()
-#     result = await chat_actions.request_full_resume_action(page, chat_id)
-#     if result:
-#         return HTMLResponse(content='<div class="text-green-600 p-4">✅ 简历请求已发送</div>')
-#     else:
-#         return HTMLResponse(content='<div class="text-red-500 p-4">❌ 请求失败</div>', status_code=500)
-
-#--------------------------------------------------
 # DingTalk Notification
 #--------------------------------------------------
 
@@ -728,16 +715,16 @@ async def fetch_full_resume(
             status_code=400
         )
     
-    # Validate required fields
-    if not chat_id or not candidate_id:
-        return HTMLResponse(
-            content=f'<div class="text-red-500 p-4">缺少 chat_id({chat_id}) 或 candidate_id({candidate_id})，无法获取完整简历</div>',
-            status_code=400
-        )
+    # check if requested
+    candidate = get_candidate_by_dict({"candidate_id": candidate_id, "chat_id": chat_id}, strict=False)
+    if history:=candidate.get("metadata", {}).get("history"):
+        if [h for h in history if h.get("type") == "developer" and h.get("content") == "简历请求已发送"]:
+            return HTMLResponse(
+                content='<div class="text-green-500 p-4">已向候选人请求完整简历，请稍后检查完整简历是否存在</div>',
+            )
     
     # Try to get full resume only
     page = await boss_service.service._ensure_browser_session()
-    # await chat_actions.request_full_resume_action(page, chat_id)
     result = await chat_actions.view_full_resume_action(page, chat_id)
     full_resume_text = result.get("text")
     requested = result.get("requested")
@@ -789,7 +776,19 @@ async def request_contact(
 ):
     """Request contact information (phone and WeChat) from a candidate and store in metadata."""
     page = await boss_service.service._ensure_browser_session()
+    candidate = get_candidate_by_dict({"candidate_id": candidate_id, "chat_id": chat_id}, strict=False)
     
+    if history:=candidate.get("metadata", {}).get("history"):
+        if any(h for h in history if h.get("type") == "developer" and h.get("content") == "请求交换联系方式已发送"):
+            phone_number = history.get("phone_number")
+            wechat_number = history.get("wechat_number")
+            return JSONResponse({
+                "success": True,
+                "phone_number": phone_number,
+                "wechat_number": wechat_number,
+                "clicked_phone": False,
+                "clicked_wechat": False,
+            })
     # Call request_contact_action to get contact info
     contact_result = await chat_actions.request_contact_action(page, chat_id)
     
@@ -798,7 +797,6 @@ async def request_contact(
     wechat_number = contact_result.get("wechat_number")
     
     # Find the candidate by candidate_id or chat_id
-    candidate = get_candidate_by_dict({"candidate_id": candidate_id, "chat_id": chat_id}, strict=False)
     
     # Update candidate metadata with contact info
     # metadata merging is now handled in upsert_candidate()

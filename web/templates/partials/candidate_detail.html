@@ -654,7 +654,6 @@ function updateContactInfoDisplay(phoneNumber, wechatNumber) {
  * Initialize new chat - reads all data from DOM
  */
 async function initializeNewChat() {
-    showToast('初始化对话线程...', 'info');
     let candidate = getCandidateData();
     //always use online resume at first time (full resume is not available at first time)
     const resume_text = document.getElementById('resume-textarea-online')?.value;

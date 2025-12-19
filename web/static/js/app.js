@@ -9,6 +9,21 @@
  * Displays temporary notification messages in the top-right corner
  */
 function showToast(message, type = 'info') {
+    // Also output to console based on type
+    switch (type) {
+        case 'error':
+            console.error(message);
+            break;
+        case 'warning':
+            console.warn(message);
+            break;
+        case 'success':
+        case 'info':
+        default:
+            console.log(message);
+            break;
+    }
+    
     const toast = document.createElement('div');
     const colors = {
         info: 'bg-blue-600',
@@ -657,16 +672,14 @@ async function startProcessCandidate() {
             if (result.success === false) {
                 if (result.isServerError) {
                     cycleReplyState.serverErrorStreak += 1;
-                    console.warn(`[处理] 服务器错误 (${cycleReplyState.serverErrorStreak}/10): ${result.errorMessage}`);
-                    showToast(`服务器错误 (${cycleReplyState.serverErrorStreak}/10): 跳过当前模式，继续处理`, 'warning');
+                    showToast(`服务器错误 (${cycleReplyState.serverErrorStreak}/10): ${result.errorMessage} - 跳过当前模式，继续处理`, 'warning');
                     if (cycleReplyState.serverErrorStreak >= 10) {
                         showToast('连续服务器错误超过 10 次，处理已停止', 'error');
                         break;
                     }
                 } else {
                     cycleReplyState.errorStreak += 1;
-                    console.error(`[处理] 处理模式 ${mode} 出错:`, result.error);
-                    showToast(`处理错误(${cycleReplyState.errorStreak}/2): ${result.errorMessage}`, 'error');
+                    showToast(`处理模式 ${mode} 出错 (${cycleReplyState.errorStreak}/2): ${result.errorMessage}`, 'error');
                     if (cycleReplyState.errorStreak >= 2) {
                         showToast('连续错误超过 2 次，处理已停止', 'error');
                         break;
@@ -681,52 +694,41 @@ async function startProcessCandidate() {
             }
             
             // Process candidates in current mode
-            const cards = result.candidateCards || document.querySelectorAll('.candidate-card');
-            
-            // Find starting index
-            let startIndex = 0;
-            const selectedCard = Array.from(cards).find(card => 
-                card.classList.contains('bg-blue-50') || 
-                card.classList.contains('border-blue-500')
-            );
-            if (selectedCard) {
-                const selectedIndex = Array.from(cards).indexOf(selectedCard);
-                startIndex = (selectedIndex + 1) % cards.length;
-            }
-            
-            const total = cards.length;
+            // Convert to Array immediately to avoid NodeList mutation issues when cards are removed
+            let cards = Array.from(result.candidateCards || document.querySelectorAll('.candidate-card'));
             let processed = 0;
             let failed = 0;
             let skipped = 0;
             
             // Process each candidate
-            showToast(`开始处理 ${total - startIndex} 个候选人 (从第 ${startIndex + 1} 个开始)`, 'info');
-            for (let i = startIndex; i < cards.length; i++) {
+            console.log(`[${mode}] 开始处理 ${cards.length} 个候选人`);
+            for (const card of cards) {
                 if (!cycleReplyState.running || cycleReplyState.stopRequested) {
                     break;
                 }
                 // 处理每个候选人
                 try {
-                    const result = await window.processCandidateCard(cards[i], i, total);
+                    const result = await window.processCandidateCard(card);
                     if (result.skipped) {
                         skipped++;
                         total_skipped++;
                         console.log(`[处理] 跳过已查看的候选人: ${result.name} (${skipped} 已跳过)`);
                     } else if (result.success) {
                         processed++;
+                        total_processed++;
                         cycleReplyState.lastProcessedTime = Date.now();
                         console.log(`✅ ${result.name} 处理完成 (${processed}/${total})`);
                         total_processed++;
                     } else {
                         // this will never happen, because always return a success result
                         failed++;
-                        total_failed++;
+                        cycleReplyState.errorStreak++;
                         console.error(`❌ ${result.name} 处理失败: ${result.error || '未知错误'}`);
                     }
                 } catch (error) {
                     failed++;
-                    total_failed++;
-                    console.error(`❌ ${cards[i].name} 处理失败: ${error || '未知错误'}`);
+                    cycleReplyState.errorStreak++;
+                    console.error(`❌ ${card.name} 处理失败: ${error || '未知错误'}`);
                 } 
             }
             
