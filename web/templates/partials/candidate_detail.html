@@ -451,10 +451,10 @@ async function generateMessage(force = false) {
 async function greetAndSendMessage() {
     const autoSend = document.getElementById('auto-send-checkbox')?.checked ?? true;
     const message_textarea = document.getElementById('message-text');
-    const message = autoSend ? message_textarea.value.trim() : '';
+    const message = message_textarea.value.trim();
+    const mode = getCandidateData('mode');
     let values = getCandidateData();
-    if (message === '') {
-        console.error('消息长度不能为空');
+    if (message === '' || !autoSend) {
         return;
     }
     values.message = message;
