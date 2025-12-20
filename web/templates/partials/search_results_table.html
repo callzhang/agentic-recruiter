@@ -9,12 +9,13 @@
     <div class="overflow-x-auto">
         <table class="w-full divide-y divide-gray-200 text-sm" style="table-layout: auto;">
             <colgroup>
-                <col style="min-width: 20px; width: 15%;">
-                <col style="min-width: 30px; width: 20%;">
                 <col style="min-width: 20px; width: 12%;">
-                <col style="min-width: 20px; width: 15%;">
-                <col style="min-width: 20px; width: 15%;">
-                <col style="min-width: 20px; width: 15%;">
+                <col style="min-width: 30px; width: 18%;">
+                <col style="min-width: 20px; width: 10%;">
+                <col style="min-width: 20px; width: 12%;">
+                <col style="min-width: 20px; width: 10%;">
+                <col style="min-width: 20px; width: 10%;">
+                <col style="min-width: 20px; width: 18%;">
             </colgroup>
             <thead class="bg-gray-50">
                 <tr>
@@ -24,7 +25,8 @@
                         {'field': 'score', 'label': '得分'},
                         {'field': 'stage', 'label': '阶段'},
                         {'field': 'notified', 'label': '通知'},
-                        {'field': 'contact', 'label': '联系方式'}
+                        {'field': 'contact', 'label': '联系方式'},
+                        {'field': 'updated_at', 'label': '更新时间'}
                     ] %}
                     {% for column in columns %}
                     <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -42,7 +44,6 @@
                 {% for candidate in candidates %}
                 {% set updated_at_display = candidate.updated_at.replace('T', ' ')[:16] if candidate.updated_at else '未知' %}
                 <tr class="cursor-pointer hover:bg-blue-50 transition"
-                    title="更新时间: {{ updated_at_display }}"
                     hx-get="/search/detail/{{ candidate.candidate_id }}"
                     hx-target="#candidate-detail-panel"
                     hx-vals='{"view_mode": "readonly"}'
@@ -95,6 +96,9 @@
                         {% else %}
                             <span class="text-lg">❌</span>
                         {% endif %}
+                    </td>
+                    <td class="px-4 py-3 text-gray-600 text-xs">
+                        {{ updated_at_display }}
                     </td>
                 </tr>
                 {% endfor %}

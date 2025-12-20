@@ -476,7 +476,7 @@ def load_jobs() -> list[dict[str, Any]]:
     try:
         data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     except yaml.YAMLError as exc:  # pragma: no cover - configuration error
-        raise ValueError(f"解析岗位配置失败: {exc}") from exc
+        raise RuntimeError(f"解析岗位配置失败: {exc}") from exc
 
     roles = data.get("roles")
     if isinstance(roles, list):

@@ -288,7 +288,7 @@ def get_conversation_messages(conversation_id: str) -> Dict[str, Any]:
         
     except Exception as e:
         logger.error(f"Failed to get conversation messages: {e}")
-        raise ValueError(f"Conversation not found or retrieval failed: {e}")
+        raise RuntimeError(f"Conversation not found or retrieval failed: {e}")
 
 
 def get_analysis_from_conversation(conversation_id: str) -> Optional[Dict[str, Any]]:

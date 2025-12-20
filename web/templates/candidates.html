@@ -817,17 +817,17 @@ function idMatched(data, identifiers) {
 /**
  * Process a single candidate card
  */
-async function processCandidateCard(card, index, total) {
+async function processCandidateCard(card) {
     const cardData = JSON.parse(card.getAttribute('hx-vals'));
     const candidate = cardData.candidate || {};
-    const name = candidate.name || cardData.name || `候选人 ${index + 1}`;
+    const name = candidate.name;
     
     // Skip only if candidate is both viewed AND analyzed
     if (candidate.viewed && candidate.analysis) {
         return { skipped: true, name };
     }
     
-    showToast(`正在处理候选人 ${index + 1}/${total}: ${name}`, 'info');
+    showToast(`正在处理候选人: ${name}`, 'info');
     
     // Get detailPane reference
     const detailPane = document.getElementById('detail-pane');

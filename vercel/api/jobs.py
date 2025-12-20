@@ -41,7 +41,7 @@ def get_client():
             missing.append('ZILLIZ_PASSWORD')
         
         if missing:
-            raise ValueError(f'Zilliz credentials not configured. Missing: {", ".join(missing)}. Please set these environment variables in Vercel.')
+            raise RuntimeError(f'Zilliz credentials not configured. Missing: {", ".join(missing)}. Please set these environment variables in Vercel.')
         
         try:
             # Match the working pattern from stats.py
@@ -61,7 +61,7 @@ def get_client():
             
             _client = MilvusClient(**client_kwargs)
         except Exception as e:
-            raise ValueError(f'Failed to connect to Zilliz: {str(e)}')
+            raise RuntimeError(f'Failed to connect to Zilliz: {str(e)}')
     return _client
 
 def get_base_job_id(job_id: str) -> str:
@@ -150,7 +150,7 @@ def insert_job(**job_data) -> bool:
     client = get_client()
     job_id = job_data.get('job_id') or job_data.get('id', '')
     if not job_id:
-        raise ValueError('job_id is required')
+        raise RuntimeError('job_id is required')
     base_job_id = get_base_job_id(job_id)
     versioned_job_id = f'{base_job_id}_v1'
     

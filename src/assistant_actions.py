@@ -170,66 +170,27 @@ def generate_message(
             stream=True,  # Enable streaming
         )
         
-        # Collect full output while streaming to terminal
+        # Collect full output while streaming to terminal (Responses API streaming events).
+        # Ref: https://platform.openai.com/docs/guides/streaming-responses
         full_output = ""
         print("\n[AI 生成消息 - 流式输出]:", end="", flush=True)
-        
-        try:
-            for chunk in stream:
-                # Check for output_text (cumulative text)
-                if hasattr(chunk, 'output_text') and chunk.output_text:
-                    current_text = chunk.output_text
-                    # Extract only new text since last update
-                    if len(current_text) > len(full_output):
-                        new_text = current_text[len(full_output):]
-                        full_output = current_text
-                        print(new_text, end="", flush=True)
-                # Check for delta (incremental text)
-                elif hasattr(chunk, 'delta'):
-                    delta = chunk.delta
-                    # Try to get text from delta
-                    if hasattr(delta, 'text'):
-                        delta_text = delta.text
-                    elif hasattr(delta, 'content'):
-                        delta_text = delta.content
-                    elif isinstance(delta, str):
-                        delta_text = delta
-                    else:
-                        # Try to get text from delta attributes
-                        delta_text = getattr(delta, 'text', None) or getattr(delta, 'content', None) or ""
-                    
-                    if delta_text:
-                        full_output += delta_text
-                        print(delta_text, end="", flush=True)
-                # Fallback: try to get any text attribute
-                # elif hasattr(chunk, 'text') and chunk.text:
-                #     chunk_text = chunk.text
-                #     full_output += chunk_text
-                #     print(chunk_text, end="", flush=True)
-        
-        except Exception as e:
-            logger.error(f"Error during streaming: {e}", exc_info=True)
-            # If streaming fails, try non-streaming as fallback
-            logger.info("Falling back to non-streaming mode")
-            response = _openai_client.responses.create(
-                conversation=conversation_id,
-                instructions=instruction,
-                input=input_message,
-                model=openai_config["model"],
-                tools=[{"type": "web_search"}],
-                stream=False,
-            )
-            full_output = response.output_text
-            print(f"\n[完整输出]: {full_output}\n", flush=True)
-        
+        for event in stream:
+            event_type = event.type
+            if event_type == "response.output_text.delta" and (delta_text:=event.delta):
+                full_output += delta_text
+                print(delta_text, end="", flush=True)
+            elif event_type == "response.completed" and (final_text:=event.response.output_text):
+                full_output = final_text
+            elif event_type in ("response.failed", "error"):
+                # Let the outer exception handler fall back to non-streaming.
+                error_obj = event.error or event.message
+                raise RuntimeError(f"Streaming failed: {error_obj}")
+            else:
+                continue
         print("\n[AI 生成完成]\n", flush=True)
         return full_output
 
-
-# ============================================================================
-# DingTalk Notification
-# ============================================================================
-
+# -----------------------------DingTalk Notification----------------------------------
 def send_dingtalk_notification(
     title: str,
     message: str,

@@ -107,17 +107,9 @@ async def _prepare_chat_page(page: Page, tab = None, status = None, job_title = 
 
 @retry(stop=stop_after_attempt(2), wait=wait_fixed(1))
 async def _go_to_chat_dialog(page: Page, chat_id: str, wait_timeout: int = 5000) -> Optional[Locator]:
-    direct_selectors = [
-        f"{CHAT_ITEM_SELECTORS}[data-id=\"{chat_id}\"]",
-        f"[role='listitem'][data-id=\"{chat_id}\"]",
-    ]
-    target: Optional[Locator] = None
-    for selector in direct_selectors:
-        locator = page.locator(selector).first
-        if await locator.count() > 0:
-            target = locator
-            break
-    if not target:
+    direct_selectors = f"{CHAT_ITEM_SELECTORS}[data-id=\"{chat_id}\"], [role='listitem'][data-id=\"{chat_id}\"]"
+    target = page.locator(direct_selectors)
+    if await target.count() == 0:
         return None
     # check if the target is already selected
     await target.scroll_into_view_if_needed(timeout=1000)
@@ -184,7 +176,7 @@ async def send_message_action(page: Page, chat_id: str, message: str) -> bool:
 
     input_field = page.locator(MESSAGE_INPUT_SELECTOR).first
     if await input_field.count() == 0:
-        # raise ValueError("未找到消息输入框")
+        # raise RuntimeError("未找到消息输入框")
         logger.error("未找到消息输入框")
         return False
 
@@ -219,14 +211,13 @@ async def discard_candidate_action(page: Page, chat_id: str) -> bool:
 
     not_fit_button = page.locator("div.not-fit-wrap").first
     await not_fit_button.wait_for(state="visible", timeout=3000)
-    await not_fit_button.hover()
-    await page.wait_for_timeout(1000)
     
     # wait for dialog to be deleted
     max_attempts = 10
     for _ in range(max_attempts):
-        await not_fit_button.click()
+        await not_fit_button.hover(timeout=1000)
         await page.wait_for_timeout(1000)
+        await not_fit_button.click()
         if not await _go_to_chat_dialog(page, chat_id):
             return True  # Successfully discarded
     

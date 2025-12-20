@@ -763,7 +763,7 @@ class BossServiceAsync:
                     import json
                     parsed_filters = json.loads(filters)
                 except json.JSONDecodeError:
-                    raise ValueError(f"Invalid filters JSON: {filters}")
+                    raise RuntimeError(f"Invalid filters JSON: {filters}")
             return await recommendation_actions.list_recommended_candidates_action(page, limit=limit, job_title=job_title, new_only=new_only, filters=parsed_filters)
 
         @self.app.get("/recommend/candidate/{index}/resume")

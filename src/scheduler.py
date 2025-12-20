@@ -53,7 +53,7 @@ class BRDWorkScheduler:
         self._loop: Optional[asyncio.AbstractEventLoop] = None
 
         if not self.job_snapshot:
-            raise ValueError("Job information must be provided as parameter")
+            raise RuntimeError("Job information must be provided as parameter")
 
         self.threshold_seek = threshold_seek or 9.0
         self.threshold_borderline = threshold_borderline or 7.0

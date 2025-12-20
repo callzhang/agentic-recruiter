@@ -25,3 +25,4 @@ scripts/**/*.json
 
 # Prompt optimization outputs (may include many files)
 scripts/prompt_optmization/**/*.json
+scripts/prompt_optmization/**/run_*/

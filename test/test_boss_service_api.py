@@ -161,7 +161,7 @@ def test_chat_dialogs_endpoint_returns_data(client: TestClient, monkeypatch: pyt
 
 def test_chat_dialogs_value_error_maps_to_400(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     async def raise_value_error(*_: Any, **__: Any) -> None:
-        raise ValueError("invalid tab")
+        raise RuntimeError("invalid tab")
 
     monkeypatch.setattr(chat_actions, "get_chat_list_action", raise_value_error)
 

@@ -124,7 +124,7 @@ def _create_candidate_client() -> MilvusClient:
         missing.append('ZILLIZ_PASSWORD')
     
     if missing:
-        raise ValueError(f'Zilliz credentials not configured. Missing: {", ".join(missing)}. Please set these environment variables in Vercel.')
+        raise RuntimeError(f'Zilliz credentials not configured. Missing: {", ".join(missing)}. Please set these environment variables in Vercel.')
     
     # Create client - will raise exception if connection fails
     # Only pass token if it's provided and not empty
@@ -440,7 +440,7 @@ def get_all_jobs() -> List[Dict[str, Any]]:
     collections = client.list_collections()
 
     if JOB_COLLECTION_NAME not in collections:
-        raise ValueError(f"Collection {JOB_COLLECTION_NAME} not found. Available: {collections}")
+        raise RuntimeError(f"Collection {JOB_COLLECTION_NAME} not found. Available: {collections}")
 
     results = client.query(
         collection_name=JOB_COLLECTION_NAME,
@@ -469,7 +469,7 @@ def get_candidate_count() -> int:
     collections = client.list_collections()
 
     if CANDIDATE_COLLECTION_NAME not in collections:
-        raise ValueError(f"Collection {CANDIDATE_COLLECTION_NAME} not found. Available: {collections}")
+        raise RuntimeError(f"Collection {CANDIDATE_COLLECTION_NAME} not found. Available: {collections}")
 
     # Get collection stats
     stats = client.get_collection_stats(collection_name=CANDIDATE_COLLECTION_NAME)
@@ -854,7 +854,7 @@ def send_dingtalk_notification(
         Dict with 'success' (bool) and 'result' (DingTalk API response or error message)
     """
     if not webhook_url:
-        raise ValueError("DingTalk webhook URL is not configured")
+        raise RuntimeError("DingTalk webhook URL is not configured")
     
     # Generate signature if secret is provided
     url = webhook_url
@@ -920,7 +920,7 @@ def send_overall_report(stats: Optional[Dict[str, Any]] = None) -> Dict[str, Any
     default_dingtalk_secret = _env_str("DINGTALK_SECRET", "") or ""
     
     if not default_dingtalk_url:
-        raise ValueError("DINGTALK_WEBHOOK environment variable is not set")
+        raise RuntimeError("DINGTALK_WEBHOOK environment variable is not set")
 
     # Get statistics (reuse if provided, otherwise fetch)
     if stats is None:
@@ -971,7 +971,7 @@ def send_job_report(job_index: int, stats: Optional[Dict[str, Any]] = None) -> D
     jobs_serialized = stats["jobs_serialized"]
 
     if job_index < 0 or job_index >= len(jobs_serialized):
-        raise ValueError(f"Job index {job_index} out of range (0-{len(jobs_serialized)-1})")
+        raise RuntimeError(f"Job index {job_index} out of range (0-{len(jobs_serialized)-1})")
 
     job_stat = jobs_serialized[job_index]
     job_name = job_stat.get("job", "未知岗位")
@@ -986,7 +986,7 @@ def send_job_report(job_index: int, stats: Optional[Dict[str, Any]] = None) -> D
     warning = notification_config.get("warning")
 
     if not job_dingtalk_url:
-        raise ValueError("No DingTalk webhook configured (neither job-specific nor default)")
+        raise RuntimeError("No DingTalk webhook configured (neither job-specific nor default)")
 
     # Format job report
     job_report = format_job_stats_report(job_stat)
@@ -1033,7 +1033,7 @@ def send_daily_reports() -> Dict[str, Any]:
     default_dingtalk_secret = _env_str("DINGTALK_SECRET", "") or ""
 
     if not default_dingtalk_url:
-        raise ValueError("DINGTALK_WEBHOOK environment variable is not set or empty")
+        raise RuntimeError("DINGTALK_WEBHOOK environment variable is not set or empty")
 
     # Get statistics once
     stats = _get_statistics_data()

@@ -1,157 +1,164 @@
-# 候选人筛选指南（离线可复盘 + 可迭代 Prompt）
+# 候选人筛选指南（滚动迭代：每次 10 份）
 
-本指南的目标：让“架构师/平台底座”岗位的筛选更稳定、可复盘，避免把**“简历匹配的伪高P”**当成**“真架构师/负责人”**。
+本指南用于“架构师/平台底座”岗位的离线可复盘筛选：把**岗位肖像 + 候选人样本 + 已有 analysis** 固化成一个批次目录（默认 10 份），并在每次批次产出“完整优化版”的 `prompt_optimized.py` / `job_portrait_optimized.json`，用于下一批继续迭代验证。
 
-这份指南既给人看，也给 AI 用：告诉你要读哪些文件、如何筛选、如何提问、以及如何把结论写进 `优化报告.md`。
+核心目标：拒绝“简历匹配的伪高P”，优先筛出具备 **结构化思维** 与 **机制设计能力** 的真架构师/负责人（Level 2）。
 
-> 注意：`scripts/prompt_optmization/**/run_*` 下包含候选人简历/电话/邮箱等敏感信息，**不要提交到 git**（仓库已通过 `.gitignore` 忽略）。
-
----
-
-## 1) 先读哪些文件（按顺序）
-
-1. **系统设计方案（决定我们到底在招什么能力）**
-   - `scripts/prompt_optmization/架构师/基于EDA架构的PreSeen HighLevel Design.md`
-2. **岗位肖像（筛选口径与追问池）**
-   - 当天运行目录下的：`scripts/prompt_optmization/<岗位>/run_YYYYMMDD/job_portrait.json`
-   - 迭代版本（每个 batch 一版）：`scripts/prompt_optmization/<岗位>/run_YYYYMMDD/job_protrait_batch_<n>.json`
-3. **分析 Prompt（决定 AI 怎么打分）**
-   - 线上基线：`src/prompts/assistant_actions_prompts.py`（重点看 `ANALYZE_ACTION`）
-   - 批次版本：`scripts/prompt_optmization/<岗位>/run_YYYYMMDD/prompt_batch_<n>.py`
-4. **候选人样本（离线复盘数据）**
-   - `scripts/prompt_optmization/<岗位>/run_YYYYMMDD/candidates/*.json`
-5. **复盘报告（你要补充的地方）**
-   - `scripts/prompt_optmization/<岗位>/run_YYYYMMDD/优化报告.md`
+> 安全提醒：`scripts/prompt_optmization/**/run_*` 下包含候选人简历/电话/邮箱等敏感信息，**不要提交到 git**（仓库通过 `.gitignore` 已忽略该目录，但仍请自查）。
 
 ---
 
-## 2) 画像校准：我们要找 Level 2（真架构师/负责人）
+## 0) 一句话工作流
 
-面试/筛选时请强制区分两类人：
+1) 跑脚本拉最新 10 份候选人 → 2) 按本指南读 `优化报告.md` 复盘每个人 → 3) 修改本批次的 `prompt_optimized.py` / `job_portrait_optimized.json` → 4) 用新 prompt 重新跑分析（线上流程）→ 5) 再跑下一批验证“合规性/稳定性”是否提升。
+
+---
+
+## 1) 如何运行脚本（必看）
+
+### 1.1 环境准备
+
+- Python 3.11+，建议在虚拟环境中运行
+- 安装依赖：`pip install -r requirements.txt`
+- 确保本项目连接候选人库/岗位库所需的环境变量与配置已就绪（否则脚本无法拉取岗位/候选人）
+
+### 1.2 运行命令（仓库根目录）
+
+按岗位名称关键字选择（推荐）：
+
+```bash
+python scripts/prompt_optmization/download_data_for_prompt_optimization.py --job-position 架构师
+```
+
+按 `job_id/base_job_id` 选择：
+
+```bash
+python scripts/prompt_optmization/download_data_for_prompt_optimization.py --job-id <JOB_ID>
+```
+
+调整每批数量（默认 10，建议保持 10 便于快速迭代）：
+
+```bash
+python scripts/prompt_optmization/download_data_for_prompt_optimization.py --job-position 架构师 --batch-size 10
+```
+
+指定输出根目录（可选）：
+
+```bash
+python scripts/prompt_optmization/download_data_for_prompt_optimization.py --job-position 架构师 --prompt-opt-dir scripts/prompt_optmization
+```
+
+### 1.3 你会得到什么输出
+
+每次运行都会新建一个目录：`scripts/prompt_optmization/<岗位>/run_YYYYMMDD_HHMMSS/`，里面通常包含：
+
+- `job_portrait.json`：本次导出的岗位肖像（原始/基线）
+- `job_portrait_optimized.json`：本次“完整优化版”岗位肖像（你要编辑，下一批会作为基线）
+- `prompt_optimized.py`：本次“完整优化版” prompt（你要编辑，下一批会作为基线）
+- `candidates/*.json`：候选人样本（已过滤：简历已加载 + 有 analysis + 有 assistant 对话）
+- `excluded_candidates.json`：被过滤掉的候选人列表与原因
+- `overall_distribution.txt`：本批次 overall 分数分布
+- `优化报告.md`：复盘报告（含与上一批的对比指标）
+
+> 重要：该脚本**不会重新调用模型生成新的 analysis**，只会导出“候选人库里已有的 analysis”。  
+> 你要验证新 prompt 是否生效，需要用现有线上流程/接口把新 prompt 应用到 ANALYZE_ACTION 并重新跑分析，然后再跑下一批/重新导出观察“评分表/画像判断”的合规性占比是否提升。
+
+---
+
+## 2) 先读哪些文件（按顺序）
+
+1) 系统设计方案（决定关键场景 & 压测题）  
+- `scripts/prompt_optmization/架构师/基于EDA架构的PreSeen HighLevel Design.md`
+
+2) 本批次目录（脚本输出）  
+- `scripts/prompt_optmization/<岗位>/run_YYYYMMDD_HHMMSS/优化报告.md`（先看结论与对比指标）  
+- `scripts/prompt_optmization/<岗位>/run_YYYYMMDD_HHMMSS/job_portrait.json`（看现状画像）  
+- `scripts/prompt_optmization/<岗位>/run_YYYYMMDD_HHMMSS/candidates/*.json`（逐个复盘样本）  
+- `scripts/prompt_optmization/<岗位>/run_YYYYMMDD_HHMMSS/prompt_optimized.py`（你要改的 prompt）  
+- `scripts/prompt_optmization/<岗位>/run_YYYYMMDD_HHMMSS/job_portrait_optimized.json`（你要改的画像）
+
+3) 线上基线 prompt（对照用）  
+- `src/prompts/assistant_actions_prompts.py`（重点看 `ANALYZE_ACTION` 与 `AnalysisSchema`）
+
+---
+
+## 3) 画像校准：我们要找 Level 2（真架构师/负责人）
+
+请强制区分两类人（用“输出形态”而不是“title/年限”判断）：
 
 **高级执行者（Senior IC / “高级工头”）**
 - 讲“怎么做(How)”多：堆工具/堆方案（K8s、Redis、MQ…）
-- 方案 Feature Rich，但缺少**边界、取舍、机制**
+- 方案 Feature Rich，但缺少边界/取舍/机制（为什么选它、牺牲了什么）
 - 管理靠“强调/督促/提醒”，而不是流程/门禁/指标
 
 **真架构师/负责人（Architect/Lead）**
 - 讲“为什么(Why)/如果换约束会怎样(What if)”多：能做减法、讲 trade-off
 - 会把系统做成可治理：SLA/SLO、熔断、门禁、指标、回放/补偿闭环
-- 能讲清“失败/误判/故障复盘”，并能量化影响与收益
+- 能讲清失败/误判/故障复盘，并能量化影响与收益
 
-**红灯（快速淘汰/降档）**
-- 无法量化：只说“提升很大”，说不出 QPS/Latency/成本/失败率
-- 只有顺境经验：问故障/失误就含糊
-- 路径依赖：换场景仍生硬套旧经验，无法修正模型
-- 管理靠吼：高频“强调/督促/要求大家”，缺少流程/工具/指标
-
-**绿灯（核心加分）**
-- 自动结构化输出（业务/架构/基础设施分层）
-- 主动承认局限：能讲“当时资源受限下的性价比最优”
-- 第一性原理：能解释机制/逻辑，而非只报工具名
+红灯（快速淘汰/降档）：无法量化、只有顺境经验、路径依赖、管理靠吼。  
+绿灯（核心加分）：结构化分层输出、承认局限、第一性原理、能讲取舍与机制。
 
 ---
 
-## 3) 怎么筛：用“评分表（总分100）”稳定输出
+## 4) 怎么筛：用“评分表（总分100）”稳定输出
 
-为了减少“拍脑袋 7 分”，统一使用 **总分 100** 的评分表，然后映射到 10 分制（写入 `AnalysisSchema`）。
+统一用 **总分100** 的评分表再映射到 10 分制（写入 `AnalysisSchema`），降低“拍脑袋评分”的波动。
 
-评分维度（不要用 A/B/C 等符号，全部用中文分项名）：
+### 4.1 评分维度（不使用 A/B/C 等抽象符号）
 
-- **硬门槛与角色真实性（40分）**
-  - 年限与口径可信度（10）：按“代码+架构+负责人”总年限估算（重叠去重；时间不全=unknown）；年限是偏好区间，不做一票否决
-  - 0→1 大规模分布式落地（20）：必须能讲清规模/边界/关键故障/你负责模块
-  - hands-on 主编码（10）：**主编码占比>=70%** 才能拿高分（长期偏管理/方案要扣分/降档）
+- 硬门槛与角色真实性（40）
+  - 年限与口径可信度（10）：按“代码+架构+负责人”总年限估算；年限是偏好区间，不一票否决
+  - 0→1 大规模分布式落地（20）：规模/边界/关键故障/你负责模块
+  - hands-on 主编码（10）：主编码占比 >=70% 才能拿高分；否则扣分并可能降档为“高级IC”
+- 岗位关键场景能力（45）（与 HighLevel Design 对齐）
+  - 编排与执行分离：state+command 持久化，Master 崩溃恢复（15）
+  - At-least-once 幂等闭环：message_id/幂等键、毒丸、DLQ、回放（15）
+  - 数据血缘与版本化：Git-like commit/回滚/追踪，记录 input/output（10）
+  - 标准任务 IR/DSL：规范、校验、版本化、兼容性、可复现（5）
+- 背景与契合（15）：基础(8) + 契合/owner(7)
+- 潜力分（0-20）：仅用于信息缺失；按 50% 计入总分（潜力/2），并提示 HR 重点核实潜力来源
 
-- **岗位关键场景能力（45分）**（与 HighLevel Design 强对齐）
-  - 编排与执行分离（state+command 持久化，Master 崩溃恢复）（15）
-  - At-least-once 幂等闭环（message_id/幂等键、毒丸消息、DLQ、backfill/replay）（15）
-  - 数据血缘与版本化（Git-like commit/回滚/追踪，状态转换记录 input/output）（10）
-  - 标准任务 IR/DSL（JSON/YAML 规范、校验、版本化、兼容性、可复现）（5）
+### 4.2 `analysis.summary` 的评分表格式（强制）
 
-- **背景与契合（15分）**
-  - 基础背景/表达与学习能力（8）
-  - 创业契合度/owner 意识/抗压（7）
+`summary` 必须包含一行评分表，例如：
 
-- **潜力分（0-20）**
-  - 仅用于“信息缺失但看起来可能具备”的项
-  - **按 50% 计入总分**（潜力分/2），并明确写出“潜力来自哪些未证实点”，提示 HR 重点核实
-
-输出时必须在 `summary` 里写一行精简评分表，例如：
 - `门槛=28,场景=30,基础=6,契合=7,潜力=8(+4),总分=75/100=>8/10`
 
 ---
 
-## 4) 怎么问：反废话压测（Anti-Platitude Kit）
+## 5) 怎么问：反废话压测（Anti-Platitude）
 
-不要问“标准答案题”。优先问能刺破泛泛而谈的问题：
+优先问能刺破“正确的废话”的开放性问题（不问能被 AI 搜到标准答案的问题）：
 
-**架构设计压测**
 - 你最想推翻重写的一个设计决策是什么？为什么当时选它，现在觉得它错了？
-- 有没有遇到过“标准方案（如 K8s 默认调度/默认重试）”解决不了的极端场景？你怎么 hack 过去的？后续怎么还债？
-- 如果业务流量/数据量暴涨 10 倍，你的架构里哪个组件会第一个爆？为什么？你会怎么改？
-
-**抽象能力压测**
-- 不要讲工具名词。请口头描述你的领域模型：核心实体有哪些？边界/聚合怎么划？为什么？
-- 如果需求从“物理追踪”变成“逻辑语义追踪”，你的数据模型需要多大 schema change？有哪些兼容性成本？
-
-**机制化管理压测**
-- 分享一次你不得不让项目延期的案例：你用什么指标/数据模型说服老板接受延期？
-- 你是否推行过自动化治理机制（例如 CI 门禁/质量熔断/SLA），在会得罪人的情况下仍推动落地？结果如何？
-- 团队里能力最强的人绕过规范只求速度，你如何用制度（而非谈话）解决？
+- 如果你的系统流量/数据量暴涨 10 倍，哪个组件会最先爆？为什么？你会按什么顺序止血与改造？
+- 讲一次你亲历的故障/事故：怎么发现→怎么止血→怎么长期治理？（给指标变化与关键取舍）
+- 讲一次你不得不让项目延期的案例：你用什么数据/指标说服老板接受延期？
+- 你推行过什么“得罪人但必须做”的机制化治理（门禁/熔断/指标），结果如何？
 
 ---
 
-## 5) 结论怎么写（AnalysisSchema 输出要求）
+## 6) 结论怎么写（写进 analysis.summary / 优化报告）
 
-`summary` 只写“概述”，不要输出下一步 action 标签，但要包含：
+`summary` 只写“概述”（不要写下一步 action 指令），但必须包含：
 
-1. **匹配判断**：不匹配/有潜力/匹配 + **阶段建议**（PASS/CHAT/SEEK/CONTACT）
-2. **评分表一行**：门槛/场景/基础/契合/潜力(按50%)/总分
-3. **画像判断一行**（不用字母档位）：  
-   - 技术深度=顶尖/优秀/合格/欠缺  
-   - 抽象能力=顶尖/优秀/合格/欠缺  
-   - 机制化=顶尖/优秀/合格/欠缺  
-   - 建议=作为架构师推进 / 作为高级IC推进 / 不推进
-4. 若使用了潜力分：加一句“提示HR：面试重点核实 X/Y/Z（潜力来源）”
+1) 匹配判断：不匹配/有潜力/匹配 + 阶段建议（PASS/CHAT/SEEK/CONTACT）  
+2) 评分表一行：门槛/场景/基础/契合/潜力(按50%)/总分  
+3) 画像判断一行（中文标签）：  
+   - `技术深度=顶尖/优秀/合格/欠缺；抽象能力=顶尖/优秀/合格/欠缺；机制化=顶尖/优秀/合格/欠缺；建议=作为架构师推进/作为高级IC推进/不推进`
+4) 若使用潜力分：提示 HR 重点核实 1-3 个点（潜力来源/信息缺失点）
 
-`followup_tips` 只写 **3 个开放性场景追问**（亲历、过程、关键决策、量化结果），不要索取任何工作隐私材料（代码/图/PR 等）。
+`followup_tips`：只写 3 个开放性场景追问（亲历、过程、关键决策、量化结果），不要索取任何工作隐私材料（代码/图/PR 等）。
 
 ---
 
-## 6) 如何处理一个 batch（10 人一组）
+## 7) 每批怎么迭代（滚动版本）
 
-打开 `优化报告.md`，逐个候选人补齐 `**人工补充**` 四行：
-- 准确性评价：AI 的结论对不对？哪里“伪高P”了？
-- 原因分析：简历噪音/信息缺失/Prompt 规则不足/岗位肖像口径不清
-- 建议改动（岗位肖像）：需要补哪些“关键场景/反例/追问池”
-- 建议改动（prompt）：需要加强哪些“评分表/画像判断/红绿灯/抗噪”规则
+每次运行会在新 `run_YYYYMMDD_HHMMSS/` 下生成两份“完整优化版”（你直接改它们即可）：
 
-每组结束后在 `**本组小结（人工补充）**` 写清：
-- 共同误判点（例如：高并发词汇=高分；管理型=误判架构师）
-- 本组筛选口径的修正（尤其是“真架构师 vs 高级执行者”）
-- 下一版 prompt / 岗位肖像要改什么（落到可执行规则）
+- `prompt_optimized.py`：下一批次会以它为基线
+- `job_portrait_optimized.json`：下一批次会以它为基线
 
----
-
-## 7) 生成本批次数据集（每次10个，迭代用）
-
-```bash
-python scripts/prompt_optmization/prompt_optimization.py --job-position 架构师
-```
-
-默认每次只拉取 **10 个最新且可复盘** 的候选人（简历已加载 + 有analysis + 有assistant对话），并且**每次都会新建一个 `run_YYYYMMDD_HHMMSS/` 文件夹**，方便你按“10个一迭代”持续改 prompt/岗位肖像。
-
-可选参数：
-
-```bash
-python scripts/prompt_optmization/prompt_optimization.py --job-position 架构师 --batch-size 10
-```
-
-迭代检查：新批次的 `优化报告.md` 会引用“上一批次目录”，并给出分数分布与 prompt 合规性（summary 是否包含评分表/画像判断）的对比，用来判断上一次改动是否生效。
-
-滚动版本（重要）：
-- 每次运行会在新 `run_YYYYMMDD_HHMMSS/` 下生成：
-  - `prompt_optimized.py`：**完整优化版 prompt**（下一批次会以此为基线；你直接改它即可）
-  - `job_portrait_optimized.json`：**完整优化版岗位肖像**（下一批次会以此为基线；你直接改它即可）
-- 不再生成/维护 `prompt_batch_*.py`、`job_protrait_batch_*.json` 这种多版本文件（避免版本分叉与手动合并成本）。
+`优化报告.md` 会展示与上一批次的对比指标（分数分布 + “评分表/画像判断”的合规性占比），用于判断迭代是否有效。  
+建议的迭代节奏：每批只改 1-3 个关键点（例如“评分表格式约束”或“关键场景题”），否则很难归因哪一条改动带来了收益/退化。

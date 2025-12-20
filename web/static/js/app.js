@@ -717,7 +717,7 @@ async function startProcessCandidate() {
                         processed++;
                         total_processed++;
                         cycleReplyState.lastProcessedTime = Date.now();
-                        console.log(`✅ ${result.name} 处理完成 (${processed}/${total})`);
+                        console.log(`✅ ${result.name} 处理完成 (${processed}/${cards.length})`);
                         total_processed++;
                     } else {
                         // this will never happen, because always return a success result
@@ -733,7 +733,7 @@ async function startProcessCandidate() {
             }
             
             // Show summary for current mode
-            const summary = `模式 ${mode} 完成: 成功 ${processed}/${total}, 失败 ${failed}${skipped > 0 ? `, 跳过 ${skipped}` : ''}`;
+            const summary = `模式 ${mode} 完成: 成功 ${processed}/${cards.length}, 失败 ${failed}${skipped > 0 ? `, 跳过 ${skipped}` : ''}`;
             showToast(summary, failed ? 'success' : 'warning');
             
             // Move to next mode if processing all modes
@@ -750,7 +750,7 @@ async function startProcessCandidate() {
         CycleReplyHelpers.resetState();
         CycleReplyHelpers.setButton(false);
         const processAllModes = document.getElementById('process-all-modes-checkbox')?.checked || false;
-        showToast(processAllModes ? '循环处理已完成' : '批量处理已完成', total_failed > 0 ? 'error' : 'success');
+        showToast(processAllModes ? '循环处理已完成' : `批量处理已完成: 成功 ${total_processed}, 失败 ${total_failed}, 跳过 ${total_skipped}`, total_failed > 0 ? 'error' : 'success');
     }
 }
 

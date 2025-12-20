@@ -126,7 +126,7 @@ async def list_candidates(
                 tab=tab_filter,
                 status=status_filter,
                 job_applied=job_applied,
-                unread_only=False  # True 只看未读
+                unread_only=True  # True 只看未读
             )
         except Exception as e:
             logger.error(f"Failed to get chat candidates: {e}")
@@ -449,12 +449,48 @@ async def generate_message(
     
     # generate message if there is new message from user(candidate)
     if (new_user_messages and purpose == "CHAT_ACTION") or purpose == "FOLLOWUP_ACTION":
+        # Provide candidate analysis context to reduce hallucinated "评分/阶段" references in CHAT prompts.
+        # Must be internal-only and never shown to candidate.
+        context_messages: list[dict[str, str]] = []
+        try:
+            if candidate_id:
+                stored = await asyncio.to_thread(
+                    get_candidate_by_dict,
+                    {"candidate_id": candidate_id, "fields": ["analysis", "stage", "updated_at"]},
+                    True,
+                )
+                analysis = (stored or {}).get("analysis") or {}
+                if analysis:
+                    overall = analysis.get("overall")
+                    summary = (analysis.get("summary") or "").strip()
+                    if len(summary) > 600:
+                        summary = summary[:600] + "…"
+                    context_messages.append(
+                        {
+                            "role": "developer",
+                            "content": (
+                                "候选人内部评分信息（仅供你把握追问深度；不要对候选人提及分数/阶段/筛选标准）："
+                                f"overall={overall}; summary={summary}"
+                            ),
+                        }
+                    )
+        except Exception:
+            logger.exception("Failed to load candidate analysis context")
+
+        input_items: list[dict[str, str]] = []
+        if context_messages:
+            input_items.extend(context_messages)
+        if new_user_messages:
+            input_items.extend(new_user_messages)
+        else:
+            input_items.append({"role": "user", "content": "[沉默]"})
+
         # Generate message in thread pool to avoid blocking event loop (OpenAI API call)
         message = await asyncio.to_thread(
             assistant_actions.generate_message,
-            input_message=new_user_messages if new_user_messages else '[沉默]',
+            input_message=input_items,
             conversation_id=conversation_id,
-            purpose=purpose # prompt will be determined by purpose
+            purpose=purpose,  # prompt will be determined by purpose
         )
         logger.debug("Generated message: %s", message)
         # append the new message to the chat_history
@@ -473,8 +509,9 @@ async def generate_message(
         logger.warning("No new message found for conversation_id: %s", conversation_id)
         message = ''
 
-    if '<PASS>' in message:
-        pass_reason = message.split('<PASS>: ')[1]
+    if "<PASS>" in message:
+        parts = message.split("<PASS>:", 1)
+        pass_reason = parts[1].strip() if len(parts) > 1 else "不合适"
         logger.warning(f"候选人 {name} 判断为不合适，理由: {pass_reason}")
         upsert_candidate(candidate_id=candidate_id, stage=STAGE_PASS)
         if mode == "recommend":
@@ -718,7 +755,7 @@ async def fetch_full_resume(
     # check if requested
     candidate = get_candidate_by_dict({"candidate_id": candidate_id, "chat_id": chat_id}, strict=False)
     if history:=candidate.get("metadata", {}).get("history"):
-        if [h for h in history if h.get("type") == "developer" and h.get("content") == "简历请求已发送"]:
+        if any(h for h in history if h.get("role") == "developer" and h.get("content") == "简历请求已发送"):
             return HTMLResponse(
                 content='<div class="text-green-500 p-4">已向候选人请求完整简历，请稍后检查完整简历是否存在</div>',
             )
@@ -776,10 +813,10 @@ async def request_contact(
 ):
     """Request contact information (phone and WeChat) from a candidate and store in metadata."""
     page = await boss_service.service._ensure_browser_session()
-    candidate = get_candidate_by_dict({"candidate_id": candidate_id, "chat_id": chat_id}, strict=False)
-    
+    candidates = get_candidate_by_dict({"candidate_id": candidate_id, "chat_id": chat_id}, strict=False)
+    candidate = candidates[0] if candidates else {}
     if history:=candidate.get("metadata", {}).get("history"):
-        if any(h for h in history if h.get("type") == "developer" and h.get("content") == "请求交换联系方式已发送"):
+        if any(h for h in history if h.get("role") == "developer" and h.get("content") == "请求交换联系方式已发送"):
             phone_number = history.get("phone_number")
             wechat_number = history.get("wechat_number")
             return JSONResponse({
@@ -884,4 +921,3 @@ def candidate_matched(candidate: Dict[str, Any], stored_candidate: Dict[str, Any
             logger.debug(f"last_message similarity ({candidate['name']}): {similarity*100:.2f}% < 90%\n{last_message}\n != \n{last_message2}")
             return False
     return True
-

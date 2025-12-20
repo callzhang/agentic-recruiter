@@ -338,7 +338,7 @@ async function process_candidate() {
         }
         // step 5: PASS candidate if score is below 5/10
         if (current_score <= 4) {
-            passCandidate();
+            await passCandidate();
         }
         // Update stage and card
         await updateCandidateData({

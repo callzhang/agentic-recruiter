@@ -78,7 +78,7 @@ def _create_candidate_client() -> MilvusClient:
         missing.append('ZILLIZ_PASSWORD')
     
     if missing:
-        raise ValueError(f'Zilliz credentials not configured. Missing: {", ".join(missing)}. Please set these environment variables in Vercel.')
+        raise RuntimeError(f'Zilliz credentials not configured. Missing: {", ".join(missing)}. Please set these environment variables in Vercel.')
     
     token_value = ZILLIZ_TOKEN if (ZILLIZ_TOKEN and ZILLIZ_TOKEN.strip()) else None
     

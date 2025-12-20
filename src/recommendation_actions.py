@@ -173,7 +173,7 @@ async def view_recommend_candidate_resume_action(page: Page, index: int) -> Dict
     frame = await _prepare_recommendation_page(page)
     cards = frame.locator(CANDIDATE_CARD_SELECTOR)
     if index >= await cards.count():
-        raise ValueError(f"候选人索引 {index} 超出范围")
+        raise RuntimeError(f"候选人索引 {index} 超出范围")
 
     card = cards.nth(index)
     await card.hover(timeout=5000)
@@ -200,7 +200,7 @@ async def greet_recommend_candidate_action(page: Page, index: int, message: str 
     frame = await _prepare_recommendation_page(page)
     cards = frame.locator(CANDIDATE_CARD_SELECTOR)
     if index >= await cards.count():
-        raise ValueError(f"候选人索引 {index} 超出范围")
+        raise RuntimeError(f"候选人索引 {index} 超出范围")
 
     card = cards.nth(index)
     await card.hover(timeout=3000)
@@ -270,7 +270,7 @@ async def discard_recommend_candidate_action(page: Page, index: int, reason: str
     frame = await _prepare_recommendation_page(page)
     cards = frame.locator(CANDIDATE_CARD_SELECTOR)
     if index >= await cards.count():
-        raise ValueError(f"候选人索引 {index} 超出范围")
+        raise RuntimeError(f"候选人索引 {index} 超出范围")
 
     card = cards.nth(index)
     discard_btn = card.locator("button.btn-quxiao:has-text('不合适')").first
@@ -378,13 +378,16 @@ async def pass_recommend_candidate_action(page: Page, index: int) -> bool:
     frame = await _prepare_recommendation_page(page)
     card = frame.locator(CANDIDATE_CARD_SELECTOR).nth(index)
     pass_btn = card.locator("div.suitable:has-text('不感兴趣')").first
-    if await pass_btn.count() > 0:
+    tried = 0
+    while await pass_btn.count() > 0:
         await card.hover(timeout=3000)
         await pass_btn.hover(timeout=3000)
         await pass_btn.click(timeout=3000)
-        return True
+        tried += 1
+        if tried > 10:
+            raise RuntimeError("PASS失败: 未找到“不感兴趣”按钮")
     else:
-        raise RuntimeError("未找到“不感兴趣”按钮")
+        return True
 
 
 __all__ = [

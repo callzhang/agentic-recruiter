@@ -24,9 +24,9 @@ class Candidate(BaseModel):
     def validate_candidate(self):
         """Validate the candidate"""
         if self.mode in ['chat', 'followup', 'greet'] and self.chat_id is None:
-            raise ValueError("Chat ID is required for chat, followup, or greet mode")
+            raise RuntimeError("Chat ID is required for chat, followup, or greet mode")
         if self.mode == 'recommend' and self.index is None:
-            raise ValueError("Recommended index is required for recommend mode")
+            raise RuntimeError("Recommended index is required for recommend mode")
         return self
 
 def add_candidates(left: list[Candidate], right: list[Candidate]) -> list[Candidate]:

@@ -92,7 +92,7 @@ def get_candidates_tool(mode: str, job_title: str, limit: int, tool_call_id: Ann
             status_filter = "牛人已读未回"
         else:
             # Default to all candidates
-            raise ValueError(f"Invalid mode: {mode}")
+            raise RuntimeError(f"Invalid mode: {mode}")
         
         # params = f"?tab={tab_filter}&status={status_filter}&job_title={job_title}"
         params = {
@@ -274,7 +274,7 @@ def notify_hr_tool(title: str, report: str, stage: str, contact_info: str) -> bo
     """
     from src.candidate_stages import STAGE_SEEK
     if stage != STAGE_SEEK:
-        raise ValueError(f"Candidate is not in SEEK stage: {stage}")
+        raise RuntimeError(f"Candidate is not in SEEK stage: {stage}")
 
     runtime = get_runtime(RecruiterState)
     state = runtime.state
@@ -403,7 +403,7 @@ def greet_candidate_tool(identifier: str, message: str, mode: str, tool_call_id:
         # For chat/greet/followup modes, identifier is the chat_id
         result = _call_api("POST", f"{web_portal}/chat/greet", {"chat_id": identifier, "message": message})
     if result is not True:
-        raise ValueError(f"Failed to send greeting message: {result}")
+        raise RuntimeError(f"Failed to send greeting message: {result}")
     
     return Command(
         update={
@@ -434,7 +434,7 @@ def request_contact_tool(chat_id: str, tool_call_id: Annotated[str, InjectedTool
     stage = runtime.state.stage
     from src.candidate_stages import STAGE_SEEK
     if stage != STAGE_SEEK:
-        raise ValueError(f"Candidate is not in SEEK stage: {stage}")
+        raise RuntimeError(f"Candidate is not in SEEK stage: {stage}")
     web_portal = runtime.context.web_portal
     result = _call_api("POST", f"{web_portal}/chat/contact/request", {"chat_id": chat_id})
     

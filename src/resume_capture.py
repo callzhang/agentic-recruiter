@@ -1335,7 +1335,7 @@ def extract_pdf_viewer_text(frame: 'Frame') -> Dict[str, Any]:
     try:
         frame.locator("div.textLayer").first.wait_for(state="visible", timeout=5000)
     except Exception:
-        raise ValueError("PDF文档未准备好")
+        raise RuntimeError("PDF文档未准备好")
 
     def _collect() -> Any:
         script = dedent(
