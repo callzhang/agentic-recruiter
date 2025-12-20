@@ -113,25 +113,32 @@
                     <input type="checkbox" id="process-all-modes-checkbox" class="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500" @change="saveState()">
                     <span class="text-sm text-gray-700 font-medium">处理所有模式</span>
                 </label>
-                <button 
-                    id="cycle-reply-btn"
-                    onclick="window.startProcessCandidate()"
-                    title="处理候选人：&#10;&#10;• 未勾选"处理所有模式"：只处理当前模式的候选人&#10;• 勾选"处理所有模式"：自动循环处理所有4个模式（推荐牛人、新招呼、沟通中、牛人已读未回）&#10;&#10;处理流程：&#10;1. 加载在线简历（如未加载）&#10;2. 初始化对话（如未初始化）&#10;3. 进行AI分析（如未分析）&#10;4. 根据匹配度阈值生成消息或发送招呼&#10;5. 更新候选人卡片状态&#10;&#10;提示：确保已选择岗位并设置好阈值参数"
-                    class="px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition disabled:opacity-50 disabled:cursor-not-allowed">
-                    🔄 开始处理
-                </button>
             </div>
         </div>
         
         <!-- Filters -->
-        <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <div>
-                <label class="block text-sm font-medium text-gray-700 mb-2">岗位</label>
-                <select id="job-selector" name="job_id" class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
-                        hx-get="/jobs/list-simple" hx-trigger="load" hx-swap="innerHTML"
-                        @change="saveState()">
-                    <option>加载中...</option>
-                </select>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div class="md:col-span-1">
+                <div class="flex items-end gap-2">
+                    <div class="shrink-0">
+                        <label class="block text-sm font-medium text-gray-700 mb-2">自动处理</label>
+                        <button 
+                            id="cycle-reply-btn"
+                            onclick="window.startProcessCandidate()"
+                            title="自动处理候选人：&#10;&#10;• 未勾选&quot;处理所有模式&quot;：只处理当前模式的候选人&#10;• 勾选&quot;处理所有模式&quot;：自动循环处理所有4个模式（推荐牛人、新招呼、沟通中、牛人已读未回）&#10;&#10;处理流程：&#10;1. 加载在线简历（如未加载）&#10;2. 初始化对话（如未初始化）&#10;3. 进行AI分析（如未分析）&#10;4. 根据匹配度阈值生成消息或发送招呼&#10;5. 更新候选人卡片状态&#10;&#10;提示：确保已选择岗位并设置好阈值参数"
+                            class="px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition disabled:opacity-50 disabled:cursor-not-allowed">
+                            ▶ 自动处理
+                        </button>
+                    </div>
+                    <div class="flex-1 min-w-0">
+                        <label class="block text-sm font-medium text-gray-700 mb-2">岗位</label>
+                        <select id="job-selector" name="job_id" class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
+                                hx-get="/jobs/list-simple" hx-trigger="load" hx-swap="innerHTML"
+                                @change="saveState()">
+                            <option>加载中...</option>
+                        </select>
+                    </div>
+                </div>
             </div>
             <div>
                 <label class="block text-sm font-medium text-gray-700 mb-2">
@@ -151,17 +158,6 @@
                 </label>
                 <input type="number" id="threshold-borderline" name="threshold_borderline" 
                        value="7.0" 
-                       min="1" max="10" step="0.5"
-                       @change="saveState()"
-                       class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
-            </div>
-            <div>
-                <label class="block text-sm font-medium text-gray-700 mb-2">
-                    强匹配阈值
-                    <span class="text-xs text-gray-500">≥ 此分数要求联系方式</span>
-                </label>
-                <input type="number" id="threshold-seek" name="threshold_seek" 
-                       value="8.0" 
                        min="1" max="10" step="0.5"
                        @change="saveState()"
                        class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
@@ -254,7 +250,6 @@ function candidateTabs() {
                 tab: this.activeTab,
                 threshold_chat: document.getElementById('threshold-chat')?.value,
                 threshold_borderline: document.getElementById('threshold-borderline')?.value,
-                threshold_seek: document.getElementById('threshold-seek')?.value,
                 job_id: document.getElementById('job-selector')?.value,
                 limit: document.getElementById('limit-input')?.value,
                 auto_send: document.getElementById('auto-send-checkbox')?.checked ? 'true' : 'false',
@@ -315,11 +310,6 @@ function candidateTabs() {
             if (state.threshold_borderline) {
                 const borderlineInput = document.getElementById('threshold-borderline');
                 if (borderlineInput) borderlineInput.value = state.threshold_borderline;
-            }
-            
-            if (state.threshold_seek) {
-                const seekInput = document.getElementById('threshold-seek');
-                if (seekInput) seekInput.value = state.threshold_seek;
             }
             
             // Set job selector (after jobs are loaded)

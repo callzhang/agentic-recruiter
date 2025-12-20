@@ -212,6 +212,8 @@
                 {% set icon = '👼' if is_candidate else '👨‍💻‍' %}
                 {% set align_class = 'justify-start' if is_candidate else 'justify-end' %}
                 {% set text_align = 'text-left' if is_candidate else 'text-right' %}
+                {% set payload = msg.payload if msg.payload is defined and msg.payload else (msg.content if msg.content is mapping else None) %}
+                {% set display_text = payload.message if payload and payload.message else (msg.content or msg.message or '') %}
                 <div class="flex {{ align_class }}">
                     <div class="{{ bg_color }} rounded-lg p-3 max-w-[80%]">
                         <div class="flex items-start space-x-2 {{ 'flex-row-reverse' if not is_candidate else '' }}">
@@ -234,7 +236,17 @@
                                         </span>
                                     {% endif %}
                                 </div>
-                                <p class="text-gray-700 whitespace-pre-wrap text-sm">{{ msg.content or msg.message or '' }}</p>
+                                {% if payload and payload.action %}
+                                <div class="mb-1">
+                                    <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-indigo-100 text-indigo-700">
+                                        {{ payload.action }}
+                                    </span>
+                                </div>
+                                {% endif %}
+                                <p class="text-gray-700 whitespace-pre-wrap text-sm">{{ display_text }}</p>
+                                {% if payload and payload.reason %}
+                                <p class="text-gray-500 whitespace-pre-wrap text-xs mt-2">{{ payload.reason }}</p>
+                                {% endif %}
                             </div>
                         </div>
                     </div>
@@ -263,109 +275,137 @@ window.__candidate_detail_root = window.__candidate_detail_root || root;
 window.__candidate_detail_view_mode = window.__candidate_detail_view_mode || viewMode;
 
 async function process_candidate() {
-    const getIdentifiers = () => {
-        const candidate = getCandidateData();
-        return {
-            candidate_id: candidate.candidate_id,
-            chat_id: candidate.chat_id,
-            conversation_id: candidate.conversation_id,
-            job_applied: candidate.job_applied,
-            name: candidate.name,
-        };
+    const identifiers = () => {
+        const c = getCandidateData();
+        return { candidate_id: c.candidate_id, chat_id: c.chat_id, index: c.index };
     };
-    const { candidate_id, chat_id, conversation_id, job_applied, name } = getIdentifiers();
-    const mode = getCandidateData('mode');
+
+    const emitComplete = () => {
+        document.dispatchEvent(new CustomEvent('candidate:processing-complete', { detail: { identifiers: identifiers() } }));
+    };
+
+    const emitError = (error) => {
+        document.dispatchEvent(new CustomEvent('candidate:processing-error', { detail: { identifiers: identifiers(), error } }));
+    };
+
     // Note: disableAllCards() is called by startProcessCandidate() for batch processing
-    // Only disable if not already disabled (for manual single candidate processing)
     if (!window.cycleReplyState?.running) {
         document.dispatchEvent(new CustomEvent('candidates:disable-cards'));
     }
+
     try {
+        // Step 0: short-circuit if already PASS
+        if (getCandidateData('stage') === 'PASS') {
+            emitComplete();
+            return;
+        }
+
         // Step 1: Ensure resume is loaded
-        const online_resume_div = document.getElementById('resume-textarea-online');
-        if (!online_resume_div?.value || online_resume_div?.value.includes('⏳') || online_resume_div?.value.length < 100) {
+        const onlineResume = document.getElementById('resume-textarea-online');
+        if (!onlineResume?.value || onlineResume.value.includes('⏳') || onlineResume.value.length < 100) {
             await fetchOnlineResume();
         }
-        
+
         // Step 2: Initialize chat if no conversation_id
-        if (!conversation_id) {
+        if (!getCandidateData('conversation_id')) {
             await initializeNewChat();
         }
-        
-        // Step 3: Start analysis if pending
+
+        // Step 3: Start analysis if not rendered or pending
         const analysisDiv = document.getElementById('analysis-content');
-        if (analysisDiv.textContent.includes('⏳')) {
+        const hasAnalysis = !!document.querySelector('#analysis-content #analysis-result-container');
+        if (!hasAnalysis || analysisDiv?.textContent?.includes('⏳')) {
             await startAnalysis();
         }
-        
-        // Step 4: Check threshold and determine stage (sequential: chat → borderline → seek)
-        let [newStage, current_score, analysis] = determineStage();
-        let is_full_analysis = analysis?.resume_type === 'full';
-        let need_reply = await shouldReply();
-        // Step 4a: chat with candidate only but no analysis with full resume
-        if (newStage === 'CHAT' && need_reply) {
-            await generateMessage();
-            await greetAndSendMessage();
-            need_reply = false;
-        }
-        // Step 4b: Check borderline_threshold - try to get full resume and re-analyze
-        if (['SEEK', 'CONTACT'].includes(newStage)) {
-            // For chat mode, try to get full resume and re-analyze
-            let full_resume_text = document.getElementById('resume-textarea-full')?.value?.trim() || '';
-            if (full_resume_text.includes('⏳') || full_resume_text.length < 100) {
-                await fetchFullResume();
-                full_resume_text = document.getElementById('resume-textarea-full')?.value?.trim() || '';
+
+        // Step 4: Determine stage (PASS/CHAT/SEEK by score thresholds)
+        let [newStage, currentScore, analysis] = determineStage();
+        let isFullAnalysis = analysis?.resume_type === 'full';
+        let needReply = await shouldReply();
+        const mode = getCandidateData('mode');
+
+        const finish = async (updates = {}) => {
+            await updateCandidateData({ viewed: true, score: currentScore, stage: newStage, ...updates });
+            emitComplete();
+        };
+
+        const handleChatAction = async (gen) => {
+            const action = gen?.action || '';
+            if (action === 'PASS') {
+                newStage = 'PASS';
+                await finish({ stage: 'PASS' });
+                return true;
             }
-            // check if analysis is from full resume
-            if (! is_full_analysis && full_resume_text.length > 100 ) {
-                await startAnalysis();
-                [newStage, current_score, analysis] = determineStage();
-                if (['SEEK', 'CONTACT'].includes(newStage)) {
-                    need_reply = true; // generate a new message if full analysis is passed SEEK stage
-                    await sendDingNotification(analysis, name, getCandidateData('job_applied'));
+            if (action === 'WAIT') {
+                await finish({});
+                return true;
+            }
+            if (action === 'CONTACT') {
+                newStage = 'CONTACT';
+                if (!getCandidateData('notified')) {
+                    await sendDingNotification(analysis, getCandidateData('name'), getCandidateData('job_applied'));
                 }
-            }
-            // Step 4c: Send notification if candidate send new message or analysis was updated
-            if (need_reply) {
-                await generateMessage();
                 await greetAndSendMessage();
-                need_reply = false;
-                // Step 4d: Check seek_threshold - request contact if above
-                if (newStage === 'CONTACT') {
-                    await sendDingNotification(analysis, name, getCandidateData('job_applied'));
+                if (mode !== 'recommend') {
                     await requestContact();
                 }
+                await finish({ stage: 'CONTACT' });
+                return true;
+            }
+            await greetAndSendMessage();
+            return false;
+        };
+
+        // Hard stop: score-based PASS (must still emit completion event for batch runner)
+        if (currentScore <= 4) {
+            await passCandidate();
+            newStage = 'PASS';
+            await finish({ stage: 'PASS' });
+            return;
+        }
+
+        // Step 4a: CHAT stage -> generate message if needed
+        if (newStage === 'CHAT' && needReply) {
+            const gen = await generateMessage(false);
+            if (await handleChatAction(gen)) return;
+            needReply = false;
+        }
+
+        // Step 4b/4c: SEEK stage -> (chat mode) fetch full resume and re-analyze; then followup generation if needed
+        if (newStage === 'SEEK') {
+            if (mode !== 'recommend') {
+                let fullResume = document.getElementById('resume-textarea-full')?.value?.trim() || '';
+                if (fullResume.includes('⏳') || fullResume.length < 100) {
+                    await fetchFullResume();
+                    fullResume = document.getElementById('resume-textarea-full')?.value?.trim() || '';
+                }
+                if (!isFullAnalysis && fullResume.length > 100) {
+                    await startAnalysis();
+                    [newStage, currentScore, analysis] = determineStage();
+                    isFullAnalysis = analysis?.resume_type === 'full';
+                    if (newStage === 'SEEK') {
+                        needReply = true;
+                    }
+                }
+            }
+
+            if (needReply && !getCandidateData('notified')) {
+                await sendDingNotification(analysis, getCandidateData('name'), getCandidateData('job_applied'));
+            }
+
+            if (needReply) {
+                const gen = await generateMessage(true);
+                if (await handleChatAction(gen)) return;
+                needReply = false;
             }
         }
-        // Update stage and card
-        await updateCandidateData({
-            stage: newStage,
-            viewed: true,
-            score: current_score
-        });
-        
-        // Emit success event (use updated conversationId)
-        const event = new CustomEvent('candidate:processing-complete', {
-            detail: {
-                identifiers: getIdentifiers()
-            }
-        });
-        document.dispatchEvent(event);
-        
+
+        await finish({ stage: newStage, score: currentScore });
     } catch (error) {
         console.error('Error processing candidate:', error);
         showToast(`处理候选人时出错: ${error.message || String(error)}`, 'error');
-        // Emit error event (use updated conversationId)
-        const event = new CustomEvent('candidate:processing-error', {
-            detail: {
-                identifiers: getIdentifiers(),
-                error: error.message || String(error)
-            }
-        });
-        document.dispatchEvent(event);
+        emitError(error.message || String(error));
     } finally {
-        // Always re-enable cards after processing, even on error
-        // Only re-enable if not in batch processing mode (startProcessCandidate handles it)
         if (!window.cycleReplyState?.running) {
             document.dispatchEvent(new CustomEvent('candidates:enable-cards'));
         }
@@ -432,22 +472,30 @@ async function fetchFullResume() {
     switchResumeTab('full');
 }
 
-async function generateMessage() {
+async function generateMessage(force = false) {
     showToast('生成消息...', 'info');
     const values = getCandidateData();
-    const result = await htmxAjaxPromise('POST', '/candidates/generate-message', {
+    const purpose = force ? 'FOLLOWUP_ACTION' : 'CHAT_ACTION';
+    await htmxAjaxPromise('POST', '/candidates/generate-message', {
         target: '#message-content',
         swap: 'innerHTML',
-        values: {...values, purpose: 'CHAT_ACTION'}
+        values: {...values, purpose: purpose}
     });
-    console.log('Generated message:', result);
-    await updateCandidateData({generated_message: result});
+    const textarea = document.getElementById('message-text');
+    const message = textarea?.value?.trim() || '';
+    const action = textarea?.dataset?.action || '';
+    const reason = textarea?.dataset?.reason || '';
+    window.__last_generated_chat = { action, reason, message, purpose };
+    console.log('Generated message:', { action, reason, message });
+    await updateCandidateData({generated_message: message});
+    return window.__last_generated_chat;
 }
 
 async function greetAndSendMessage() {
     const autoSend = document.getElementById('auto-send-checkbox')?.checked ?? true;
     const message_textarea = document.getElementById('message-text');
     const message = autoSend ? message_textarea.value.trim() : '';
+    const action = message_textarea?.dataset?.action || window.__last_generated_chat?.action || '';
     let stage = getCandidateData('stage');
     const greeted = getCandidateData('greeted');
     const mode = getCandidateData('mode');
@@ -484,8 +532,9 @@ async function greetAndSendMessage() {
     
     // Update to CHAT stage
     const currentStage = getCandidateData('stage');
+    const nextStage = (action === 'CONTACT') ? 'CONTACT' : (currentStage || 'CHAT');
     await updateCandidateData({
-        stage: currentStage || 'CHAT',
+        stage: nextStage,
         greeted: true
     });
 }
@@ -686,14 +735,16 @@ async function initializeNewChat() {
 function determineStage() {
     let stage = 'PASS';
     const analysis_container = document.querySelector('#analysis-content #analysis-result-container');
-    const { chat_threshold, borderline_threshold, seek_threshold } = getThresholdValues();
+    const { chat_threshold, borderline_threshold } = getThresholdValues();
     const analysis = analysis_container ? JSON.parse(analysis_container.getAttribute('data-analysis')) : null;
     const {overall, skill, startup_fit, background} = analysis || {};
-    if (overall >= seek_threshold){
-        stage =  'CONTACT';
-    } else if (overall >= borderline_threshold){
+    if (overall <= 4) {
+        stage = 'PASS';
+        return [stage, overall, analysis];
+    }
+    if (overall >= borderline_threshold){
         stage = 'SEEK';
-    } else if(overall >= chat_threshold || skill >= seek_threshold || startup_fit >= seek_threshold || background >= seek_threshold){
+    } else if(overall >= chat_threshold || skill >= borderline_threshold || startup_fit >= borderline_threshold || background >= borderline_threshold){
         stage = 'CHAT';
     }
     return [stage, overall, analysis];
@@ -834,8 +885,7 @@ function getCandidateData(key) {
 function getThresholdValues() {
     return {
         chat_threshold: parseFloat(document.getElementById('threshold-chat')?.value) || 6.0,
-        borderline_threshold: parseFloat(document.getElementById('threshold-borderline')?.value) || 7.0,
-        seek_threshold: parseFloat(document.getElementById('threshold-seek')?.value) || 8.0
+        borderline_threshold: parseFloat(document.getElementById('threshold-borderline')?.value) || 7.0
     };
 }
 

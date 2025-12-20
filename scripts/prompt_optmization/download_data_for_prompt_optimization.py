@@ -28,6 +28,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from src.global_logger import logger
 from src.prompts.assistant_actions_prompts import ACTION_PROMPTS, AnalysisSchema
+from src.config import get_openai_config
+
+try:
+    from openai import OpenAI  # type: ignore
+except Exception:  # pragma: no cover
+    OpenAI = None  # type: ignore
 
 try:
     from tqdm import tqdm  # type: ignore
@@ -81,7 +87,14 @@ def _read_distribution_txt(path: Path) -> dict[str, Any]:
         if ":" not in line:
             continue
         k, v = [x.strip() for x in line.split(":", 1)]
-        if k in {"Total candidates", "With overall", "Missing overall"}:
+        if k in {
+            "Total candidates",
+            "Total candidates (all)",
+            "Total candidates (used)",
+            "Generated analysis candidates",
+            "With overall",
+            "Missing overall",
+        }:
             try:
                 stats[k] = int(v)
             except Exception:
@@ -151,7 +164,7 @@ def _chat_policy_risk_stats(candidates: list["CandidateExport"]) -> dict[str, An
 
     for idx, c in enumerate(candidates, start=1):
         for m in c.history or []:
-            if (m.get("role") or "") != "assistant":
+            if _normalize_history_role(m) != "assistant":
                 continue
             text = (m.get("content") or "").strip()
             if not text:
@@ -293,6 +306,188 @@ def _parse_history_last_timestamp(history: list[dict[str, Any]]) -> Optional[dat
             return None
 
 
+def _extract_first_json_object(text: str) -> Optional[dict[str, Any]]:
+    """Best-effort extract/parse the first JSON object in a model response."""
+
+    if not text:
+        return None
+    start = text.find("{")
+    if start == -1:
+        return None
+    stack = 0
+    end = None
+    for i in range(start, len(text)):
+        ch = text[i]
+        if ch == "{":
+            stack += 1
+        elif ch == "}":
+            stack -= 1
+            if stack == 0:
+                end = i + 1
+                break
+    if end is None:
+        return None
+    blob = text[start:end]
+    try:
+        obj = json.loads(blob)
+    except Exception:
+        return None
+    return obj if isinstance(obj, dict) else None
+
+
+def _compact_job_portrait_for_analysis(job_portrait: dict[str, Any]) -> dict[str, Any]:
+    """Keep only the fields that meaningfully guide screening, to save tokens."""
+
+    keys = [
+        "position",
+        "target_profile",
+        "background",
+        "responsibilities",
+        "requirements",
+        "candidate_filters",
+        "drill_down_questions",
+        "followup_questions",
+        "keywords",
+        "description",
+        "base_job_id",
+        "job_id",
+        "prompt_optimization_notes",
+        "updated_at",
+        "created_at",
+    ]
+    compact: dict[str, Any] = {}
+    for k in keys:
+        if k in job_portrait:
+            compact[k] = job_portrait.get(k)
+    return compact or dict(job_portrait)
+
+
+def _format_history_for_analysis(history: list[dict[str, Any]], max_messages: int = 20) -> str:
+    """Format the last N messages as plain text for the model."""
+
+    if not history:
+        return ""
+    tail = history[-max(1, max_messages) :]
+    lines: list[str] = []
+    for item in tail:
+        role = _normalize_history_role(item)
+        content = (item.get("content") or item.get("message") or "").strip()
+        if not content:
+            continue
+        ts = (item.get("timestamp") or "").strip()
+        prefix = role or "unknown"
+        if ts:
+            lines.append(f"[{ts}] {prefix}: {content}")
+        else:
+            lines.append(f"{prefix}: {content}")
+    return "\n".join(lines).strip()
+
+
+def _build_analyze_instructions(base_analyze: str) -> str:
+    """Wrap/strengthen analyze instructions with a hard JSON output contract."""
+
+    base = (base_analyze or "").strip()
+    output_contract = """
+
+【输出格式（强制）】
+- 只输出一个 JSON 对象，不要 markdown，不要代码块，不要多余文字。
+- JSON 字段必须且只能包含：
+  - skill (int, 1-10)
+  - startup_fit (int, 1-10)
+  - background (int, 1-10)
+  - overall (int, 1-10)
+  - summary (str)
+  - followup_tips (str)
+"""
+    return (base + output_contract).strip()
+
+
+def _generate_analysis_for_candidate(
+    *,
+    model: str,
+    analyze_prompt: str,
+    job_portrait: dict[str, Any],
+    resume: str,
+    history: list[dict[str, Any]],
+    history_max_messages: int,
+) -> Optional[dict[str, Any]]:
+    if OpenAI is None:
+        logger.warning("openai sdk not available; skip re-analysis")
+        return None
+
+    openai_config = get_openai_config()
+    api_key = openai_config.get("api_key")
+    base_url = openai_config.get("base_url")
+    if not api_key:
+        logger.warning("OPENAI api_key missing in config; skip re-analysis")
+        return None
+
+    client = OpenAI(api_key=api_key, base_url=base_url)
+
+    job_text = json.dumps(_compact_job_portrait_for_analysis(job_portrait), ensure_ascii=False, indent=2)
+    hist_text = _format_history_for_analysis(history, max_messages=history_max_messages)
+    input_text = "\n\n".join(
+        [
+            "【岗位肖像】",
+            job_text,
+            "",
+            "【候选人简历】",
+            (resume or "").strip(),
+            "",
+            "【对话记录（截取最近若干条）】",
+            hist_text or "(无)",
+        ]
+    ).strip()
+
+    instructions = _build_analyze_instructions(analyze_prompt)
+
+    # Try schema-guided response first (if the installed SDK supports it).
+    try:
+        response = client.responses.create(
+            model=model,
+            instructions=instructions,
+            input=input_text,
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "AnalysisSchema",
+                    "schema": AnalysisSchema.model_json_schema(),
+                    "strict": True,
+                },
+            },
+        )
+        obj = _extract_first_json_object(getattr(response, "output_text", "") or "")
+        if obj is None and isinstance(getattr(response, "output", None), list):
+            # Some SDK versions return structured output elsewhere; fallback to output_text only.
+            obj = None
+    except TypeError:
+        obj = None
+    except Exception as exc:
+        logger.warning("Re-analysis request failed; falling back to text-only parse: %s", exc)
+        obj = None
+
+    if obj is None:
+        # Text-only fallback.
+        try:
+            response = client.responses.create(
+                model=model,
+                instructions=instructions,
+                input=input_text,
+            )
+        except Exception as exc:
+            logger.error("Re-analysis failed: %s", exc)
+            return None
+        obj = _extract_first_json_object(getattr(response, "output_text", "") or "")
+
+    if obj is None:
+        return None
+    try:
+        parsed = AnalysisSchema.model_validate(obj)
+    except Exception:
+        return None
+    return parsed.model_dump()
+
+
 # ---------------------------------------------------------------------------
 # Data models
 # ---------------------------------------------------------------------------
@@ -305,6 +500,9 @@ class CandidateExport:
     resume: str
     analysis: dict[str, Any]
     history: list[dict[str, Any]]
+    analysis_legacy: dict[str, Any] | None = None
+    analysis_source: str | None = None  # "generated" | "legacy"
+    analysis_generated_at: str | None = None
     candidate_id: str | None = None
     updated_at: str | None = None
     job_applied: str | None = None
@@ -316,6 +514,9 @@ class CandidateExport:
             "conversation_id": self.conversation_id,
             "resume": self.resume,
             "analysis": self.analysis,
+            "analysis_legacy": self.analysis_legacy,
+            "analysis_source": self.analysis_source,
+            "analysis_generated_at": self.analysis_generated_at,
             "history": self.history,
             "candidate_id": self.candidate_id,
             "updated_at": self.updated_at,
@@ -383,11 +584,12 @@ def _should_exclude_candidate(
     analysis: dict[str, Any],
     history: list[dict[str, Any]],
     min_resume_len: int = 100,
+    require_existing_analysis: bool = False,
 ) -> tuple[bool, list[str]]:
     reasons: list[str] = []
     if not _resume_loaded(resume, min_len=min_resume_len):
         reasons.append(f"resume_not_loaded_or_too_short(<{min_resume_len})")
-    if not _has_valid_analysis(analysis):
+    if require_existing_analysis and not _has_valid_analysis(analysis):
         reasons.append("missing_or_empty_analysis")
     if not _has_assistant_dialogue(history):
         reasons.append("no_assistant_dialogue_in_history")
@@ -483,6 +685,12 @@ def step2_fetch_recent_candidates_and_save(
     run_dir: Path,
     batch_size: int = 10,
     fetch_multiplier: int = 5,
+    baseline_prompts: Optional[dict[str, str]] = None,
+    baseline_job_portrait: Optional[dict[str, Any]] = None,
+    reanalyze: bool = True,
+    history_max_messages: int = 20,
+    analysis_model: Optional[str] = None,
+    require_existing_analysis: bool = False,
 ) -> list[CandidateExport]:
     """Fetch newest candidates and save one json per candidate.
 
@@ -623,7 +831,11 @@ def step2_fetch_recent_candidates_and_save(
             if cid:
                 fetched[cid] = r
 
-    for last_dt, header in ranked:
+    iterator = ranked
+    if reanalyze:
+        iterator = tqdm(ranked, desc="Re-analyze candidates", total=len(ranked))  # type: ignore[assignment]
+
+    for last_dt, header in iterator:
         candidate_id = header.get("candidate_id")
         if not candidate_id:
             continue
@@ -631,12 +843,17 @@ def step2_fetch_recent_candidates_and_save(
 
         name = (c.get("name") or header.get("name") or "").strip() or "unknown"
         conversation_id = (c.get("conversation_id") or header.get("conversation_id") or "").strip()
-        analysis = c.get("analysis") or {}
+        legacy_analysis = c.get("analysis") or {}
         metadata = c.get("metadata") or {}
         history = metadata.get("history") or []
         resume = (c.get("full_resume") or "").strip() or (c.get("resume_text") or "").strip()
 
-        exclude, reasons = _should_exclude_candidate(resume=resume, analysis=analysis, history=history)
+        exclude, reasons = _should_exclude_candidate(
+            resume=resume,
+            analysis=legacy_analysis,
+            history=history,
+            require_existing_analysis=require_existing_analysis,
+        )
         if exclude:
             excluded.append(
                 ExcludedCandidate(
@@ -649,12 +866,36 @@ def step2_fetch_recent_candidates_and_save(
             )
             continue
 
+        analysis: dict[str, Any] = legacy_analysis
+        analysis_source = "legacy"
+        analysis_generated_at: Optional[str] = None
+        if reanalyze:
+            prompts_for_use = baseline_prompts or dict(ACTION_PROMPTS)
+            portrait_for_use = baseline_job_portrait or dict(job)
+            analyze_prompt = prompts_for_use.get("ANALYZE_ACTION") or (ACTION_PROMPTS.get("ANALYZE_ACTION") or "")
+            model = analysis_model or get_openai_config().get("model") or "gpt-4.1"
+            new_analysis = _generate_analysis_for_candidate(
+                model=str(model),
+                analyze_prompt=analyze_prompt,
+                job_portrait=portrait_for_use,
+                resume=resume,
+                history=history,
+                history_max_messages=history_max_messages,
+            )
+            if isinstance(new_analysis, dict) and new_analysis:
+                analysis = new_analysis
+                analysis_source = "generated"
+                analysis_generated_at = datetime.now().isoformat(timespec="seconds")
+
         export = CandidateExport(
             name=name,
             conversation_id=conversation_id,
             resume=resume,
             analysis=analysis,
             history=history,
+            analysis_legacy=legacy_analysis,
+            analysis_source=analysis_source,
+            analysis_generated_at=analysis_generated_at,
             candidate_id=candidate_id,
             updated_at=c.get("updated_at") or header.get("updated_at"),
             job_applied=c.get("job_applied") or header.get("job_applied"),
@@ -689,9 +930,12 @@ def step3_compute_overall_distribution_and_save(
     candidates: list[CandidateExport],
     run_dir: Path,
 ) -> tuple[dict[str, Any], Path]:
+    generated = [c for c in candidates if (c.analysis_source or "").lower() == "generated"]
+    candidates_for_stats = generated or candidates
+
     scores: list[int] = []
     missing = 0
-    for c in candidates:
+    for c in candidates_for_stats:
         overall = (c.analysis or {}).get("overall")
         if isinstance(overall, int):
             scores.append(overall)
@@ -704,7 +948,9 @@ def step3_compute_overall_distribution_and_save(
             hist[str(s)] += 1
 
     stats: dict[str, Any] = {
-        "count_total": len(candidates),
+        "count_total_all": len(candidates),
+        "count_total_used": len(candidates_for_stats),
+        "count_generated_total": len(generated),
         "count_with_overall": len(scores),
         "count_missing_overall": missing,
         "histogram_1_to_10": hist,
@@ -723,7 +969,10 @@ def step3_compute_overall_distribution_and_save(
         )
 
     lines = [
-        f"Total candidates: {stats['count_total']}",
+        f"Total candidates (all): {stats['count_total_all']}",
+        f"Total candidates (used): {stats['count_total_used']}",
+        f"Generated analysis candidates: {stats['count_generated_total']}",
+        "Note: If generated analysis exists, distribution is computed on generated-only; otherwise it falls back to legacy analysis.",
         f"With overall: {stats['count_with_overall']}",
         f"Missing overall: {stats['count_missing_overall']}",
         "",
@@ -894,7 +1143,8 @@ def step5_write_report_and_generate_variants(
         except Exception:
             prev_compliance = {}
 
-    cur_compliance = _analysis_compliance_stats(candidates)
+    generated = [c for c in candidates if (c.analysis_source or "").lower() == "generated"]
+    cur_compliance = _analysis_compliance_stats(generated or candidates)
     cur_chat_risk = _chat_policy_risk_stats(candidates)
 
     # Rolling optimized artifacts: start from previous optimized baseline if available.
@@ -913,7 +1163,8 @@ def step5_write_report_and_generate_variants(
         f"- job_id: {job.get('job_id')}",
         f"- base_job_id: {job.get('base_job_id')}",
         f"- 本批次候选人数量: {len(candidates)}（默认每批10个）",
-        f"- 排除候选人数量: {excluded_count}（简历<100/无analysis/无assistant对话）",
+        f"- 本批次 generated analysis 数量: {len(generated)}（用于忽略旧 analysis 的复盘口径）",
+        f"- 排除候选人数量: {excluded_count}（简历<100/无assistant对话）",
         "",
         "## 上一批次对比（用于检查迭代是否有效）",
         "",
@@ -982,6 +1233,7 @@ def step5_write_report_and_generate_variants(
     body: list[str] = []
     for i, c in enumerate(candidates, start=1):
         analysis = c.analysis or {}
+        legacy = c.analysis_legacy or {}
         score_line = (
             f"skill={analysis.get('skill')}, startup_fit={analysis.get('startup_fit')}, "
             f"background={analysis.get('background')}, overall={analysis.get('overall')}"
@@ -997,15 +1249,28 @@ def step5_write_report_and_generate_variants(
             f"- candidate_id: `{c.candidate_id}`",
             f"- updated_at: `{c.updated_at}`",
             f"- score: {score_line}",
+            f"- analysis_source: `{c.analysis_source}`",
             "",
             "**简历预览**",
             "",
             f"> {resume_preview or '[空]'}",
             "",
-            "**当前 analysis（原样）**",
+            "**当前 analysis（本次使用；建议只看这个，忽略 legacy）**",
             "",
             "```json",
             json.dumps(analysis, ensure_ascii=False, indent=2),
+            "```",
+            "",
+            "**legacy analysis（仅用于排查历史污染，可忽略）**",
+            "",
+            "```json",
+            json.dumps(legacy, ensure_ascii=False, indent=2),
+            "```",
+            "",
+            "**对话摘录（最近6条）**",
+            "",
+            "```",
+            "\n".join(_format_history_for_analysis(c.history or [], max_messages=6).splitlines()),
             "```",
             "",
             "**人工补充（按筛选指南）**",
@@ -1055,6 +1320,19 @@ def main() -> int:
     parser.add_argument("--job-id", default=None, help="Select job by job_id/base_job_id")
     parser.add_argument("--job-position", default=None, help="Select job by position keyword (e.g., 架构师)")
     parser.add_argument("--batch-size", type=int, default=10, help="Number of newest candidates per run (default: 10)")
+    parser.add_argument("--skip-reanalyze", action="store_true", help="Do not call OpenAI to regenerate analysis")
+    parser.add_argument(
+        "--history-max-messages",
+        type=int,
+        default=20,
+        help="How many latest history messages to include when re-analyzing (default: 20)",
+    )
+    parser.add_argument("--analysis-model", default=None, help="Override OpenAI model for re-analysis")
+    parser.add_argument(
+        "--require-existing-analysis",
+        action="store_true",
+        help="Exclude candidates if legacy analysis is missing (default: off; we generate new analysis anyway)",
+    )
     parser.add_argument(
         "--prompt-opt-dir",
         default=str(Path("scripts") / "prompt_optmization"),
@@ -1072,7 +1350,20 @@ def main() -> int:
         job_id=args.job_id,
         job_position=args.job_position,
     )
-    candidates = step2_fetch_recent_candidates_and_save(job=job, run_dir=run_dir, batch_size=args.batch_size)
+
+    baseline_prompts, baseline_job_portrait = _load_previous_optimized_baseline(previous_run_dir)
+
+    candidates = step2_fetch_recent_candidates_and_save(
+        job=job,
+        run_dir=run_dir,
+        batch_size=args.batch_size,
+        baseline_prompts=baseline_prompts,
+        baseline_job_portrait=baseline_job_portrait or dict(job),
+        reanalyze=not args.skip_reanalyze,
+        history_max_messages=args.history_max_messages,
+        analysis_model=args.analysis_model,
+        require_existing_analysis=args.require_existing_analysis,
+    )
     dist_stats, _dist_path = step3_compute_overall_distribution_and_save(candidates=candidates, run_dir=run_dir)
     step5_write_report_and_generate_variants(
         job=job,

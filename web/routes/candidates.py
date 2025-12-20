@@ -126,7 +126,7 @@ async def list_candidates(
                 tab=tab_filter,
                 status=status_filter,
                 job_applied=job_applied,
-                unread_only=True  # True 只看未读
+                unread_only=False if mode == "recommend" else True  # True 只看未读
             )
         except Exception as e:
             logger.error(f"Failed to get chat candidates: {e}")
@@ -413,6 +413,7 @@ async def save_candidate_to_cloud(request: Request):
 
 @router.post("/generate-message", response_class=HTMLResponse)
 async def generate_message(
+    request: Request,
     name: str = Form(...),
     mode: str = Form(...),
     candidate_id: str = Form(...),
@@ -448,53 +449,38 @@ async def generate_message(
         new_user_messages = [default_user_message]
     
     # generate message if there is new message from user(candidate)
+    payload = None
     if (new_user_messages and purpose == "CHAT_ACTION") or purpose == "FOLLOWUP_ACTION":
-        # Provide candidate analysis context to reduce hallucinated "评分/阶段" references in CHAT prompts.
-        # Must be internal-only and never shown to candidate.
-        context_messages: list[dict[str, str]] = []
-        try:
-            if candidate_id:
-                stored = await asyncio.to_thread(
-                    get_candidate_by_dict,
-                    {"candidate_id": candidate_id, "fields": ["analysis", "stage", "updated_at"]},
-                    True,
-                )
-                analysis = (stored or {}).get("analysis") or {}
-                if analysis:
-                    overall = analysis.get("overall")
-                    summary = (analysis.get("summary") or "").strip()
-                    if len(summary) > 600:
-                        summary = summary[:600] + "…"
-                    context_messages.append(
-                        {
-                            "role": "developer",
-                            "content": (
-                                "候选人内部评分信息（仅供你把握追问深度；不要对候选人提及分数/阶段/筛选标准）："
-                                f"overall={overall}; summary={summary}"
-                            ),
-                        }
-                    )
-        except Exception:
-            logger.exception("Failed to load candidate analysis context")
-
-        input_items: list[dict[str, str]] = []
-        if context_messages:
-            input_items.extend(context_messages)
-        if new_user_messages:
-            input_items.extend(new_user_messages)
-        else:
-            input_items.append({"role": "user", "content": "[沉默]"})
-
         # Generate message in thread pool to avoid blocking event loop (OpenAI API call)
-        message = await asyncio.to_thread(
+        generated = await asyncio.to_thread(
             assistant_actions.generate_message,
-            input_message=input_items,
+            input_message=new_user_messages if new_user_messages else '[沉默]',
             conversation_id=conversation_id,
             purpose=purpose,  # prompt will be determined by purpose
         )
-        logger.debug("Generated message: %s", message)
+        logger.debug("Generated message: %s", generated)
+
+        action = None
+        reason = None
+        message = generated
+        payload = None
+        if isinstance(generated, dict) and "action" in generated:
+            action = generated.get("action")
+            reason = generated.get("reason")
+            message = generated.get("message", "")
+            payload = generated
+
         # append the new message to the chat_history
-        generated_message = {"role": "assistant", "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "content": message}
+        generated_message = {
+            "role": "assistant",
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "content": message,
+        }
+        if payload:
+            generated_message["payload"] = payload
+            generated_message["action"] = action
+            generated_message["reason"] = reason
+
         # Save to database (database operation, no browser lock needed)
         upsert_candidate(
             candidate_id=candidate_id,
@@ -508,6 +494,49 @@ async def generate_message(
     else:
         logger.warning("No new message found for conversation_id: %s", conversation_id)
         message = ''
+
+    if isinstance(payload, dict) and payload.get("action") == "PASS":
+        pass_reason = (payload.get("reason") or "不合适").strip()
+        logger.warning(f"候选人 {name} 判断为不合适，理由: {pass_reason}")
+        upsert_candidate(candidate_id=candidate_id, stage=STAGE_PASS)
+        if mode == "recommend":
+            result = await recommendation_actions.pass_recommend_candidate_action(page, index)
+        else:
+            result = await chat_actions.discard_candidate_action(page, chat_id)
+        return templates.TemplateResponse(
+            "partials/message_result.html",
+            {
+                "request": request,
+                "message": "",
+                "action": "PASS",
+                "reason": pass_reason,
+                "payload": payload,
+            },
+            headers={
+                "HX-Trigger": json.dumps(
+                    {"showToast": {"message": f"候选人 {name} 判断为不合适，理由: {pass_reason}", "type": "info"}},
+                    ensure_ascii=True,
+                )
+            },
+        )
+
+    if isinstance(payload, dict) and payload.get("action") == "WAIT":
+        wait_reason = (payload.get("reason") or "暂不发送").strip()
+        return templates.TemplateResponse(
+            "partials/message_result.html",
+            {
+                "request": request,
+                "message": "",
+                "action": "WAIT",
+                "reason": wait_reason,
+                "payload": payload,
+            },
+            headers={
+                "HX-Trigger": json.dumps(
+                    {"showToast": {"message": f"WAIT: {wait_reason}", "type": "info"}}, ensure_ascii=True
+                )
+            },
+        )
 
     if "<PASS>" in message:
         parts = message.split("<PASS>:", 1)
@@ -525,11 +554,16 @@ async def generate_message(
             headers={"HX-Trigger": json.dumps({"showToast": {"message": f"候选人 {name} 判断为不合适，理由: {pass_reason}", "type": "info"}}, ensure_ascii=True)}
         )
 
-    # Return textarea with generated message and send button
-    html = f'''
-    <textarea id="message-text" name="generated_message" class="w-full h-32 p-2 border rounded-lg text-gray-800">{message}</textarea>
-    '''
-    return HTMLResponse(content=html)
+    return templates.TemplateResponse(
+        "partials/message_result.html",
+        {
+            "request": request,
+            "message": message,
+            "action": action or "",
+            "reason": reason or "",
+            "payload": payload,
+        },
+    )
 
 @router.post("/should-reply")
 async def should_reply(

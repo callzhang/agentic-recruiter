@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -39,9 +41,17 @@ ACTION_PROMPTS: dict[str, str] = {
     "CHAT_ACTION": """
 你作为星尘数据的招聘顾问，请用轻松、口语化、尊重的风格和候选人沟通。
 
-【输出格式（强制）】
-- 只输出一条可直接发送给候选人的纯文本消息（不要模板/占位符），不要使用任何格式化、引号、JSON、列表编号。
+【输出格式（强制：JSON）】
+- 只输出一个 JSON 对象，不要 markdown/代码块/多余文字。
+- JSON 结构必须匹配 ChatActionSchema：
+  - action: PASS | CHAT | CONTACT | WAIT
+  - message: 给候选人的文本（仅当 action=CHAT/CONTACT 时允许非空）
+  - reason: 内部记录（用于HR/系统），20-80字
+
+【message 规则（强制）】
 - 字数<=160字；最多出现2个问号（每次只问1个主问题，可追加1个追问用于澄清）。
+- 如果 action=PASS 或 WAIT：message 必须为空字符串。
+- 如果 action=CONTACT：message<=50字，只征询微信/电话，不安排面试。
 
 【硬规则（强制）】
 - 先回应候选人的问题/顾虑（公司、岗位、流程、地点等），再提问；不要答非所问。
@@ -54,7 +64,7 @@ ACTION_PROMPTS: dict[str, str] = {
 【怎么问（关键）】
 - 从岗位信息的 drill_down_questions 里挑1题（最贴近候选人经历），改写成更口语的开放问题，要求候选人讲“亲历+过程+关键取舍+量化指标变化+你负责的部分”。
 - 如果候选人回答泛泛、或说“问AI就行/很容易”：礼貌说明我们更看重亲历与取舍，然后追问一次具体案例与指标（不要争辩）。
-- 如果明显不匹配或候选人明确拒绝继续沟通：输出“<PASS>: 20字内原因”（用于系统自动PASS），不要对候选人解释筛选标准。
+- 如果明显不匹配或候选人明确拒绝继续沟通：action=PASS，reason 写 20-40字原因；不要对候选人解释筛选标准。
 """,
     # analyze actions
     "ANALYZE_ACTION": """你是严谨的技术面筛选官。请根据【岗位肖像】与【候选人简历】打分，用于决定是否继续推进。
@@ -116,9 +126,17 @@ ACTION_PROMPTS: dict[str, str] = {
     "FOLLOWUP_ACTION": """
 你作为星尘数据的招聘顾问，请用轻松、口语化、尊重的风格和候选人沟通。候选人已读未回，请生成一条“更容易回复”的跟进消息。
 
-【输出格式（强制）】
-- 只输出一条可直接发送给候选人的纯文本消息（不要模板/占位符），不要使用任何格式化、引号、JSON、列表编号。
+【输出格式（强制：JSON）】
+- 只输出一个 JSON 对象，不要 markdown/代码块/多余文字。
+- JSON 结构必须匹配 ChatActionSchema：
+  - action: PASS | CHAT | CONTACT | WAIT
+  - message: 给候选人的文本（仅当 action=CHAT/CONTACT 时允许非空）
+  - reason: 内部记录（用于HR/系统），20-80字
+
+【message 规则（强制）】
 - 字数<=160字；最多出现1个问号（最多问1个轻量问题）。
+- 如果 action=PASS 或 WAIT：message 必须为空字符串。
+- 如果 action=CONTACT：message<=50字，只征询微信/电话，不安排面试。
 
 【硬规则（强制）】
 - 不约具体时间，也不要让候选人选时间；不决定面试方式/地点；只说“我同步HR尽快安排，时间/方式/地点由HR确认”。
@@ -151,3 +169,15 @@ class AnalysisSchema(BaseModel):
     )
     summary: str = Field(description="分析总结，不要超过200字")
     followup_tips: str = Field(description="后续招聘顾问跟进的沟通策略，不要超过200字")
+
+
+class ChatActionSchema(BaseModel):
+    """Schema for chat/followup generation (internal action + user-facing message)."""
+
+    action: Literal["PASS", "CHAT", "CONTACT", "WAIT"] = Field(
+        description="下一步动作：PASS=不推进且不发消息；CHAT=继续沟通；CONTACT=征询联系方式；WAIT=暂不发送，等待候选人/HR动作"
+    )
+    message: str = Field(
+        description="给候选人的消息文本（仅 action=CHAT/CONTACT 时允许非空；<=160字；不约时间/不谈薪资细节/不索要材料）"
+    )
+    reason: str = Field(description="内部记录：20-80字，说明为什么选择该 action；不要包含敏感信息/不要索要材料")

@@ -1,0 +1,38 @@
+<!-- Message generation result display (structured, backward compatible) -->
+{# passed:
+    - message: str (plain text)
+    - action: str | None
+    - reason: str | None
+    - payload: dict | None (full ChatActionSchema output)
+ #}
+<div class="space-y-2" id="message-result-container"
+     data-payload='{{ payload | tojson if payload is not none else "{}" }}'>
+    <div class="flex items-start gap-2">
+        {% if action %}
+        <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-indigo-100 text-indigo-700">
+            {{ action }}
+        </span>
+        {% else %}
+        <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-gray-100 text-gray-600">
+            TEXT
+        </span>
+        {% endif %}
+        {% if reason %}
+        <div class="text-xs text-gray-600 whitespace-pre-wrap flex-1">{{ reason }}</div>
+        {% endif %}
+    </div>
+
+    <textarea id="message-text"
+              name="generated_message"
+              data-action="{{ action or '' }}"
+              data-reason="{{ reason or '' }}"
+              class="w-full h-32 p-2 border rounded-lg text-gray-800">{{ message or '' }}</textarea>
+
+    {% if payload %}
+    <details class="bg-gray-50 border rounded-lg p-2">
+        <summary class="text-xs text-gray-700 cursor-pointer select-none">查看完整 JSON（内部）</summary>
+        <pre class="mt-2 text-xs text-gray-700 whitespace-pre-wrap">{{ payload | tojson }}</pre>
+    </details>
+    {% endif %}
+</div>
+

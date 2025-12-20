@@ -483,9 +483,8 @@ const cycleReplyState = {
     modeIndex: 0,                 // Current mode index in cycle (0-3)
     lastProcessedTime: null,      // Last time a candidate was processed (for idle timeout)
     
-    // Error tracking (separate counters for different error types)
-    errorStreak: 0,               // Consecutive non-server errors (stops at 2)
-    serverErrorStreak: 0          // Consecutive server/network errors (stops at 5-10, transient)
+    // Error tracking
+    errorStreak: 0               // Consecutive errors (stops at 10)
 };
 
 const CycleReplyHelpers = {
@@ -496,7 +495,7 @@ const CycleReplyHelpers = {
     setButton(isRunning, label = null) {
         const btn = this.getButton();
         btn.disabled = false;
-        btn.textContent = label || (isRunning ? '⏸️ 停止循环' : '🔄 循环回复');
+        btn.textContent = label || (isRunning ? '⏹️ 停止自动处理' : '▶ 自动处理');
         btn.classList.toggle('opacity-60', isRunning && cycleReplyState.stopRequested);
     },
     
@@ -619,7 +618,6 @@ const CycleReplyHelpers = {
             cycleReplyState.modeIndex = 0;
         }
         cycleReplyState.errorStreak = 0;
-        cycleReplyState.serverErrorStreak = 0;
         cycleReplyState.lastProcessedTime = Date.now(); // Initialize to current time when starting
     }
 };
@@ -670,20 +668,11 @@ async function startProcessCandidate() {
             
             // Handle errors
             if (result.success === false) {
-                if (result.isServerError) {
-                    cycleReplyState.serverErrorStreak += 1;
-                    showToast(`服务器错误 (${cycleReplyState.serverErrorStreak}/10): ${result.errorMessage} - 跳过当前模式，继续处理`, 'warning');
-                    if (cycleReplyState.serverErrorStreak >= 10) {
-                        showToast('连续服务器错误超过 10 次，处理已停止', 'error');
-                        break;
-                    }
-                } else {
-                    cycleReplyState.errorStreak += 1;
-                    showToast(`处理模式 ${mode} 出错 (${cycleReplyState.errorStreak}/2): ${result.errorMessage}`, 'error');
-                    if (cycleReplyState.errorStreak >= 2) {
-                        showToast('连续错误超过 2 次，处理已停止', 'error');
-                        break;
-                    }
+                cycleReplyState.errorStreak += 1;
+                showToast(`处理模式 ${mode} 出错 (${cycleReplyState.errorStreak}/10): ${result.errorMessage}`, 'error');
+                if (cycleReplyState.errorStreak >= 10) {
+                    showToast('连续错误超过 10 次，处理已停止', 'error');
+                    break;
                 }
                 // Move to next mode if processing all modes
                 if (processAllModes) {
@@ -711,7 +700,7 @@ async function startProcessCandidate() {
                     const result = await window.processCandidateCard(card);
                     if (result.skipped) {
                         skipped++;
-                        total_skipped++;
+                        total_skipped += 1;
                         console.log(`[处理] 跳过已查看的候选人: ${result.name} (${skipped} 已跳过)`);
                     } else if (result.success) {
                         processed++;
@@ -724,12 +713,25 @@ async function startProcessCandidate() {
                         failed++;
                         cycleReplyState.errorStreak++;
                         console.error(`❌ ${result.name} 处理失败: ${result.error || '未知错误'}`);
+                        if (cycleReplyState.errorStreak >= 10) {
+                            showToast('连续错误超过 10 次，处理已停止', 'error');
+                            break;
+                        }
                     }
                 } catch (error) {
                     failed++;
                     cycleReplyState.errorStreak++;
                     console.error(`❌ ${card.name} 处理失败: ${error || '未知错误'}`);
+                    if (cycleReplyState.errorStreak >= 10) {
+                        showToast('连续错误超过 10 次，处理已停止', 'error');
+                        break;
+                    }
                 } 
+            }
+            
+            // Check if error limit reached after processing candidates
+            if (cycleReplyState.errorStreak >= 10) {
+                break; // Stop outer loop
             }
             
             // Show summary for current mode

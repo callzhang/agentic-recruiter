@@ -1,6 +1,6 @@
 # 候选人筛选指南（滚动迭代：每次 10 份）
 
-本指南用于“架构师/平台底座”岗位的离线可复盘筛选：把**岗位肖像 + 候选人样本 + 已有 analysis** 固化成一个批次目录（默认 10 份），并在每次批次产出“完整优化版”的 `prompt_optimized.py` / `job_portrait_optimized.json`，用于下一批继续迭代验证。
+本指南用于“架构师/平台底座”岗位的离线可复盘筛选：把**岗位肖像 + 候选人样本 + 最近对话 history +（本次重新生成的）analysis** 固化成一个批次目录（默认 10 份），并在每次批次产出“完整优化版”的 `prompt_optimized.py` / `job_portrait_optimized.json`，用于下一批继续迭代验证。
 
 核心目标：拒绝“简历匹配的伪高P”，优先筛出具备 **结构化思维** 与 **机制设计能力** 的真架构师/负责人（Level 2）。
 
@@ -55,13 +55,23 @@ python scripts/prompt_optmization/download_data_for_prompt_optimization.py --job
 - `job_portrait.json`：本次导出的岗位肖像（原始/基线）
 - `job_portrait_optimized.json`：本次“完整优化版”岗位肖像（你要编辑，下一批会作为基线）
 - `prompt_optimized.py`：本次“完整优化版” prompt（你要编辑，下一批会作为基线）
-- `candidates/*.json`：候选人样本（已过滤：简历已加载 + 有 analysis + 有 assistant 对话）
+- `candidates/*.json`：候选人样本（已过滤：简历已加载 + 有 assistant 对话；analysis 会在本次运行中重新生成）
 - `excluded_candidates.json`：被过滤掉的候选人列表与原因
-- `overall_distribution.txt`：本批次 overall 分数分布
+- `overall_distribution.txt`：本批次 overall 分数分布（**优先使用本次生成的 analysis；若生成失败才回退 legacy**）
 - `优化报告.md`：复盘报告（含与上一批的对比指标）
 
-> 重要：该脚本**不会重新调用模型生成新的 analysis**，只会导出“候选人库里已有的 analysis”。  
-> 你要验证新 prompt 是否生效，需要用现有线上流程/接口把新 prompt 应用到 ANALYZE_ACTION 并重新跑分析，然后再跑下一批/重新导出观察“评分表/画像判断”的合规性占比是否提升。
+> 重要：脚本默认会用 OpenAI **重新生成 analysis**（并保留原有的 `analysis_legacy` 方便排查历史污染）。  
+> 如果你只想“纯下载不分析”，可加 `--skip-reanalyze`。
+
+常用参数：
+
+```bash
+# 只下载不重跑分析
+python scripts/prompt_optmization/download_data_for_prompt_optimization.py --job-position 架构师 --skip-reanalyze
+
+# 重跑分析时，最多带入最近 30 条对话（用于更准的画像/追问）
+python scripts/prompt_optmization/download_data_for_prompt_optimization.py --job-position 架构师 --history-max-messages 30
+```
 
 ---
 
