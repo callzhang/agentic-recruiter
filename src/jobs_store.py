@@ -94,15 +94,23 @@ def _build_job_data(job_data: Dict[str, Any], current_job: Optional[Dict[str, An
         drill_down_questions = truncate_field(str(current_job.get("drill_down_questions", "")), 30000)
     else:
         drill_down_questions = ""
+
+    # Truncate VARCHAR fields to schema max_length to avoid Milvus insert errors.
+    position = truncate_field(str(job_data.get("position", current_job.get("position", "") if current_job else "") or ""), 200)
+    background = truncate_field(str(job_data.get("background", current_job.get("background", "") if current_job else "") or ""), 5000)
+    description = truncate_field(str(job_data.get("description", current_job.get("description", "") if current_job else "") or ""), 5000)
+    responsibilities = truncate_field(str(job_data.get("responsibilities", current_job.get("responsibilities", "") if current_job else "") or ""), 5000)
+    requirements = truncate_field(str(job_data.get("requirements", current_job.get("requirements", "") if current_job else "") or ""), 5000)
+    target_profile = truncate_field(str(job_data.get("target_profile", current_job.get("target_profile", "") if current_job else "") or ""), 5000)
     
     # Build job data dictionary with fallback to current_job if provided
     built_data = {
-        "position": job_data.get("position", current_job.get("position", "") if current_job else ""),
-        "background": job_data.get("background", current_job.get("background", "") if current_job else ""),
-        "description": job_data.get("description", current_job.get("description", "") if current_job else ""),
-        "responsibilities": job_data.get("responsibilities", current_job.get("responsibilities", "") if current_job else ""),
-        "requirements": job_data.get("requirements", current_job.get("requirements", "") if current_job else ""),
-        "target_profile": job_data.get("target_profile", current_job.get("target_profile", "") if current_job else ""),
+        "position": position,
+        "background": background,
+        "description": description,
+        "responsibilities": responsibilities,
+        "requirements": requirements,
+        "target_profile": target_profile,
         "keywords": job_data.get("keywords", current_job.get("keywords", {"positive": [], "negative": []}) if current_job else {"positive": [], "negative": []}),
         "drill_down_questions": drill_down_questions,
         "candidate_filters": job_data.get("candidate_filters", current_job.get("candidate_filters") if current_job else None),
@@ -508,4 +516,3 @@ def delete_job(job_id: str) -> bool:
     
     logger.debug("Successfully deleted job: %s (all versions)", base_job_id)
     return True
-

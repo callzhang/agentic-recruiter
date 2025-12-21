@@ -226,7 +226,15 @@ async def discard_candidate_action(page: Page, chat_id: str) -> bool:
     
 
 @retry(stop=stop_after_attempt(2), wait=wait_fixed(1))
-async def list_conversations_action(page: Page, limit: int = 999, tab: str = '新招呼', status: str = '未读', job_applied: str = '全部', unread_only=True) -> List[Dict[str, Any]]:
+async def list_conversations_action(
+    page: Page, 
+    limit: int = 999, 
+    tab: str = '新招呼', 
+    status: str = '未读', 
+    job_applied: str = '全部', 
+    unread_only=True,
+    reversed_order=False
+) -> List[Dict[str, Any]]:
     '''Get candidate list from chat page
     Args:
         page: Page - The Playwright Page instance representing the chat page.
@@ -242,8 +250,8 @@ async def list_conversations_action(page: Page, limit: int = 999, tab: str = '�
     items = page.locator(CHAT_ITEM_SELECTORS)
     count = await items.count()
     messages: List[Dict[str, Any]] = []
-    for index in range(count):
-        item = items.nth(index)
+    for i in range(count):
+        item = items.nth(count-i-1 if reversed_order else i)
         try:
             data_id = await item.get_attribute("data-id", timeout=100)
             name = (await item.locator("span.geek-name").inner_text(timeout=100)).strip()
@@ -252,7 +260,7 @@ async def list_conversations_action(page: Page, limit: int = 999, tab: str = '�
             timestamp = (await item.locator("span.time").inner_text(timeout=100)).strip()
             unread = await item.locator("span.badge-count").count() > 0
         except Exception as exc:  # noqa: BLE001
-            logger.debug("读取列表项失败 #%s: %s", index, exc)
+            logger.debug("读取列表项失败 #%s: %s", i, exc)
             continue
         if not unread_only or unread:
             messages.append(
@@ -495,12 +503,12 @@ async def check_full_resume_available(page: Page, chat_id: str):
 
 
 # @retry(stop=stop_after_attempt(2), wait=wait_fixed(1))
-async def view_full_resume_action(page: Page, chat_id: str) -> Dict[str, Any]:
+async def view_full_resume_action(page: Page, chat_id: str, request: bool = True) -> Dict[str, Any]:
     """View candidate's full offline resume. Returns dict with 'text' and 'pages'. Raises ValueError on failure."""
     await _prepare_chat_page(page)
     await _go_to_chat_dialog(page, chat_id)
     available = await check_full_resume_available(page, chat_id)
-    if not available:
+    if not available and request:
         requested = await request_full_resume_action(page, chat_id)
         return {
             "text": None,

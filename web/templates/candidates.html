@@ -131,12 +131,12 @@
                         </button>
                     </div>
                     <div class="flex-1 min-w-0">
-                        <label class="block text-sm font-medium text-gray-700 mb-2">岗位</label>
-                        <select id="job-selector" name="job_id" class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
-                                hx-get="/jobs/list-simple" hx-trigger="load" hx-swap="innerHTML"
+                <label class="block text-sm font-medium text-gray-700 mb-2">岗位</label>
+                <select id="job-selector" name="job_id" class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
+                        hx-get="/jobs/list-simple" hx-trigger="load" hx-swap="innerHTML"
                                 @change="saveState()">
-                            <option>加载中...</option>
-                        </select>
+                    <option>加载中...</option>
+                </select>
                     </div>
                 </div>
             </div>
@@ -145,9 +145,9 @@
                     沟通阈值
                     <span class="text-xs text-gray-500">≥ 此分数生成消息</span>
                 </label>
-                <input type="number" id="threshold-chat" name="threshold_chat" 
+                    <input type="number" id="threshold-chat" name="threshold_chat" 
                        value="6.0" 
-                       min="1" max="10" step="0.5"
+                           min="1" max="10" step="0.5"
                        @change="saveState()"
                        class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
             </div>
@@ -716,6 +716,7 @@ function applyCardUpdate(card, updates, identifiers) {
 // Centralized event listener for candidate updates
 document.addEventListener('candidate:update', function(event) {
     const { identifiers = {}, updates = {} } = event.detail || {};
+    console.log('[updateCandidateData] received event', { identifiers, updates });
     const candidateCards = document.querySelectorAll('.candidate-card');
     
     // Convert NodeList to Array
@@ -737,6 +738,25 @@ document.addEventListener('candidate:update', function(event) {
     
     applyCardUpdate(card, updates, identifiers);
 });
+
+/**
+ * Helper function to check if identifiers match
+ */
+function idMatched(data, identifiers) {
+    if (identifiers.candidate_id && data.candidate_id === identifiers.candidate_id) {
+        return true;
+    }
+    if (identifiers.chat_id && data.chat_id === identifiers.chat_id) {
+        return true;
+    }
+    if (identifiers.conversation_id && data.conversation_id === identifiers.conversation_id) {
+        return true;
+    }
+    if (identifiers.index !== undefined && data.index === identifiers.index) {
+        return true;
+    }
+    return false;
+}
 
 // Event listener for candidate list loaded - re-apply UI state
 document.addEventListener('candidates:list-loaded', function(event) {
@@ -785,28 +805,10 @@ document.addEventListener('candidate:remove', function(event) {
     }, 300);
 });
 
-/**
- * Helper function to check if identifiers match
- */
-function idMatched(data, identifiers) {
-    if (identifiers.candidate_id && data.candidate_id === identifiers.candidate_id) {
-        return true;
-    }
-    if (identifiers.chat_id && data.chat_id === identifiers.chat_id) {
-        return true;
-    }
-    if (identifiers.name && data.name === identifiers.name) {
-        return true;
-    }
-    if (identifiers.index !== null && data.index === identifiers.index) {
-        return true;
-    }
-    return false;
-}
 
-/**
- * Process a single candidate card
- */
+// ============================================================================
+// Process a single candidate card
+// ============================================================================
 async function processCandidateCard(card) {
     const cardData = JSON.parse(card.getAttribute('hx-vals'));
     const candidate = cardData.candidate || {};
@@ -817,94 +819,98 @@ async function processCandidateCard(card) {
         return { skipped: true, name };
     }
     
-    showToast(`正在处理候选人: ${name}`, 'info');
+    console.log(`正在处理候选人: ${name}`);
     
     // Get detailPane reference
     const detailPane = document.getElementById('detail-pane');
+    if (!detailPane) {
+        throw new Error('Detail pane not found');
+    }
     
-    // Set up event listeners BEFORE triggering HTMX click
+    document.dispatchEvent(new CustomEvent('candidates:disable-cards'));
+    
+    // Combined promise: wait for swap, then processing
+    let swapTimeout = null;
+    let processingTimeout = null;
+    let cleanup = null;
+    
     const processingPromise = new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => {
-            document.removeEventListener('candidate:processing-complete', onComplete);
-            document.removeEventListener('candidate:processing-error', onError);
-            reject(new Error('Processing timeout (180s)'));
-        }, 180000); // 180s timeout
-        
-        const onComplete = (event) => {
-            clearTimeout(timeout);
-            document.removeEventListener('candidate:processing-complete', onComplete);
-            document.removeEventListener('candidate:processing-error', onError);
-            resolve(event.detail);
+        // Set up processing event listeners (registered before swap to catch early events)
+        const onProcessingComplete = () => {
+            if (cleanup) cleanup();
+            resolve();
         };
         
-        const onError = (event) => {
-            clearTimeout(timeout);
-            document.removeEventListener('candidate:processing-complete', onComplete);
-            document.removeEventListener('candidate:processing-error', onError);
-            reject(new Error(event.detail.error || 'Processing failed'));
+        const onProcessingError = (event) => {
+            if (cleanup) cleanup();
+            reject(new Error(event.detail?.error || 'Processing failed'));
         };
         
-        document.addEventListener('candidate:processing-complete', onComplete, { once: true });
-        document.addEventListener('candidate:processing-error', onError, { once: true });
-    });
-    
-    // Set up HTMX swap listeners BEFORE triggering click
-    const swapPromise = new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => {
-            cleanup();
+        // Set up swap event listeners
+        const onSwap = () => {
+            clearTimeout(swapTimeout);
+            // Processing timeout starts after swap completes
+            processingTimeout = setTimeout(() => {
+                if (cleanup) cleanup();
+                reject(new Error('Processing timeout (180s)'));
+            }, 180000);
+        };
+        
+        const onResponseError = (evt) => {
+            if (cleanup) cleanup();
+            evt.stopPropagation();
+            reject(new Error(evt.detail?.error || evt.detail?.message || 'HTMX request failed'));
+        };
+        
+        const onSendError = (evt) => {
+            if (cleanup) cleanup();
+            evt.stopPropagation();
+            reject(new Error(evt.detail?.error || evt.detail?.message || evt.detail?.failed || 'HTMX send failed'));
+        };
+        
+        const onSwapError = (evt) => {
+            if (cleanup) cleanup();
+            evt.stopPropagation();
+            reject(new Error(evt.detail?.error || evt.detail?.message || 'HTMX swap failed'));
+        };
+        
+        // Swap timeout
+        swapTimeout = setTimeout(() => {
+            if (cleanup) cleanup();
             reject(new Error('HTMX swap timeout'));
-        }, 1000); // 1 second timeout for swap
+        }, 1000);
         
-        const cleanup = () => {
-            clearTimeout(timeout);
+        cleanup = () => {
+            clearTimeout(swapTimeout);
+            clearTimeout(processingTimeout);
+            document.removeEventListener('candidate:processing-complete', onProcessingComplete);
+            document.removeEventListener('candidate:processing-error', onProcessingError);
             detailPane.removeEventListener('htmx:afterSwap', onSwap);
             detailPane.removeEventListener('htmx:responseError', onResponseError);
             detailPane.removeEventListener('htmx:sendError', onSendError);
             detailPane.removeEventListener('htmx:swapError', onSwapError);
         };
         
-        const onSwap = () => {
-            cleanup();
-            setTimeout(resolve, 200);
-        };
-        
-        const onResponseError = (evt) => {
-            cleanup();
-            evt.stopPropagation();
-            const errorMsg = evt.detail.error || evt.detail.message || 'HTMX request failed';
-            reject(new Error(errorMsg));
-        };
-        
-        const onSendError = (evt) => {
-            cleanup();
-            evt.stopPropagation();
-            const errorMsg = evt.detail.error || evt.detail.message || evt.detail.failed || 'HTMX send failed';
-            reject(new Error(errorMsg));
-        };
-        
-        const onSwapError = (evt) => {
-            cleanup();
-            evt.stopPropagation();
-            const errorMsg = evt.detail.error || evt.detail.message || 'HTMX swap failed';
-            reject(new Error(errorMsg));
-        };
-        
+        document.addEventListener('candidate:processing-complete', onProcessingComplete, { once: true });
+        document.addEventListener('candidate:processing-error', onProcessingError, { once: true });
         detailPane.addEventListener('htmx:afterSwap', onSwap, { once: true });
         detailPane.addEventListener('htmx:responseError', onResponseError, { once: true });
         detailPane.addEventListener('htmx:sendError', onSendError, { once: true });
         detailPane.addEventListener('htmx:swapError', onSwapError, { once: true });
     });
     
-    // Trigger HTMX click (htmx:beforeRequest will handle scrollIntoView and highlighting)
-    htmx.trigger(card, 'click');
-    
-    // Wait for HTMX swap to complete first
-    await swapPromise;
-    
-    // Then wait for process_candidate() to complete
-    await processingPromise;
-    
-    return { success: true, name };
+    try {
+        // Trigger HTMX click (htmx:beforeRequest will handle scrollIntoView and highlighting)
+        htmx.trigger(card, 'click');
+        
+        // Wait for both swap and processing to complete
+        await processingPromise;
+        
+        return { success: true, name };
+    } catch (error) {
+        // Cleanup is handled in promise cleanup function
+        throw error;
+    }
 }
 
 // Expose to window for use in app.js

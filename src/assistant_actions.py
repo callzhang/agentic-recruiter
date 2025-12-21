@@ -12,7 +12,7 @@ from .candidate_store import upsert_candidate
 from .config import get_dingtalk_config, get_openai_config
 from .global_logger import logger
 from .assistant_utils import _openai_client
-from .prompts.assistant_actions_prompts import ACTION_PROMPTS, AnalysisSchema, ChatActionSchema
+from .prompts.assistant_actions_prompts import ACTION_PROMPTS, ACTION_SCHEMAS
 
 # Constants - Import from unified stage definition
 from .candidate_stages import ALL_STAGES as STAGES, STAGE_DESCRIPTIONS
@@ -130,12 +130,7 @@ def generate_message(
     assert conversation_id and conversation_id != 'null', "conversation_id is required"
     logger.debug(f"Generating message for purpose: {purpose}")
     instruction = ACTION_PROMPTS[purpose]
-    if purpose == "ANALYZE_ACTION":
-        json_schema = AnalysisSchema
-    elif purpose in {"CHAT_ACTION", "FOLLOWUP_ACTION"}:
-        json_schema = ChatActionSchema
-    else:
-        json_schema = None
+    json_schema = ACTION_SCHEMAS.get(purpose)
 
     # check input_message if list: { "type": "message", "role": "user", "content": "This is my new input." },
     if isinstance(input_message, list):
@@ -144,50 +139,22 @@ def generate_message(
     
     # Create a new run
     openai_config = get_openai_config()
-    if json_schema:
-        response = _openai_client.responses.parse(
-            conversation=conversation_id,
-            instructions=instruction,
-            input=input_message,
-            text_format=json_schema,
-            model=openai_config["model"],
-            tools=[{"type": "web_search"}],  # Enable web search tool
-        )
-        result = response.output_parsed.model_dump()
-        if purpose == "ANALYZE_ACTION":
-            upsert_candidate(conversation_id=conversation_id, analysis=result)
-        return result
-    else:
-        # Enable web search tool to parse URLs from chat if necessary
-        # Use streaming to output to terminal in real-time
-        stream = _openai_client.responses.create(
-            conversation=conversation_id,
-            instructions=instruction,
-            input=input_message,
-            model=openai_config["model"],
-            tools=[{"type": "web_search"}],  # Enable web search tool
-            stream=True,  # Enable streaming
-        )
-        
-        # Collect full output while streaming to terminal (Responses API streaming events).
-        # Ref: https://platform.openai.com/docs/guides/streaming-responses
-        full_output = ""
-        print("\n[AI 生成消息 - 流式输出]:", end="", flush=True)
-        for event in stream:
-            event_type = event.type
-            if event_type == "response.output_text.delta" and (delta_text:=event.delta):
-                full_output += delta_text
-                print(delta_text, end="", flush=True)
-            elif event_type == "response.completed" and (final_text:=event.response.output_text):
-                full_output = final_text
-            elif event_type in ("response.failed", "error"):
-                # Let the outer exception handler fall back to non-streaming.
-                error_obj = event.error or event.message
-                raise RuntimeError(f"Streaming failed: {error_obj}")
-            else:
-                continue
-        print("\n[AI 生成完成]\n", flush=True)
-        return full_output
+    
+    # Prefer parse() for reliable structured output (parse() does NOT support stream=True)
+    # Use parse() directly for all purposes since they all have schemas
+    response = _openai_client.responses.parse(
+        conversation=conversation_id,
+        instructions=instruction,
+        input=input_message,
+        text_format=json_schema,
+        model=openai_config["model"],
+        tools=[{"type": "web_search"}],  # Enable web search tool
+    )
+    result = response.output_parsed.model_dump()
+    
+    if purpose == "ANALYZE_ACTION":
+        upsert_candidate(conversation_id=conversation_id, analysis=result)
+    return result
 
 # -----------------------------DingTalk Notification----------------------------------
 def send_dingtalk_notification(

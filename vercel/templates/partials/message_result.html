@@ -4,28 +4,28 @@
     - action: str | None
     - reason: str | None
     - payload: dict | None (full ChatActionSchema output)
+    - placeholder_message: str | None (UI hint only; never sent automatically)
  #}
 <div class="space-y-2" id="message-result-container"
+     data-action="{{ action or '' }}"
+     data-reason="{{ reason or '' }}"
      data-payload='{{ payload | tojson if payload is not none else "{}" }}'>
+    {% if action or reason %}
     <div class="flex items-start gap-2">
         {% if action %}
         <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-indigo-100 text-indigo-700">
             {{ action }}
-        </span>
-        {% else %}
-        <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-gray-100 text-gray-600">
-            TEXT
         </span>
         {% endif %}
         {% if reason %}
         <div class="text-xs text-gray-600 whitespace-pre-wrap flex-1">{{ reason }}</div>
         {% endif %}
     </div>
+    {% endif %}
 
     <textarea id="message-text"
               name="generated_message"
-              data-action="{{ action or '' }}"
-              data-reason="{{ reason or '' }}"
+              placeholder="{{ placeholder_message or '' }}"
               class="w-full h-32 p-2 border rounded-lg text-gray-800">{{ message or '' }}</textarea>
 
     {% if payload %}
@@ -35,4 +35,3 @@
     </details>
     {% endif %}
 </div>
-

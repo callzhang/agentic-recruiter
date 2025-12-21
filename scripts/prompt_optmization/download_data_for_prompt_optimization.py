@@ -6,6 +6,8 @@ Design goals (per iteration workflow):
 - Each run creates a NEW run folder (no per-day de-dup).
 - The report includes a lightweight comparison with the previous run for the same job
   (to check whether last iteration's prompt/portrait changes were effective).
+- This script is download-only: it does NOT call OpenAI to regenerate analysis/messages.
+  Use scripts/prompt_optmization/generate_optimized.py to replay/validate prompt changes.
 
 Run:
   python scripts/prompt_optmization/download_data_for_prompt_optimization.py --job-position 架构师
@@ -28,12 +30,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from src.global_logger import logger
 from src.prompts.assistant_actions_prompts import ACTION_PROMPTS, AnalysisSchema
-from src.config import get_openai_config
-
-try:
-    from openai import OpenAI  # type: ignore
-except Exception:  # pragma: no cover
-    OpenAI = None  # type: ignore
 
 try:
     from tqdm import tqdm  # type: ignore
@@ -279,6 +275,9 @@ def _write_job_portrait_optimized_json(path: Path, job_portrait: dict[str, Any])
     """Write a full optimized job portrait json (complete content, not a patch)."""
 
     payload = dict(job_portrait)
+    # Keep optimized portrait compatible with the jobs-store schema: avoid introducing new top-level fields
+    # that don't exist in `src/jobs_store.py` (e.g. followup_questions).
+    payload.pop("followup_questions", None)
     notes = payload.get("prompt_optimization_notes") if isinstance(payload.get("prompt_optimization_notes"), dict) else {}
     notes = dict(notes)
     notes["generated_at"] = datetime.now().isoformat(timespec="seconds")
@@ -286,6 +285,69 @@ def _write_job_portrait_optimized_json(path: Path, job_portrait: dict[str, Any])
     notes["rolling_mode"] = True
     payload["prompt_optimization_notes"] = notes
     _write_json(path, payload)
+
+
+def _merge_job_portrait_with_previous_optimized(
+    *,
+    current_job_portrait: dict[str, Any],
+    previous_optimized: Optional[dict[str, Any]],
+) -> dict[str, Any]:
+    """Merge the latest job portrait with the previous optimized version.
+
+    Goal: keep the optimized edits (questions/notes/etc.) while ensuring the base portrait
+    tracks the newest job version/job_id from the jobs store.
+    """
+
+    merged: dict[str, Any] = dict(current_job_portrait)
+    if not previous_optimized:
+        return merged
+
+    # Keys that are considered "optimized knobs" and should roll forward by default.
+    carry_keys = {
+        "target_profile",
+        "candidate_filters",
+        "keywords",
+        "drill_down_questions",
+        "prompt_optimization_notes",
+        "notification",
+    }
+    for k in carry_keys:
+        if k in previous_optimized and previous_optimized.get(k) is not None:
+            merged[k] = previous_optimized.get(k)
+
+    # Always trust the latest job's identity fields (so the optimized file is clearly v15, etc.).
+    for k in ("job_id", "base_job_id", "version", "updated_at", "created_at", "position"):
+        if k in current_job_portrait:
+            merged[k] = current_job_portrait.get(k)
+
+    # If previous optimized had a question list that is not part of the jobs-store schema,
+    # fold it into drill_down_questions (string) to keep a single source of truth.
+    prev_followups = previous_optimized.get("followup_questions") if isinstance(previous_optimized, dict) else None
+    if isinstance(prev_followups, list) and prev_followups:
+        existing = (merged.get("drill_down_questions") or "").strip()
+        extra = "\n".join([f"- {str(q).strip()}" for q in prev_followups if str(q).strip()])
+        if extra:
+            block = "\n".join(
+                [
+                    "【问题库（从旧版 followup_questions 迁移；供 agent 选 1 题追问）】",
+                    extra,
+                ]
+            )
+            merged["drill_down_questions"] = (existing + "\n\n" + block).strip() if existing else block
+        merged.pop("followup_questions", None)
+
+    # Record provenance for debugging.
+    notes = merged.get("prompt_optimization_notes") if isinstance(merged.get("prompt_optimization_notes"), dict) else {}
+    notes = dict(notes)
+    notes["base_job_portrait_job_id"] = current_job_portrait.get("job_id")
+    notes["base_job_portrait_version"] = current_job_portrait.get("version")
+    notes["base_job_portrait_updated_at"] = current_job_portrait.get("updated_at")
+    prev_ver = previous_optimized.get("version") if isinstance(previous_optimized, dict) else None
+    if prev_ver is not None:
+        notes["previous_optimized_version"] = prev_ver
+    merged["prompt_optimization_notes"] = notes
+
+    return merged
 
 
 def _parse_history_last_timestamp(history: list[dict[str, Any]]) -> Optional[datetime]:
@@ -304,62 +366,6 @@ def _parse_history_last_timestamp(history: list[dict[str, Any]]) -> Optional[dat
             return datetime.fromisoformat(ts)
         except Exception:
             return None
-
-
-def _extract_first_json_object(text: str) -> Optional[dict[str, Any]]:
-    """Best-effort extract/parse the first JSON object in a model response."""
-
-    if not text:
-        return None
-    start = text.find("{")
-    if start == -1:
-        return None
-    stack = 0
-    end = None
-    for i in range(start, len(text)):
-        ch = text[i]
-        if ch == "{":
-            stack += 1
-        elif ch == "}":
-            stack -= 1
-            if stack == 0:
-                end = i + 1
-                break
-    if end is None:
-        return None
-    blob = text[start:end]
-    try:
-        obj = json.loads(blob)
-    except Exception:
-        return None
-    return obj if isinstance(obj, dict) else None
-
-
-def _compact_job_portrait_for_analysis(job_portrait: dict[str, Any]) -> dict[str, Any]:
-    """Keep only the fields that meaningfully guide screening, to save tokens."""
-
-    keys = [
-        "position",
-        "target_profile",
-        "background",
-        "responsibilities",
-        "requirements",
-        "candidate_filters",
-        "drill_down_questions",
-        "followup_questions",
-        "keywords",
-        "description",
-        "base_job_id",
-        "job_id",
-        "prompt_optimization_notes",
-        "updated_at",
-        "created_at",
-    ]
-    compact: dict[str, Any] = {}
-    for k in keys:
-        if k in job_portrait:
-            compact[k] = job_portrait.get(k)
-    return compact or dict(job_portrait)
 
 
 def _format_history_for_analysis(history: list[dict[str, Any]], max_messages: int = 20) -> str:
@@ -381,111 +387,6 @@ def _format_history_for_analysis(history: list[dict[str, Any]], max_messages: in
         else:
             lines.append(f"{prefix}: {content}")
     return "\n".join(lines).strip()
-
-
-def _build_analyze_instructions(base_analyze: str) -> str:
-    """Wrap/strengthen analyze instructions with a hard JSON output contract."""
-
-    base = (base_analyze or "").strip()
-    output_contract = """
-
-【输出格式（强制）】
-- 只输出一个 JSON 对象，不要 markdown，不要代码块，不要多余文字。
-- JSON 字段必须且只能包含：
-  - skill (int, 1-10)
-  - startup_fit (int, 1-10)
-  - background (int, 1-10)
-  - overall (int, 1-10)
-  - summary (str)
-  - followup_tips (str)
-"""
-    return (base + output_contract).strip()
-
-
-def _generate_analysis_for_candidate(
-    *,
-    model: str,
-    analyze_prompt: str,
-    job_portrait: dict[str, Any],
-    resume: str,
-    history: list[dict[str, Any]],
-    history_max_messages: int,
-) -> Optional[dict[str, Any]]:
-    if OpenAI is None:
-        logger.warning("openai sdk not available; skip re-analysis")
-        return None
-
-    openai_config = get_openai_config()
-    api_key = openai_config.get("api_key")
-    base_url = openai_config.get("base_url")
-    if not api_key:
-        logger.warning("OPENAI api_key missing in config; skip re-analysis")
-        return None
-
-    client = OpenAI(api_key=api_key, base_url=base_url)
-
-    job_text = json.dumps(_compact_job_portrait_for_analysis(job_portrait), ensure_ascii=False, indent=2)
-    hist_text = _format_history_for_analysis(history, max_messages=history_max_messages)
-    input_text = "\n\n".join(
-        [
-            "【岗位肖像】",
-            job_text,
-            "",
-            "【候选人简历】",
-            (resume or "").strip(),
-            "",
-            "【对话记录（截取最近若干条）】",
-            hist_text or "(无)",
-        ]
-    ).strip()
-
-    instructions = _build_analyze_instructions(analyze_prompt)
-
-    # Try schema-guided response first (if the installed SDK supports it).
-    try:
-        response = client.responses.create(
-            model=model,
-            instructions=instructions,
-            input=input_text,
-            response_format={
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "AnalysisSchema",
-                    "schema": AnalysisSchema.model_json_schema(),
-                    "strict": True,
-                },
-            },
-        )
-        obj = _extract_first_json_object(getattr(response, "output_text", "") or "")
-        if obj is None and isinstance(getattr(response, "output", None), list):
-            # Some SDK versions return structured output elsewhere; fallback to output_text only.
-            obj = None
-    except TypeError:
-        obj = None
-    except Exception as exc:
-        logger.warning("Re-analysis request failed; falling back to text-only parse: %s", exc)
-        obj = None
-
-    if obj is None:
-        # Text-only fallback.
-        try:
-            response = client.responses.create(
-                model=model,
-                instructions=instructions,
-                input=input_text,
-            )
-        except Exception as exc:
-            logger.error("Re-analysis failed: %s", exc)
-            return None
-        obj = _extract_first_json_object(getattr(response, "output_text", "") or "")
-
-    if obj is None:
-        return None
-    try:
-        parsed = AnalysisSchema.model_validate(obj)
-    except Exception:
-        return None
-    return parsed.model_dump()
 
 
 # ---------------------------------------------------------------------------
@@ -685,11 +586,6 @@ def step2_fetch_recent_candidates_and_save(
     run_dir: Path,
     batch_size: int = 10,
     fetch_multiplier: int = 5,
-    baseline_prompts: Optional[dict[str, str]] = None,
-    baseline_job_portrait: Optional[dict[str, Any]] = None,
-    reanalyze: bool = True,
-    history_max_messages: int = 20,
-    analysis_model: Optional[str] = None,
     require_existing_analysis: bool = False,
 ) -> list[CandidateExport]:
     """Fetch newest candidates and save one json per candidate.
@@ -831,11 +727,7 @@ def step2_fetch_recent_candidates_and_save(
             if cid:
                 fetched[cid] = r
 
-    iterator = ranked
-    if reanalyze:
-        iterator = tqdm(ranked, desc="Re-analyze candidates", total=len(ranked))  # type: ignore[assignment]
-
-    for last_dt, header in iterator:
+    for last_dt, header in ranked:
         candidate_id = header.get("candidate_id")
         if not candidate_id:
             continue
@@ -869,23 +761,6 @@ def step2_fetch_recent_candidates_and_save(
         analysis: dict[str, Any] = legacy_analysis
         analysis_source = "legacy"
         analysis_generated_at: Optional[str] = None
-        if reanalyze:
-            prompts_for_use = baseline_prompts or dict(ACTION_PROMPTS)
-            portrait_for_use = baseline_job_portrait or dict(job)
-            analyze_prompt = prompts_for_use.get("ANALYZE_ACTION") or (ACTION_PROMPTS.get("ANALYZE_ACTION") or "")
-            model = analysis_model or get_openai_config().get("model") or "gpt-4.1"
-            new_analysis = _generate_analysis_for_candidate(
-                model=str(model),
-                analyze_prompt=analyze_prompt,
-                job_portrait=portrait_for_use,
-                resume=resume,
-                history=history,
-                history_max_messages=history_max_messages,
-            )
-            if isinstance(new_analysis, dict) and new_analysis:
-                analysis = new_analysis
-                analysis_source = "generated"
-                analysis_generated_at = datetime.now().isoformat(timespec="seconds")
 
         export = CandidateExport(
             name=name,
@@ -930,8 +805,7 @@ def step3_compute_overall_distribution_and_save(
     candidates: list[CandidateExport],
     run_dir: Path,
 ) -> tuple[dict[str, Any], Path]:
-    generated = [c for c in candidates if (c.analysis_source or "").lower() == "generated"]
-    candidates_for_stats = generated or candidates
+    candidates_for_stats = candidates
 
     scores: list[int] = []
     missing = 0
@@ -950,7 +824,6 @@ def step3_compute_overall_distribution_and_save(
     stats: dict[str, Any] = {
         "count_total_all": len(candidates),
         "count_total_used": len(candidates_for_stats),
-        "count_generated_total": len(generated),
         "count_with_overall": len(scores),
         "count_missing_overall": missing,
         "histogram_1_to_10": hist,
@@ -969,10 +842,7 @@ def step3_compute_overall_distribution_and_save(
         )
 
     lines = [
-        f"Total candidates (all): {stats['count_total_all']}",
-        f"Total candidates (used): {stats['count_total_used']}",
-        f"Generated analysis candidates: {stats['count_generated_total']}",
-        "Note: If generated analysis exists, distribution is computed on generated-only; otherwise it falls back to legacy analysis.",
+        f"Total candidates: {stats['count_total_all']}",
         f"With overall: {stats['count_with_overall']}",
         f"Missing overall: {stats['count_missing_overall']}",
         "",
@@ -1153,7 +1023,27 @@ def step5_write_report_and_generate_variants(
     _write_prompt_optimized_py(prompt_optimized_path, baseline_prompts)
 
     job_portrait_optimized_path = run_dir / "job_portrait_optimized.json"
-    _write_job_portrait_optimized_json(job_portrait_optimized_path, baseline_job_portrait or dict(job))
+    merged_job_portrait_optimized = _merge_job_portrait_with_previous_optimized(
+        current_job_portrait=dict(job),
+        previous_optimized=baseline_job_portrait,
+    )
+    _write_job_portrait_optimized_json(job_portrait_optimized_path, merged_job_portrait_optimized)
+
+    def _candidate_index_table(rows: list[CandidateExport]) -> list[str]:
+        lines: list[str] = [
+            "## 候选人索引（只列索引，详情看 candidates/*.json）",
+            "",
+            "| # | name | overall | conversation_id | updated_at |",
+            "|---:|---|---:|---|---|",
+        ]
+        for i, c in enumerate(rows, start=1):
+            overall = ""
+            if isinstance(c.analysis, dict):
+                v = c.analysis.get("overall")
+                overall = str(v) if isinstance(v, (int, float)) else ""
+            lines.append(f"| {i} | {c.name} | {overall} | `{c.conversation_id}` | `{c.updated_at or ''}` |")
+        lines += ["", ""]
+        return lines
 
     header = [
         "# 候选人筛选批次复盘（单批次）",
@@ -1163,8 +1053,8 @@ def step5_write_report_and_generate_variants(
         f"- job_id: {job.get('job_id')}",
         f"- base_job_id: {job.get('base_job_id')}",
         f"- 本批次候选人数量: {len(candidates)}（默认每批10个）",
-        f"- 本批次 generated analysis 数量: {len(generated)}（用于忽略旧 analysis 的复盘口径）",
         f"- 排除候选人数量: {excluded_count}（简历<100/无assistant对话）",
+        "- 注：本脚本只下载数据，不会用 OpenAI 重新生成 analysis/message；如需用新 prompt 回放并生成新的 analysis/message，请运行 `scripts/prompt_optmization/generate_optimized.py`。",
         "",
         "## 上一批次对比（用于检查迭代是否有效）",
         "",
@@ -1223,64 +1113,13 @@ def step5_write_report_and_generate_variants(
         f"- job portrait: `{job_portrait_optimized_path.name}`（完整版本，下一批次会以它为基线）",
         "",
         "迭代检查建议：",
-        "- 如果“评分表/画像判断”占比仍低，说明 prompt 未生效或旧 analysis 未更新；需要用最新 prompt 重新分析候选人再导出。",
+        "- 如果“评分表/画像判断”占比仍低，说明现有 analysis 仍是旧口径；需要用最新 prompt 通过 `generate_optimized.py` 回放生成新 analysis 再复盘。",
         "- 如果 overall 仍大量集中在 7，优先排查：是否缺少反废话压测（推翻决策/10x爆点/故障复盘），以及是否把“关键词覆盖”当成“机制与取舍”。",
-        "",
-        "## 候选人逐个复盘（本批次）",
         "",
     ]
 
     body: list[str] = []
-    for i, c in enumerate(candidates, start=1):
-        analysis = c.analysis or {}
-        legacy = c.analysis_legacy or {}
-        score_line = (
-            f"skill={analysis.get('skill')}, startup_fit={analysis.get('startup_fit')}, "
-            f"background={analysis.get('background')}, overall={analysis.get('overall')}"
-        )
-        resume_preview = (c.resume or "").strip().replace("\n", " ")
-        if len(resume_preview) > 300:
-            resume_preview = resume_preview[:300] + "…"
-
-        body += [
-            f"### {i}. {c.name}",
-            "",
-            f"- conversation_id: `{c.conversation_id}`",
-            f"- candidate_id: `{c.candidate_id}`",
-            f"- updated_at: `{c.updated_at}`",
-            f"- score: {score_line}",
-            f"- analysis_source: `{c.analysis_source}`",
-            "",
-            "**简历预览**",
-            "",
-            f"> {resume_preview or '[空]'}",
-            "",
-            "**当前 analysis（本次使用；建议只看这个，忽略 legacy）**",
-            "",
-            "```json",
-            json.dumps(analysis, ensure_ascii=False, indent=2),
-            "```",
-            "",
-            "**legacy analysis（仅用于排查历史污染，可忽略）**",
-            "",
-            "```json",
-            json.dumps(legacy, ensure_ascii=False, indent=2),
-            "```",
-            "",
-            "**对话摘录（最近6条）**",
-            "",
-            "```",
-            "\n".join(_format_history_for_analysis(c.history or [], max_messages=6).splitlines()),
-            "```",
-            "",
-            "**人工补充（按筛选指南）**",
-            "",
-            "- 准确性评价（真架构师还是伪高P）:",
-            "- 画像判断（技术深度/抽象能力/机制化/最终建议）:",
-            "- 红灯/绿灯信号:",
-            "- 反废话追问（写3个）:",
-            "",
-        ]
+    body += _candidate_index_table(candidates)
 
     suggestions = _batch_optimization_suggestions(job, candidates)
 
@@ -1297,11 +1136,24 @@ def step5_write_report_and_generate_variants(
         "",
         f"- 已生成滚动版本文件: `{prompt_optimized_path.name}`、`{job_portrait_optimized_path.name}`",
         "",
-        "## 本批次小结（人工补充）",
+        "## 发现的问题（人工填写，带引用）",
         "",
-        "- 共同误判点:",
-        "- 岗位肖像需要补充/澄清的点:",
-        "- prompt需要补充/约束的点:",
+        "- 问题 1（引用 candidates/xxx.json 或 generated/xxx.generated.json）：现象 → 可能原因 → 影响:",
+        "- 问题 2（引用…）:",
+        "- 问题 3（引用…）:",
+        "",
+        "## 改进意见（人工填写）",
+        "",
+        "- prompt 改进（写到 `scripts/prompt_optmization/assistant_actions_prompts.md` 或本批次 `prompt_optimized.py`）:",
+        "- 岗位肖像改进（写到本批次 `job_portrait_optimized.json`，注意不新增 schema 字段）:",
+        "",
+        "## 关键优化（可选）",
+        "",
+        "- 本批次要验证的 1-2 个“关键改变”（例如：追问更具体/减少薪资/不约时间/不问管理）:",
+        "",
+        "## 问题讨论 / 待确认",
+        "",
+        "- 需要产品/HR/业务确认的点:",
         "",
     ]
 
@@ -1320,18 +1172,10 @@ def main() -> int:
     parser.add_argument("--job-id", default=None, help="Select job by job_id/base_job_id")
     parser.add_argument("--job-position", default=None, help="Select job by position keyword (e.g., 架构师)")
     parser.add_argument("--batch-size", type=int, default=10, help="Number of newest candidates per run (default: 10)")
-    parser.add_argument("--skip-reanalyze", action="store_true", help="Do not call OpenAI to regenerate analysis")
-    parser.add_argument(
-        "--history-max-messages",
-        type=int,
-        default=20,
-        help="How many latest history messages to include when re-analyzing (default: 20)",
-    )
-    parser.add_argument("--analysis-model", default=None, help="Override OpenAI model for re-analysis")
     parser.add_argument(
         "--require-existing-analysis",
         action="store_true",
-        help="Exclude candidates if legacy analysis is missing (default: off; we generate new analysis anyway)",
+        help="Exclude candidates if analysis is missing (default: off)",
     )
     parser.add_argument(
         "--prompt-opt-dir",
@@ -1351,17 +1195,10 @@ def main() -> int:
         job_position=args.job_position,
     )
 
-    baseline_prompts, baseline_job_portrait = _load_previous_optimized_baseline(previous_run_dir)
-
     candidates = step2_fetch_recent_candidates_and_save(
         job=job,
         run_dir=run_dir,
         batch_size=args.batch_size,
-        baseline_prompts=baseline_prompts,
-        baseline_job_portrait=baseline_job_portrait or dict(job),
-        reanalyze=not args.skip_reanalyze,
-        history_max_messages=args.history_max_messages,
-        analysis_model=args.analysis_model,
         require_existing_analysis=args.require_existing_analysis,
     )
     dist_stats, _dist_path = step3_compute_overall_distribution_and_save(candidates=candidates, run_dir=run_dir)

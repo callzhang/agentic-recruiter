@@ -1,6 +1,6 @@
 # 候选人筛选指南（滚动迭代：每次 10 份）
 
-本指南用于“架构师/平台底座”岗位的离线可复盘筛选：把**岗位肖像 + 候选人样本 + 最近对话 history +（本次重新生成的）analysis** 固化成一个批次目录（默认 10 份），并在每次批次产出“完整优化版”的 `prompt_optimized.py` / `job_portrait_optimized.json`，用于下一批继续迭代验证。
+本指南用于“架构师/平台底座”岗位的离线可复盘筛选：把**岗位肖像 + 候选人样本 + 最近对话 history +（数据库已有的）analysis** 固化成一个批次目录（默认 10 份），并在每次批次产出“完整优化版”的 `prompt_optimized.py` / `job_portrait_optimized.json`，用于下一批继续迭代验证。
 
 核心目标：拒绝“简历匹配的伪高P”，优先筛出具备 **结构化思维** 与 **机制设计能力** 的真架构师/负责人（Level 2）。
 
@@ -10,7 +10,7 @@
 
 ## 0) 一句话工作流
 
-1) 跑脚本拉最新 10 份候选人 → 2) 按本指南读 `优化报告.md` 复盘每个人 → 3) 修改本批次的 `prompt_optimized.py` / `job_portrait_optimized.json` → 4) 用新 prompt 重新跑分析（线上流程）→ 5) 再跑下一批验证“合规性/稳定性”是否提升。
+1) 跑脚本拉最新 10 份候选人 → 2) 先读 `优化报告.md` 的“问题清单/引用示例/对比指标”，按引用抽样查看候选人 → 3) 修改本批次的 `prompt_optimized.py` / `job_portrait_optimized.json` → 4) 挑 2-5 个“有问题的候选人”回放验证（`generate_optimized.py --start-index/--limit`）→ 5) 满意后发布岗位肖像到线上（Vercel API）并验证 → 6) 再跑下一批验证“合规性/稳定性”是否提升。
 
 ---
 
@@ -55,23 +55,127 @@ python scripts/prompt_optmization/download_data_for_prompt_optimization.py --job
 - `job_portrait.json`：本次导出的岗位肖像（原始/基线）
 - `job_portrait_optimized.json`：本次“完整优化版”岗位肖像（你要编辑，下一批会作为基线）
 - `prompt_optimized.py`：本次“完整优化版” prompt（你要编辑，下一批会作为基线）
-- `candidates/*.json`：候选人样本（已过滤：简历已加载 + 有 assistant 对话；analysis 会在本次运行中重新生成）
+- `candidates/*.json`：候选人样本（已过滤：简历已加载 + 有 assistant 对话；analysis 使用数据库已有口径/legacy）
 - `excluded_candidates.json`：被过滤掉的候选人列表与原因
-- `overall_distribution.txt`：本批次 overall 分数分布（**优先使用本次生成的 analysis；若生成失败才回退 legacy**）
-- `优化报告.md`：复盘报告（含与上一批的对比指标）
+- `overall_distribution.txt`：本批次 overall 分数分布（基于 candidates 文件里的 analysis）
+- `优化报告.md`：轻量复盘报告（对比指标 + 问题清单/引用 + 改进记录）
 
-> 重要：脚本默认会用 OpenAI **重新生成 analysis**（并保留原有的 `analysis_legacy` 方便排查历史污染）。  
-> 如果你只想“纯下载不分析”，可加 `--skip-reanalyze`。
+> 重要：`download_data_for_prompt_optimization.py` **只负责下载与生成复盘骨架**，不会调用 OpenAI 重跑分析。  
+> 需要用你最新的 `prompt_optimized.py` / `job_portrait_optimized.json` 生成“新口径 analysis + 新 message”时，请使用 `scripts/prompt_optmization/generate_optimized.py`（会把结果写入本批次目录，便于验证迭代是否生效）。
 
-常用参数：
+例如（先跑下载脚本拿到 `run_...` 目录后）：
 
 ```bash
-# 只下载不重跑分析
-python scripts/prompt_optmization/download_data_for_prompt_optimization.py --job-position 架构师 --skip-reanalyze
-
-# 重跑分析时，最多带入最近 30 条对话（用于更准的画像/追问）
-python scripts/prompt_optmization/download_data_for_prompt_optimization.py --job-position 架构师 --history-max-messages 30
+python scripts/prompt_optmization/generate_optimized.py --run-dir scripts/prompt_optmization/架构师/run_YYYYMMDD_HHMMSS --limit 10
 ```
+
+### 1.3.1 先抽样验证（推荐）
+
+先挑 2-5 个“有问题/边界”的候选人（例如：问法太长、疑似越权、分数边界 6/7、或你想复盘的样本），用 `--start-index/--limit` 快速回放验证：
+
+```bash
+# 只回放第 2-3 个（按 candidates/*.json 的排序）
+python scripts/prompt_optmization/generate_optimized.py \
+  --run-dir scripts/prompt_optmization/架构师/run_YYYYMMDD_HHMMSS \
+  --start-index 2 \
+  --limit 2
+```
+
+默认建议用 `--prompt-source md`（读取 `scripts/prompt_optmization/assistant_actions_prompts.md`，更接近线上口径）。  
+只有当你明确要测试本批次目录里的 `prompt_optimized.py` 时，才使用 `--prompt-source optimized_py`。
+
+确认回放后的 `generated/*.generated.json` 和 `优化报告.md` 的问题示例/统计更符合预期后，再决定是否全量回放本批次（limit=0 或 limit=10）。
+
+### 1.3.2 怎么挑“有问题”的候选人（统一标准）
+
+挑选标准（只挑你能说清楚“哪里不对”的样本，2-5 个足够）：
+
+1) **analysis 结果不符合预期**（以 `generated/*.generated.json` 的 `analysis` 为准，忽略旧 analysis）
+- 分数/阶段不合理：例如明显不匹配却给到高分或 CONTACT；或明显强匹配却给低分/PASS
+- 评分表不自洽：`summary` 的门槛/场景/基础/契合/潜力/总分 与 `overall` 映射不一致
+- 画像判断不合理：把“堆名词”当成“机制与取舍”；忽略故障复盘/取舍/量化指标
+
+2) **generate 的 action 或 message 不符合预期**（看 `generated/*.generated.json` 的 `message_obj` + `message`）
+- action 不对：该 PASS 却 CHAT；该 CONTACT 却 CHAT；或应该 WAIT 但仍在追问
+- message 不合规：字数>160、多问（问号>1）、聊薪资、约时间/面试方式/地点、索要材料、问管理/绩效类问题
+- 节奏不对：同一条 message 同时“推进HR安排”又继续追问（应二选一）
+
+选出样本后，用 `generate_optimized.py --start-index/--limit` 针对这些候选人回放，验证你修改的 prompt/画像是否真的解决了问题。
+
+---
+
+## 1.4 提交/下载岗位肖像（推荐走 Vercel API，不依赖本地服务）
+
+你在每个批次目录里会编辑 `job_portrait_optimized.json`，但最终需要把它发布到系统的 Jobs Store（会自动生成一个新版本 `_vN` 并切为 current），这样后续分析/对话都能直接用最新肖像。
+
+> 说明：**岗位肖像**可以通过 API 发布后立即线上生效；岗位特定追问请更新到 `job_portrait_optimized.json` 的 `drill_down_questions` 并发布。  
+> **prompt 本身**仍来自已部署的后端代码（`src/prompts/assistant_actions_prompts.py`）：它只负责“线上甄别的通用规则”，不需要引入岗位无关的复杂结构。
+
+### 方式 A：Vercel（`vercel/api/jobs.py`，推荐）
+
+下载 current 岗位肖像：
+
+```bash
+python scripts/prompt_optmization/publish_job_portrait.py \
+  --api-type vercel \
+  --api-base https://<YOUR_VERCEL_DOMAIN> \
+  --download-job-id architecture \
+  --download-out job_portrait.json
+```
+
+（可选）优化肖像（把“线上甄别追问清单”写进 `drill_down_questions`，且不新增 schema 字段）：
+
+```bash
+python scripts/prompt_optmization/optimize_job_portrait_json.py \
+  --input job_portrait.json \
+  --output job_portrait_optimized.json
+```
+
+> 该脚本还会把 `requirements` 写成“评分标准文本”（一行一个，总分 100），用于让分析口径稳定、可控。
+
+发布（创建新版本）：
+
+```bash
+python scripts/prompt_optmization/publish_job_portrait.py \
+  --api-type vercel \
+  --api-base https://<YOUR_VERCEL_DOMAIN> \
+  --job-portrait job_portrait_optimized.json
+```
+
+发布后验证（推荐用脚本拉取，便于留档）：
+
+```bash
+python scripts/prompt_optmization/publish_job_portrait.py \
+  --api-type vercel \
+  --api-base https://<YOUR_VERCEL_DOMAIN> \
+  --download-job-id architecture \
+  --download-out /tmp/architecture_current.json
+```
+
+验证（拉取 current 版本）：
+
+```bash
+curl https://<YOUR_VERCEL_DOMAIN>/api/jobs/architecture | python -m json.tool
+```
+
+### 方式 B：本地 FastAPI（`web/routes/jobs.py`，仅本地开发）
+
+前提：本地服务已启动（例如 `python start_service.py`）。
+
+```bash
+python scripts/prompt_optmization/publish_job_portrait.py \
+  --api-type local \
+  --api-base http://127.0.0.1:8000 \
+  --job-portrait scripts/prompt_optmization/架构师/run_YYYYMMDD_HHMMSS/job_portrait_optimized.json
+```
+
+验证：
+
+```bash
+curl http://127.0.0.1:8000/jobs/api/architecture | python -m json.tool
+```
+
+> 注意：发布时只会提交 jobs-store schema 允许的字段（如 `position/background/requirements/drill_down_questions/candidate_filters/keywords/notification`）。不要在肖像 JSON 顶层捏造新字段；需要额外信息请折叠进 `requirements` 或 `drill_down_questions`（文本化），避免与存储 schema 冲突。
 
 ---
 
@@ -83,7 +187,8 @@ python scripts/prompt_optmization/download_data_for_prompt_optimization.py --job
 2) 本批次目录（脚本输出）  
 - `scripts/prompt_optmization/<岗位>/run_YYYYMMDD_HHMMSS/优化报告.md`（先看结论与对比指标）  
 - `scripts/prompt_optmization/<岗位>/run_YYYYMMDD_HHMMSS/job_portrait.json`（看现状画像）  
-- `scripts/prompt_optmization/<岗位>/run_YYYYMMDD_HHMMSS/candidates/*.json`（逐个复盘样本）  
+- `scripts/prompt_optmization/<岗位>/run_YYYYMMDD_HHMMSS/candidates/*.json`（用于按引用抽样复盘）  
+- `scripts/prompt_optmization/<岗位>/run_YYYYMMDD_HHMMSS/generated/*.generated.json`（新口径回放结果：analysis + message + 自动检测）  
 - `scripts/prompt_optmization/<岗位>/run_YYYYMMDD_HHMMSS/prompt_optimized.py`（你要改的 prompt）  
 - `scripts/prompt_optmization/<岗位>/run_YYYYMMDD_HHMMSS/job_portrait_optimized.json`（你要改的画像）
 
@@ -171,4 +276,5 @@ python scripts/prompt_optmization/download_data_for_prompt_optimization.py --job
 - `job_portrait_optimized.json`：下一批次会以它为基线
 
 `优化报告.md` 会展示与上一批次的对比指标（分数分布 + “评分表/画像判断”的合规性占比），用于判断迭代是否有效。  
+同时 `generate_optimized.py` 会把“风险快照 + 问题示例（带引用）”写回 `优化报告.md`，便于你只抽样看关键问题，不需要逐个写每个候选人的长评。  
 建议的迭代节奏：每批只改 1-3 个关键点（例如“评分表格式约束”或“关键场景题”），否则很难归因哪一条改动带来了收益/退化。

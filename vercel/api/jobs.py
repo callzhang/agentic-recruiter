@@ -28,6 +28,59 @@ EMBEDDING_DIM = int(os.environ.get('ZILLIZ_EMBEDDING_DIM', '1536'))
 # Initialize Zilliz client
 _client = None
 
+def _truncate_utf8(text: Any, max_bytes: int) -> str:
+    """Truncate text by UTF-8 byte length (Milvus VARCHAR max_length is strict)."""
+    if text is None:
+        return ""
+    s = str(text)
+    b = s.encode("utf-8")
+    if len(b) <= max_bytes:
+        return s
+    return b[:max_bytes].decode("utf-8", errors="ignore")
+
+
+def _parse_version_from_job_id(job_id: str) -> int:
+    m = re.search(r"_v(\d+)$", job_id or "")
+    if not m:
+        return 0
+    try:
+        return int(m.group(1))
+    except Exception:
+        return 0
+
+
+def _validate_requirements_text(requirements: str) -> tuple[bool, str]:
+    text = (requirements or "").strip()
+    if not text:
+        return False, "评分标准不能为空"
+    if len(text.encode("utf-8")) > 5000:
+        return False, "评分标准过长（超过 5000 字节），请精简"
+    return True, ""
+
+
+def _normalize_job_text_fields(job_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Ensure all VARCHAR fields are truncated to schema max_length."""
+    out = dict(job_data)
+    out["position"] = _truncate_utf8(out.get("position", ""), 200)
+    out["background"] = _truncate_utf8(out.get("background", ""), 5000)
+    out["description"] = _truncate_utf8(out.get("description", ""), 5000)
+    out["responsibilities"] = _truncate_utf8(out.get("responsibilities", ""), 5000)
+    out["requirements"] = _truncate_utf8(out.get("requirements", ""), 5000)
+    out["target_profile"] = _truncate_utf8(out.get("target_profile", ""), 5000)
+    # `drill_down_questions` is larger in schema; keep conservative to avoid surprises.
+    out["drill_down_questions"] = _truncate_utf8(out.get("drill_down_questions", ""), 30000)
+    return out
+
+def _validate_notification_required(notification: Any) -> tuple[bool, str]:
+    if not isinstance(notification, dict):
+        return False, "notification is required (dingtalk webhook url + secret)"
+    url = (notification.get("url") or "").strip()
+    secret = (notification.get("secret") or "").strip()
+    if not url or not secret:
+        return False, "notification.url and notification.secret are required"
+    return True, ""
+
+
 def get_client():
     """Get or create Zilliz client"""
     global _client
@@ -82,13 +135,27 @@ def get_all_jobs() -> List[Dict[str, Any]]:
         limit=1000
     )
     
-    jobs = []
+    # De-dupe by base_job_id in case multiple versions are marked current.
+    best_by_base: dict[str, Dict[str, Any]] = {}
     for job in results:
         job_dict = {k: v for k, v in job.items() if v is not None and v != ''}
         if 'job_id' in job_dict:
             job_dict['base_job_id'] = get_base_job_id(job_dict['job_id'])
-        jobs.append(job_dict)
+        base_job_id = job_dict.get("base_job_id") or ""
+        if not base_job_id:
+            continue
+        v = job_dict.get("version")
+        version = int(v) if isinstance(v, (int, float)) else _parse_version_from_job_id(job_dict.get("job_id", ""))
+        prev = best_by_base.get(base_job_id)
+        if not prev:
+            best_by_base[base_job_id] = job_dict
+            continue
+        prev_v = prev.get("version")
+        prev_version = int(prev_v) if isinstance(prev_v, (int, float)) else _parse_version_from_job_id(prev.get("job_id", ""))
+        if version >= prev_version:
+            best_by_base[base_job_id] = job_dict
     
+    jobs = list(best_by_base.values())
     jobs.sort(key=lambda x: x.get('updated_at', ''), reverse=True)
     return jobs
 
@@ -123,27 +190,43 @@ def get_job_by_id(job_id: str) -> Optional[Dict[str, Any]]:
         output_fields=[
             'job_id', 'position', 'background', 'description', 'responsibilities',
             'requirements', 'target_profile', 'keywords', 'drill_down_questions',
-            'candidate_filters', 'version', 'current', 'created_at', 'updated_at'
+            'candidate_filters', 'version', 'current', 'created_at', 'updated_at', 'notification'
         ],
         limit=100
     )
     
+    if versioned_job_id:
+        for job in results:
+            if job.get("job_id") == versioned_job_id:
+                job_dict = {k: v for k, v in job.items() if v is not None and v != ""}
+                job_dict["base_job_id"] = base_job_id
+                return job_dict
+        return None
+
+    # Base job_id: choose the highest version among "current == true" rows (defensive).
+    candidates: list[Dict[str, Any]] = []
     for job in results:
-        job_id_value = job.get('job_id', '')
-        if versioned_job_id:
-            # Exact match for versioned job_id
-            if job_id_value == versioned_job_id:
-                job_dict = {k: v for k, v in job.items() if v is not None and v != ''}
-                job_dict['base_job_id'] = base_job_id
-                return job_dict
-        else:
-            # Match any version of base_job_id (but filter already ensures current==true)
-            if job_id_value.startswith(f'{base_job_id}_v') and re.match(rf'^{re.escape(base_job_id)}_v\d+$', job_id_value):
-                job_dict = {k: v for k, v in job.items() if v is not None and v != ''}
-                job_dict['base_job_id'] = base_job_id
-                return job_dict
+        job_id_value = job.get("job_id", "")
+        if not job_id_value.startswith(f"{base_job_id}_v"):
+            continue
+        if not re.match(rf"^{re.escape(base_job_id)}_v\d+$", job_id_value):
+            continue
+        candidates.append(job)
+
+    if not candidates:
+        return None
+
+    def _version_of(row: Dict[str, Any]) -> int:
+        v = row.get("version")
+        if isinstance(v, (int, float)):
+            return int(v)
+        return _parse_version_from_job_id(row.get("job_id", ""))
+
+    best = max(candidates, key=_version_of)
+    job_dict = {k: v for k, v in best.items() if v is not None and v != ""}
+    job_dict["base_job_id"] = base_job_id
+    return job_dict
     
-    return None
 
 def insert_job(**job_data) -> bool:
     """Insert a new job"""
@@ -153,20 +236,29 @@ def insert_job(**job_data) -> bool:
         raise RuntimeError('job_id is required')
     base_job_id = get_base_job_id(job_id)
     versioned_job_id = f'{base_job_id}_v1'
+    if len(versioned_job_id.encode("utf-8")) > 64:
+        raise RuntimeError("job_id 过长（含版本后超过 64 字节），请缩短岗位 ID")
     
+    normalized = _normalize_job_text_fields(job_data)
+    ok, err = _validate_notification_required(job_data.get("notification"))
+    if not ok:
+        raise RuntimeError(err)
+    ok, err = _validate_requirements_text(normalized.get("requirements", ""))
+    if not ok:
+        raise RuntimeError(err)
+
     now = datetime.now().isoformat()
-    drill_down_questions = (job_data.get('drill_down_questions', '') or '')[:30000]
     
     insert_data = {
         'job_id': versioned_job_id,
-        'position': job_data['position'],
-        'background': job_data.get('background', '') or '',
-        'description': job_data.get('description', '') or '',
-        'responsibilities': job_data.get('responsibilities', '') or '',
-        'requirements': job_data.get('requirements', '') or '',
-        'target_profile': job_data.get('target_profile', '') or '',
+        'position': normalized.get("position") or "",
+        'background': normalized.get("background") or "",
+        'description': normalized.get("description") or "",
+        'responsibilities': normalized.get("responsibilities") or "",
+        'requirements': normalized.get("requirements") or "",
+        'target_profile': normalized.get("target_profile") or "",
         'keywords': job_data.get('keywords', {'positive': [], 'negative': []}),
-        'drill_down_questions': drill_down_questions,
+        'drill_down_questions': normalized.get("drill_down_questions") or "",
         'candidate_filters': job_data.get('candidate_filters'),
         'notification': job_data.get('notification'),
         'job_embedding': [0.0] * EMBEDDING_DIM,
@@ -194,30 +286,33 @@ def update_job(job_id: str, **job_data) -> bool:
     max_version = max([v.get('version', 0) for v in all_versions], default=0)
     next_version = max_version + 1
     new_versioned_job_id = f'{base_job_id}_v{next_version}'
-    
-    # Set old version's current=False (use partial_update to only update the current field)
-    client.upsert(
-        collection_name=COLLECTION_NAME,
-        data=[{'job_id': current_job['job_id'], 'current': False}],
-        partial_update=True
-    )
-    
+    if len(new_versioned_job_id.encode("utf-8")) > 64:
+        raise RuntimeError("job_id 过长（含版本后超过 64 字节），请缩短岗位 ID")
+
     # Create new version
     now = datetime.now().isoformat()
-    drill_down_questions = (job_data.get('drill_down_questions', current_job.get('drill_down_questions', '')) or '')[:30000]
-    
+    merged = dict(current_job)
+    merged.update(job_data)
+    normalized = _normalize_job_text_fields(merged)
+    ok, err = _validate_notification_required(merged.get("notification"))
+    if not ok:
+        raise RuntimeError(err)
+    ok, err = _validate_requirements_text(normalized.get("requirements", ""))
+    if not ok:
+        raise RuntimeError(err)
+
     new_version_data = {
         'job_id': new_versioned_job_id,
-        'position': job_data.get('position', current_job.get('position', '')),
-        'background': job_data.get('background', current_job.get('background', '')) or '',
-        'description': job_data.get('description', current_job.get('description', '')) or '',
-        'responsibilities': job_data.get('responsibilities', current_job.get('responsibilities', '')) or '',
-        'requirements': job_data.get('requirements', current_job.get('requirements', '')) or '',
-        'target_profile': job_data.get('target_profile', current_job.get('target_profile', '')) or '',
-        'keywords': job_data.get('keywords', current_job.get('keywords', {'positive': [], 'negative': []})),
-        'drill_down_questions': drill_down_questions,
-        'candidate_filters': job_data.get('candidate_filters', current_job.get('candidate_filters')),
-        'notification': job_data.get('notification') if 'notification' in job_data else current_job.get('notification'),
+        'position': normalized.get('position', '') or '',
+        'background': normalized.get('background', '') or '',
+        'description': normalized.get('description', '') or '',
+        'responsibilities': normalized.get('responsibilities', '') or '',
+        'requirements': normalized.get('requirements', '') or '',
+        'target_profile': normalized.get('target_profile', '') or '',
+        'keywords': merged.get('keywords', current_job.get('keywords', {'positive': [], 'negative': []})),
+        'drill_down_questions': normalized.get('drill_down_questions', '') or '',
+        'candidate_filters': merged.get('candidate_filters', current_job.get('candidate_filters')),
+        'notification': merged.get('notification') if 'notification' in merged else current_job.get('notification'),
         'job_embedding': [0.0] * EMBEDDING_DIM,
         'version': next_version,
         'current': True,
@@ -225,7 +320,32 @@ def update_job(job_id: str, **job_data) -> bool:
         'updated_at': now,
     }
     
+    # Insert first, then flip old currents to avoid "no current" state if insert fails.
     client.insert(collection_name=COLLECTION_NAME, data=[new_version_data])
+
+    # Mark any previous current versions as non-current (defensive).
+    try:
+        current_results = client.query(
+            collection_name=COLLECTION_NAME,
+            filter=f'job_id >= "{base_job_id}_v" && job_id < "{base_job_id}_w" && current == true',
+            output_fields=["job_id", "position"],
+            limit=1000,
+        )
+        for row in current_results:
+            jid = row.get("job_id")
+            if not jid or jid == new_versioned_job_id:
+                continue
+            pos = row.get("position") or current_job.get("position") or ""
+            if not pos:
+                continue
+            client.upsert(
+                collection_name=COLLECTION_NAME,
+                data=[{"job_id": jid, "position": _truncate_utf8(pos, 200), "current": False}],
+                partial_update=True,
+            )
+    except Exception:
+        # If this cleanup fails, get_all_jobs/get_job_by_id will still pick latest version.
+        pass
     return True
 
 def get_job_versions(base_job_id: str) -> List[Dict[str, Any]]:
@@ -391,6 +511,11 @@ class handler(BaseHTTPRequestHandler):
                 if not body.get('job_id') or not body.get('position'):
                     self._send_json_response(400, {'success': False, 'error': 'job_id and position are required'})
                     return
+
+                ok, err = _validate_requirements_text(body.get("requirements", "") or "")
+                if not ok:
+                    self._send_json_response(400, {'success': False, 'error': err})
+                    return
                 
                 base_job_id = get_base_job_id(body['job_id'])
                 existing = get_job_by_id(base_job_id)
@@ -398,11 +523,14 @@ class handler(BaseHTTPRequestHandler):
                     self._send_json_response(400, {'success': False, 'error': f"Job ID '{base_job_id}' already exists"})
                     return
                 
-                if insert_job(**body):
-                    new_job = get_job_by_id(base_job_id)
-                    self._send_json_response(200, {'success': True, 'data': new_job})
-                else:
-                    self._send_json_response(500, {'success': False, 'error': 'Failed to create job'})
+                try:
+                    if insert_job(**body):
+                        new_job = get_job_by_id(base_job_id)
+                        self._send_json_response(200, {'success': True, 'data': new_job})
+                    else:
+                        self._send_json_response(500, {'success': False, 'error': 'Failed to create job'})
+                except RuntimeError as e:
+                    self._send_json_response(400, {'success': False, 'error': str(e)})
                 return
             
             elif method == 'GET' and '/versions' in path:
@@ -523,6 +651,12 @@ class handler(BaseHTTPRequestHandler):
                 if not body.get('position'):
                     self._send_json_response(400, {'success': False, 'error': 'position is required'})
                     return
+
+                if "requirements" in body:
+                    ok, err = _validate_requirements_text(body.get("requirements", "") or "")
+                    if not ok:
+                        self._send_json_response(400, {'success': False, 'error': err})
+                        return
                 
                 base_job_id = get_base_job_id(job_id)
                 new_base_job_id = get_base_job_id(body.get('job_id', job_id))
@@ -540,11 +674,14 @@ class handler(BaseHTTPRequestHandler):
                 
                 # Remove job_id from body to avoid conflict with positional argument
                 job_data = {k: v for k, v in body.items() if k != 'job_id'}
-                if update_job(base_job_id, **job_data):
-                    updated_job = get_job_by_id(new_base_job_id)
-                    self._send_json_response(200, {'success': True, 'data': updated_job})
-                else:
-                    self._send_json_response(500, {'success': False, 'error': 'Failed to update job'})
+                try:
+                    if update_job(base_job_id, **job_data):
+                        updated_job = get_job_by_id(new_base_job_id)
+                        self._send_json_response(200, {'success': True, 'data': updated_job})
+                    else:
+                        self._send_json_response(500, {'success': False, 'error': 'Failed to update job'})
+                except RuntimeError as e:
+                    self._send_json_response(400, {'success': False, 'error': str(e)})
                 return
             
             else:

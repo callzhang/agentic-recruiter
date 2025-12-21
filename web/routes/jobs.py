@@ -20,6 +20,23 @@ logger = get_logger()
 router = APIRouter()
 templates = Jinja2Templates(directory="web/templates")
 
+def _validate_requirements_scorecard(requirements: str) -> tuple[bool, str]:
+    text = (requirements or "").strip()
+    if not text:
+        return False, "评分标准不能为空"
+    if len(text.encode("utf-8")) > 5000:
+        return False, "评分标准过长（超过 5000 字节），请精简"
+    return True, ""
+
+def _validate_notification(notification: dict | None) -> tuple[bool, str]:
+    if not isinstance(notification, dict):
+        return False, "请配置钉钉机器人 Webhook URL 和 Secret（必填）"
+    url = (notification.get("url") or "").strip()
+    secret = (notification.get("secret") or "").strip()
+    if not url or not secret:
+        return False, "请配置钉钉机器人 Webhook URL 和 Secret（必填）"
+    return True, ""
+
 
 def load_jobs():
     """Load jobs from Zilliz Cloud."""
@@ -77,6 +94,10 @@ async def create_job(request: Request):
             status_code=400,
             content={"success": False, "error": "岗位ID和岗位名称不能为空"}
         )
+
+    ok, err = _validate_requirements_scorecard(requirements)
+    if not ok:
+        return JSONResponse(status_code=400, content={"success": False, "error": err})
     
     # Check if job_id already exists (database query, no browser lock needed)
     existing_job = get_job_by_id(job_id)
@@ -96,6 +117,10 @@ async def create_job(request: Request):
         dingtalk_secret = json_data.get("dingtalk_secret", "").strip()
         if dingtalk_url and dingtalk_secret:
             notification = {"url": dingtalk_url, "secret": dingtalk_secret}
+
+    ok, err = _validate_notification(notification)
+    if not ok:
+        return JSONResponse(status_code=400, content={"success": False, "error": err})
     
     # Create new job data
     new_job = {
@@ -173,6 +198,10 @@ async def update_job(job_id: str, request: Request):
         dingtalk_secret = json_data.get("dingtalk_secret", "").strip()
         if dingtalk_url and dingtalk_secret:
             notification = {"url": dingtalk_url, "secret": dingtalk_secret}
+
+    ok, err = _validate_notification(notification)
+    if not ok:
+        return JSONResponse(status_code=400, content={"success": False, "error": err})
     
     # Validate required fields
     if not new_job_id or not position:
@@ -180,6 +209,10 @@ async def update_job(job_id: str, request: Request):
             status_code=400,
             content={"success": False, "error": "岗位ID和岗位名称不能为空"}
         )
+
+    ok, err = _validate_requirements_scorecard(requirements)
+    if not ok:
+        return JSONResponse(status_code=400, content={"success": False, "error": err})
     
     # Extract base job_id from path parameter (remove _vN suffix if present)
     base_job_id = get_base_job_id(job_id)

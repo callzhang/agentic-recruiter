@@ -311,6 +311,14 @@ function extractJobDataFromForm() {
     if (!form) return null;
     const formData = new FormData(form);
     const jobData = Object.fromEntries(formData.entries());
+
+    // Validate requirements text (required, lightweight)
+    if (!validateRequirementsText()) {
+        const el = document.getElementById('requirements');
+        showToast('评分标准不能为空，请填写后再保存', 'error');
+        el?.focus();
+        return null;
+    }
     
     const ddqTextEl = document.getElementById('drill_down_questions_text');
     jobData.drill_down_questions = ddqTextEl ? ddqTextEl.value : '';
@@ -340,15 +348,18 @@ function extractJobDataFromForm() {
         negative: negativeKeywords
     };
     
-    // Get DingTalk notification config (FastAPI-specific)
+    // Get DingTalk notification config (required)
     const dingtalkUrl = document.getElementById('dingtalk_url')?.value?.trim();
     const dingtalkSecret = document.getElementById('dingtalk_secret')?.value?.trim();
-    if (dingtalkUrl && dingtalkSecret) {
-        jobData.notification = {
-            url: dingtalkUrl,
-            secret: dingtalkSecret
-        };
+    if (!dingtalkUrl || !dingtalkSecret) {
+        showToast('请先配置钉钉机器人 Webhook URL 和 Secret（必填）', 'error');
+        if (!dingtalkUrl) document.getElementById('dingtalk_url')?.focus();
+        else document.getElementById('dingtalk_secret')?.focus();
+        return null;
     }
+    jobData.notification = { url: dingtalkUrl, secret: dingtalkSecret };
+
+    // Keep company background as-is (do not auto-merge into description).
     
     return jobData;
 }
@@ -470,50 +481,60 @@ function generateJobFormHTML(options) {
                         <h2 class="text-xl font-semibold text-gray-800">岗位详情</h2>
                         
                         <div>
-                            <label for="background" class="block text-sm font-medium text-gray-700 mb-2">公司背景</label>
-                            <textarea id="background" name="background" rows="4"
+                            <label for="description" class="block text-sm font-medium text-gray-700 mb-2">岗位概述（建议包含公司/产品/团队/核心挑战）</label>
+                            <p class="text-xs text-gray-500 mb-2">建议 1-2 段：我们做什么、为什么招人、候选人进来要解决的核心问题。</p>
+                            <textarea id="description" name="description" rows="5"
                                       class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                                      placeholder="描述公司背景和业务...">${escapeHtml(job.background || '')}</textarea>
+                                      placeholder="例如：\n我们在做XX（产品/业务）。当前核心挑战是YY（例如：稳定性/交付/增长/成本），希望你负责ZZ（关键模块/关键客户/关键流程），并与AA团队协作交付。">${escapeHtml(job.description || '')}</textarea>
                         </div>
                         
                         <div>
-                            <label for="responsibilities" class="block text-sm font-medium text-gray-700 mb-2">主要职责</label>
+                            <label for="responsibilities" class="block text-sm font-medium text-gray-700 mb-2">核心职责（建议 3-6 条）</label>
+                            <p class="text-xs text-gray-500 mb-2">写“要负责什么 + 交付什么结果”，避免堆名词。</p>
                             <textarea id="responsibilities" name="responsibilities" rows="4"
                                       class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                                      placeholder="描述岗位的主要职责...">${escapeHtml(job.responsibilities || '')}</textarea>
+                                      placeholder="例如：\n- 负责XX模块从0到1落地，并对线上质量/成本负责\n- 推动YY流程标准化，提升交付效率（给出指标）\n- 与产品/运营/交付协作完成ZZ项目">${escapeHtml(job.responsibilities || '')}</textarea>
                         </div>
                         
                         <div>
-                            <label for="requirements" class="block text-sm font-medium text-gray-700 mb-2">任职要求</label>
-                            <textarea id="requirements" name="requirements" rows="4"
+                            <label for="requirements" class="block text-sm font-medium text-gray-700 mb-2">
+                                评分标准（文本，一行一个，总分100）*
+                                <button type="button" onclick="insertRequirementsTemplate()" class="ml-2 px-2 py-1 text-xs bg-gray-100 hover:bg-gray-200 rounded text-gray-600">
+                                    ✨ 插入模板
+                                </button>
+                                <button type="button" onclick="validateRequirementsText()" class="ml-1 px-2 py-1 text-xs bg-blue-100 hover:bg-blue-200 rounded text-blue-600">
+                                    ✓ 检查
+                                </button>
+                            </label>
+                            <p class="text-xs text-gray-500 mb-2">
+                                用于 AI 按统一口径打分（总分100再映射到10分制）。建议严格按 4 行填写（可加 1 行备注）：
+                                <code>30 门槛：</code>、<code>45 场景：</code>、<code>15 基础：</code>、<code>10 契合：</code>（权重之和=100）。
+                            </p>
+                            <textarea id="requirements" name="requirements" rows="10"
                                       class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                                      placeholder="描述任职要求...">${escapeHtml(job.requirements || '')}</textarea>
+                                      placeholder="示例（建议每行用“；”分隔条目，便于人类填写，也便于AI理解）：\n30 门槛：硬性条件1；硬性条件2；硬性条件3（能从简历判断满足/不满足/未体现）\n45 场景：关键场景1（亲历/取舍/量化指标/你负责的部分）；关键场景2；关键场景3\n15 基础：表达结构化；能量化结果；学习迁移能力\n10 契合：Owner意识；协作推进（不聊绩效管理）\n备注：缺失信息可记为潜力（最多按50%计入），并提示HR后续重点验证"
+                                      onblur="validateRequirementsText()">${escapeHtml(job.requirements || '')}</textarea>
+                            <p id="requirements_validation" class="text-xs mt-1"></p>
                         </div>
                         
                         <div>
-                            <label for="description" class="block text-sm font-medium text-gray-700 mb-2">岗位概述</label>
-                            <textarea id="description" name="description" rows="4"
-                                      class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                                      placeholder="描述岗位概述...">${escapeHtml(job.description || '')}</textarea>
-                        </div>
-                        
-                        <div>
-                            <label for="target_profile" class="block text-sm font-medium text-gray-700 mb-2">理想人选</label>
+                            <label for="target_profile" class="block text-sm font-medium text-gray-700 mb-2">加分项 / 理想人选（可选）</label>
+                            <p class="text-xs text-gray-500 mb-2">写成“加分项/减分项/避坑点”，便于 AI 识别。</p>
                             <textarea id="target_profile" name="target_profile" rows="4"
                                       class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                                      placeholder="描述理想人选特征...">${escapeHtml(job.target_profile || '')}</textarea>
+                                      placeholder="例如：\n加分：做过ToB/私有化交付、能量化结果、能复盘失败\n减分：只堆名词、不讲取舍与结果、长期纯管理不写代码/不做一线">${escapeHtml(job.target_profile || '')}</textarea>
                         </div>
                     </div>
                     
                     <!-- Drill Down Questions -->
                     <div class="space-y-4 mt-8">
                         <h2 class="text-xl font-semibold text-gray-800">追问问题</h2>
-                        <p class="text-sm text-gray-500">用于AI生成对话时，进一步确认候选人能力与经历。</p>
+                        <p class="text-sm text-gray-500">只用于线上甄别候选人：每次只选 1 个问题，不要合并多问，不问管理/绩效/制度推进类问题。</p>
                         <div>
                             <label for="drill_down_questions_text" class="block text-sm font-medium text-gray-700 mb-2">问题列表</label>
                             <textarea id="drill_down_questions_text" name="drill_down_questions_text" rows="6"
                                       class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                                      placeholder="例如：\n请详细描述你在RLHF项目中的具体职责和贡献？\n你如何评估一个对齐算法的有效性？\n在工程实践中你如何权衡推理性能与成本？">${escapeHtml(job.drill_down_questions || '')}</textarea>
+                                      placeholder="例如：\n讲一次你亲历并主导处理的线上事故：怎么发现→怎么止血→怎么长期治理？关键指标前后变化如何？\n如果系统流量暴涨10倍，最先崩的是哪里？你会按什么顺序止血与改造？">${escapeHtml(job.drill_down_questions || '')}</textarea>
                         </div>
                     </div>
                     
@@ -546,27 +567,26 @@ function generateJobFormHTML(options) {
                             <div class="tooltip-container">
                                 <span class="tooltip-icon">❓</span>
                                 <div class="tooltip-content">
-                                    <strong>如何设置钉钉机器人：</strong><br>
-                                    1. 打开钉钉群聊，点击右上角设置<br>
-                                    2. 选择「智能群助手」→「添加机器人」→「自定义」<br>
-                                    3. 复制 Webhook URL 和 Secret<br>
-                                    4. 将 URL 和 Secret 填入下方字段<br>
+                                    <strong>3步快速配置（必填）：</strong><br>
+                                    1) 钉钉群 → 右上角设置 →「智能群助手」<br>
+                                    2)「添加机器人」→「自定义」→ 开启“加签”<br>
+                                    3) 复制 Webhook URL + Secret，粘贴到下方<br>
                                     <a href="https://open.dingtalk.com/document/orgapp/custom-bot-creation-and-installation" target="_blank" class="text-blue-300 underline mt-2 inline-block">查看详细文档</a>
                                 </div>
                             </div>
                         </div>
-                        <p class="text-sm text-gray-500">为当前岗位配置独立的钉钉通知渠道，留空则使用默认配置</p>
+                        <p class="text-sm text-gray-500">该配置用于岗位级通知（必填）。建议每个岗位对应一个群机器人，便于区分通知来源。</p>
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div>
                                 <label for="dingtalk_url" class="block text-sm font-medium text-gray-700 mb-2">Webhook URL</label>
-                                <input type="text" id="dingtalk_url" name="dingtalk_url"
+                                <input type="text" id="dingtalk_url" name="dingtalk_url" required
                                        value="${job.notification?.url || ''}"
                                        class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                                        placeholder="https://oapi.dingtalk.com/robot/send?access_token=...">
                             </div>
                             <div>
                                 <label for="dingtalk_secret" class="block text-sm font-medium text-gray-700 mb-2">Secret</label>
-                                <input type="password" id="dingtalk_secret" name="dingtalk_secret"
+                                <input type="password" id="dingtalk_secret" name="dingtalk_secret" required
                                        value="${job.notification?.secret || ''}"
                                        class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                                        placeholder="SEC...">
@@ -1155,6 +1175,74 @@ function formatCandidateFilters() {
     } catch (e) {
         validateCandidateFilters(); // Show error
     }
+}
+
+// ---------------------------------------------------------------------------
+// Requirements (text) helpers
+// ---------------------------------------------------------------------------
+
+function getRequirementsTemplateText() {
+    return [
+        '30 门槛：硬性条件1；硬性条件2；硬性条件3（能从简历判断满足/不满足/未体现）',
+        '45 场景：关键场景1（亲历/取舍/量化指标/你负责的部分）；关键场景2；关键场景3',
+        '15 基础：表达结构化；能量化结果；学习迁移能力',
+        '10 契合：Owner意识；协作推进（不聊绩效管理）',
+        '备注：缺失信息可记为潜力（最多按50%计入）；PASS不发消息；CONTACT直接请求微信/电话。',
+    ].join('\\n');
+}
+
+function validateRequirementsText() {
+    const el = document.getElementById('requirements');
+    const validationEl = document.getElementById('requirements_validation');
+    if (!el) return true;
+    if (!validationEl) return true;
+
+    const value = el.value.trim();
+    if (!value) {
+        validationEl.textContent = '✗ 评分标准不能为空';
+        validationEl.className = 'text-xs mt-1 text-red-600';
+        el.classList.remove('border-gray-300', 'border-green-500');
+        el.classList.add('border-red-500');
+        return false;
+    }
+
+    const normalized = value.replaceAll(' ', '');
+    const required = ['门槛', '场景', '基础', '契合'];
+    const missing = required.filter(k => !normalized.includes(k));
+
+    // Optional: parse leading weights like "30 门槛：..."
+    const weightRe = /^\s*(\d+)\s*(门槛|场景|基础|契合|threshold|scenarios|foundation|fit)\s*[:：]/i;
+    const lines = value.split('\n').map(l => l.trim()).filter(Boolean);
+    let weightSum = 0;
+    let weightCount = 0;
+    for (const line of lines) {
+        const m = line.match(weightRe);
+        if (!m) continue;
+        weightCount += 1;
+        weightSum += Number(m[1]);
+    }
+
+    const hints = [];
+    if (missing.length) hints.push('建议补齐：' + missing.join('、'));
+    if (weightCount >= 2 && weightSum !== 100) hints.push(`权重之和建议=100（当前=${weightSum}）`);
+
+    if (hints.length) {
+        validationEl.textContent = '✓ 已填写（' + hints.join('；') + '）';
+        validationEl.className = 'text-xs mt-1 text-yellow-600';
+    } else {
+        validationEl.textContent = '✓ 已填写';
+        validationEl.className = 'text-xs mt-1 text-green-600';
+    }
+    el.classList.remove('border-red-500');
+    el.classList.add('border-gray-300');
+    return true;
+}
+
+function insertRequirementsTemplate() {
+    const el = document.getElementById('requirements');
+    if (!el) return;
+    el.value = getRequirementsTemplateText();
+    validateRequirementsText();
 }
 </script>
 {% endblock %}

@@ -167,14 +167,14 @@ def _load_action_prompts_from_md(path: Path) -> dict[str, str]:
     text = _read_text(path)
     prompts: dict[str, str] = {}
     # Sections look like: "## CHAT_ACTION" followed by fenced block.
-    pattern = re.compile(r"^##\\s+([A-Z0-9_]+)\\s*$", re.M)
+    pattern = re.compile(r"^##\s+([A-Z0-9_]+)\s*$", re.M)
     matches = list(pattern.finditer(text))
     for i, m in enumerate(matches):
         key = m.group(1).strip()
         start = m.end()
         end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
         chunk = text[start:end]
-        fence = re.search(r"```\\s*\\n(.*?)\\n```", chunk, re.S)
+        fence = re.search(r"```\s*\n(.*?)\n```", chunk, re.S)
         if not fence:
             continue
         prompts[key] = fence.group(1).strip()
@@ -376,6 +376,65 @@ def _append_generation_to_report(report_path: Path, section_md: str) -> None:
     _write_text(report_path, appended)
 
 
+def _action_counts(items: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for it in items:
+        action = (it.get("action") or "").strip() or "UNKNOWN"
+        counts[action] = counts.get(action, 0) + 1
+    return dict(sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
+
+
+def _summarize_checks(outputs: list[dict[str, Any]]) -> dict[str, Any]:
+    total = len(outputs)
+    if total == 0:
+        return {"total": 0}
+
+    def _count(pred):
+        return sum(1 for o in outputs if pred(o))
+
+    return {
+        "total": total,
+        "analysis_ok": _count(lambda o: isinstance(o.get("analysis"), dict) and "overall" in (o.get("analysis") or {})),
+        "message_ok": _count(lambda o: isinstance(o.get("message_obj"), dict) and (o.get("message_obj") or {}).get("action") in {"PASS", "CHAT", "CONTACT", "WAIT"}),
+        "len_gt_160": _count(lambda o: (o.get("message_checks") or {}).get("len", 0) > 160),
+        "qmarks_gt_1": _count(lambda o: (o.get("message_checks") or {}).get("qmarks", 0) > 1),
+        "salary_like": _count(lambda o: bool((o.get("message_checks") or {}).get("salary_like"))),
+        "scheduling_like": _count(lambda o: bool((o.get("message_checks") or {}).get("scheduling_like"))),
+        "material_like": _count(lambda o: bool((o.get("message_checks") or {}).get("material_like"))),
+    }
+
+
+def _format_issue_examples(
+    outputs: list[dict[str, Any]],
+    key: str,
+    pred,
+    limit: int,
+    run_dir: Path,
+) -> list[str]:
+    bad = [o for o in outputs if pred(o)]
+    if not bad:
+        return [f"- {key}: 0"]
+
+    lines = [f"- {key}: {len(bad)}（示例 {min(limit, len(bad))} 条）"]
+    for o in bad[:limit]:
+        name = o.get("name") or "unknown"
+        cand_file = o.get("candidate_file") or ""
+        gen_json = o.get("generated_json") or ""
+        action = ((o.get("message_obj") or {}) if isinstance(o.get("message_obj"), dict) else {}).get("action") or "UNKNOWN"
+        msg = _clip(o.get("message") or "", 120).replace("\n", " ")
+        checks = o.get("message_checks") or {}
+        # Keep the reference clickable inside the repo run dir.
+        rel = ""
+        try:
+            rel = str(Path(gen_json).relative_to(run_dir))
+        except Exception:
+            rel = str(gen_json)
+        lines.append(
+            f"  - `{Path(cand_file).name}` / `{rel}` / {name} / action={action} / q={checks.get('qmarks')} / len={checks.get('len')} :: {msg}"
+        )
+    return lines
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-dir", required=True, help="Run directory path (contains candidates/ + job_portrait_optimized.json)")
@@ -436,17 +495,8 @@ def main() -> int:
 
     report_path = run_dir / "优化报告.md"
     now = datetime.now().isoformat(timespec="seconds")
-    section: list[str] = [
-        "## 模型生成回放（generate_optimized.py）",
-        "",
-        f"- 生成时间: {now}",
-        f"- run_dir: `{run_dir}`",
-        f"- prompt_source: `{args.prompt_source}`",
-        f"- model: `{model}`",
-        f"- history_max_messages: {args.history_max_messages}",
-        f"- resume_max_chars: {args.resume_max_chars}",
-        "",
-    ]
+    # Collect per-candidate outputs for a concise report.
+    outputs_for_report: list[dict[str, Any]] = []
 
     for idx, path in enumerate(tqdm(candidate_files, desc="Generate", total=len(candidate_files)), start=args.start_index):
         data = json.loads(_read_text(path))
@@ -503,42 +553,97 @@ def main() -> int:
         out_path = out_dir / f"{path.stem}.generated.json"
         _write_json(out_path, out_payload)
 
-        section += [
-            f"### 回放 {idx}. {name}",
-            "",
-            f"- candidate_file: `{path.name}`",
-            f"- conversation_id: `{conversation_id}`",
-            f"- message_action: `{msg_action}`",
-            f"- message_checks: len={checks['len']}, qmarks={checks['qmarks']}, salary_like={checks['salary_like']}, scheduling_like={checks['scheduling_like']}, material_like={checks['material_like']}",
-            f"- generated_json: `{out_path.relative_to(run_dir)}`",
-            "",
-            "**生成的 message（可直接发给候选人）**",
-            "",
-            "```",
-            (message_text or "[生成失败]").strip(),
-            "```",
-            "",
-            "**生成的 chat JSON（内部）**",
-            "",
-            "```json",
-            json.dumps(msg_obj or {"error": "chat_generation_failed"}, ensure_ascii=False, indent=2),
-            "```",
-            "",
-            "**生成的 analysis（JSON）**",
-            "",
-            "```json",
-            json.dumps(analysis or {"error": "analysis_generation_failed"}, ensure_ascii=False, indent=2),
-            "```",
-            "",
-            "**人工评价（写在这里，便于下一轮改 prompt/画像）**",
-            "",
-            "- message 是否合规（不约时间/不聊薪资/不索要材料/<=160字/问号数）:",
-            "- message 是否“更容易回复”（一句主问题，开放）:",
-            "- analysis 是否结构化、是否避免伪高P、评分是否自洽:",
-            "- 需要改 prompt 的点（写到 assistant_actions_prompts.md 或 prompt_optimized.py）:",
-            "- 需要改画像/追问库（写到 job_portrait_optimized.json）:",
-            "",
-        ]
+        outputs_for_report.append(
+            {
+                "idx": idx,
+                "candidate_file": str(path),
+                "generated_json": str(out_path),
+                "name": name,
+                "conversation_id": conversation_id,
+                "message_action": msg_action,
+                "message": message_text,
+                "message_obj": msg_obj,
+                "message_checks": checks,
+                "analysis": analysis,
+            }
+        )
+
+    # Build a lightweight report section (no per-candidate full dumps).
+    summary = _summarize_checks(outputs_for_report)
+    action_counts = _action_counts([o.get("message_obj") or {} for o in outputs_for_report if isinstance(o.get("message_obj"), dict)])
+    section: list[str] = [
+        "## 模型生成回放（generate_optimized.py）",
+        "",
+        f"- 生成时间: {now}",
+        f"- run_dir: `{run_dir}`",
+        f"- prompt_source: `{args.prompt_source}`",
+        f"- model: `{model}`",
+        f"- 处理候选人: {summary.get('total')}",
+        f"- analysis 生成成功: {summary.get('analysis_ok')}/{summary.get('total')}",
+        f"- message(JSON) 生成成功: {summary.get('message_ok')}/{summary.get('total')}",
+        "",
+        "### 动作分布（action）",
+        "",
+        *([f"- {k}: {v}" for k, v in action_counts.items()] or ["- （无）"]),
+        "",
+        "### 合规/风险快照（自动检测，仅用于抽样排查）",
+        "",
+        f"- len>160: {summary.get('len_gt_160')}",
+        f"- 问号>1: {summary.get('qmarks_gt_1')}",
+        f"- 薪资倾向: {summary.get('salary_like')}",
+        f"- 约时间/面试安排倾向: {summary.get('scheduling_like')}",
+        f"- 索要材料倾向: {summary.get('material_like')}",
+        "",
+        "### 问题示例（带引用）",
+        "",
+    ]
+    section += _format_issue_examples(
+        outputs_for_report,
+        "len>160",
+        lambda o: (o.get("message_checks") or {}).get("len", 0) > 160,
+        limit=5,
+        run_dir=run_dir,
+    )
+    section += _format_issue_examples(
+        outputs_for_report,
+        "问号>1",
+        lambda o: (o.get("message_checks") or {}).get("qmarks", 0) > 1,
+        limit=5,
+        run_dir=run_dir,
+    )
+    section += _format_issue_examples(
+        outputs_for_report,
+        "薪资倾向",
+        lambda o: bool((o.get("message_checks") or {}).get("salary_like")),
+        limit=5,
+        run_dir=run_dir,
+    )
+    section += _format_issue_examples(
+        outputs_for_report,
+        "约时间/面试安排倾向",
+        lambda o: bool((o.get("message_checks") or {}).get("scheduling_like")),
+        limit=5,
+        run_dir=run_dir,
+    )
+    section += _format_issue_examples(
+        outputs_for_report,
+        "索要材料倾向",
+        lambda o: bool((o.get("message_checks") or {}).get("material_like")),
+        limit=5,
+        run_dir=run_dir,
+    )
+    section += [
+        "",
+        "### 本批次结论/改进点（人工填写）",
+        "",
+        "- 发现的问题（用上面的引用，写“现象→原因→影响”）:",
+        "- 对 prompt 的改进建议（写到 assistant_actions_prompts.md 或 run_dir/prompt_optimized.py）:",
+        "- 对岗位肖像的改进建议（写到 run_dir/job_portrait_optimized.json，注意不新增 schema 字段）:",
+        "- 待讨论/不确定项:",
+        "",
+        "（详细内容请看：每个候选人的 `generated/*.generated.json` 与 `candidates/*.json`）",
+        "",
+    ]
 
     _append_generation_to_report(report_path, "\n".join(section))
     logger.info("Wrote/updated report: %s", report_path)

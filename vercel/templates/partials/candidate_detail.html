@@ -168,9 +168,33 @@
             </button>
         </div>
         <div id="message-content" class="p-2">
-            <textarea id="message-text" name="generated_message" class="w-full h-32 p-2 border rounded-lg text-gray-800">
-                {%- if generated_message not in ['', 'None', 'null', None] -%}{{ generated_message }}{%- else -%}⏳分析完成后，如果匹配度达标，将自动生成...{%- endif -%}
-            </textarea>
+            {% set chat_history_for_message = metadata.history if metadata and metadata.history else [] %}
+            {% set ns = namespace(message='', action='', reason='', payload=None, placeholder='') %}
+            {% for msg in chat_history_for_message | reverse %}
+                {% if ns.payload is none and msg.role == 'assistant' %}
+                    {% set candidate_payload = msg.payload if msg.payload is defined and msg.payload else (msg.content if msg.content is mapping else None) %}
+                    {% set ns.payload = candidate_payload %}
+                    {% if candidate_payload %}
+                        {% set ns.action = candidate_payload.action if candidate_payload.action else (msg.action if msg.action is defined else '') %}
+                        {% set ns.reason = candidate_payload.reason if candidate_payload.reason else (msg.reason if msg.reason is defined else '') %}
+                        {% set ns.message = candidate_payload.message if candidate_payload.message else (msg.content or msg.message or '') %}
+                    {% else %}
+                        {% set ns.message = msg.content or msg.message or '' %}
+                    {% endif %}
+                {% endif %}
+            {% endfor %}
+            {% if generated_message not in ['', 'None', 'null', None] %}
+                {% set ns.message = generated_message %}
+            {% elif not ns.message %}
+                {# Only show as textarea placeholder; never prefill as message to avoid accidental sending. #}
+                {% set ns.placeholder = '⏳分析完成后，如果匹配度达标，将自动生成...' %}
+            {% endif %}
+            {% set message = ns.message %}
+            {% set action = ns.action %}
+            {% set reason = ns.reason %}
+            {% set payload = ns.payload %}
+            {% set placeholder_message = ns.placeholder %}
+            {% include 'partials/message_result.html' with context %}
         </div>
         <div class="flex p-2 gap-2">
             <button onclick="greetAndSendMessage()"
@@ -275,28 +299,11 @@ window.__candidate_detail_root = window.__candidate_detail_root || root;
 window.__candidate_detail_view_mode = window.__candidate_detail_view_mode || viewMode;
 
 async function process_candidate() {
-    const identifiers = () => {
-        const c = getCandidateData();
-        return { candidate_id: c.candidate_id, chat_id: c.chat_id, index: c.index };
-    };
-
-    const emitComplete = () => {
-        document.dispatchEvent(new CustomEvent('candidate:processing-complete', { detail: { identifiers: identifiers() } }));
-    };
-
-    const emitError = (error) => {
-        document.dispatchEvent(new CustomEvent('candidate:processing-error', { detail: { identifiers: identifiers(), error } }));
-    };
-
-    // Note: disableAllCards() is called by startProcessCandidate() for batch processing
-    if (!window.cycleReplyState?.running) {
-        document.dispatchEvent(new CustomEvent('candidates:disable-cards'));
-    }
-
+    let newStage, currentScore, analysis;
+    
     try {
         // Step 0: short-circuit if already PASS
         if (getCandidateData('stage') === 'PASS') {
-            emitComplete();
             return;
         }
 
@@ -319,14 +326,13 @@ async function process_candidate() {
         }
 
         // Step 4: Determine stage (PASS/CHAT/SEEK by score thresholds)
-        let [newStage, currentScore, analysis] = determineStage();
+        [newStage, currentScore, analysis] = determineStage();
         let isFullAnalysis = analysis?.resume_type === 'full';
         let needReply = await shouldReply();
         const mode = getCandidateData('mode');
 
         const finish = async (updates = {}) => {
             await updateCandidateData({ viewed: true, score: currentScore, stage: newStage, ...updates });
-            emitComplete();
         };
 
         const handleChatAction = async (gen) => {
@@ -404,11 +410,14 @@ async function process_candidate() {
     } catch (error) {
         console.error('Error processing candidate:', error);
         showToast(`处理候选人时出错: ${error.message || String(error)}`, 'error');
-        emitError(error.message || String(error));
+        document.dispatchEvent(new CustomEvent('candidate:processing-error', { detail: { error: error.message || String(error) } }));
     } finally {
+        // Update viewed status even if processing failed (updateCandidateData filters null/undefined)
+        await updateCandidateData({ viewed: true, score: currentScore, stage: newStage });
         if (!window.cycleReplyState?.running) {
             document.dispatchEvent(new CustomEvent('candidates:enable-cards'));
         }
+        document.dispatchEvent(new CustomEvent('candidate:processing-complete'));
     }
 }
 
@@ -472,6 +481,24 @@ async function fetchFullResume() {
     switchResumeTab('full');
 }
 
+function getMessageResultState(purpose = '') {
+    const container = document.getElementById('message-result-container');
+    const textarea = document.getElementById('message-text');
+    const message = textarea?.value?.trim() || '';
+    const action = container?.dataset?.action || '';
+    const reason = container?.dataset?.reason || '';
+    let payload = null;
+    const payloadStr = container?.dataset?.payload;
+    if (payloadStr) {
+        try {
+            payload = JSON.parse(payloadStr);
+        } catch (e) {
+            payload = null;
+        }
+    }
+    return { action, reason, message, purpose, payload };
+}
+
 async function generateMessage(force = false) {
     showToast('生成消息...', 'info');
     const values = getCandidateData();
@@ -481,21 +508,17 @@ async function generateMessage(force = false) {
         swap: 'innerHTML',
         values: {...values, purpose: purpose}
     });
-    const textarea = document.getElementById('message-text');
-    const message = textarea?.value?.trim() || '';
-    const action = textarea?.dataset?.action || '';
-    const reason = textarea?.dataset?.reason || '';
-    window.__last_generated_chat = { action, reason, message, purpose };
-    console.log('Generated message:', { action, reason, message });
-    await updateCandidateData({generated_message: message});
-    return window.__last_generated_chat;
+    const state = getMessageResultState(purpose);
+    console.log('Generated message:', state);
+    await updateCandidateData({generated_message: state.message});
+    return state;
 }
 
 async function greetAndSendMessage() {
     const autoSend = document.getElementById('auto-send-checkbox')?.checked ?? true;
     const message_textarea = document.getElementById('message-text');
     const message = autoSend ? message_textarea.value.trim() : '';
-    const action = message_textarea?.dataset?.action || window.__last_generated_chat?.action || '';
+    const action = document.getElementById('message-result-container')?.dataset?.action || '';
     let stage = getCandidateData('stage');
     const greeted = getCandidateData('greeted');
     const mode = getCandidateData('mode');
