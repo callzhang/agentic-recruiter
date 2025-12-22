@@ -1,4 +1,5 @@
 """Zilliz/Milvus-backed job profile store integration."""
+from functools import lru_cache
 import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -45,6 +46,12 @@ def get_job_collection_schema() -> list[FieldSchema]:
     FieldSchema(name="created_at", dtype=DataType.VARCHAR, max_length=64),
     FieldSchema(name="updated_at", dtype=DataType.VARCHAR, max_length=64),
     
+    # Status field (active/inactive)
+    FieldSchema(name="status", dtype=DataType.VARCHAR, max_length=20, nullable=True),
+    
+    # Metadata field (for additional flexible data)
+    FieldSchema(name="metadata", dtype=DataType.JSON, nullable=True),
+    
     # Notification fields
     FieldSchema(name="notification", dtype=DataType.JSON, nullable=True),
 ]
@@ -54,6 +61,29 @@ def get_job_collection_schema() -> list[FieldSchema]:
 _all_fields = [f.name for f in get_job_collection_schema()]
 _readable_fields = [f.name for f in get_job_collection_schema() if f.dtype != DataType.FLOAT_VECTOR]
 _collection_name = _job_store_config["job_collection_name"]
+
+@lru_cache(maxsize=1)
+def _get_existing_field_names() -> set[str]:
+    """Return existing field names for the current jobs collection.
+
+    This keeps the code resilient to schema drift (e.g. local code adds fields
+    but the remote collection wasn't migrated yet).
+    """
+    try:
+        info = _client.describe_collection(collection_name=_collection_name)
+        fields = {f.get("name") for f in (info.get("fields") or []) if isinstance(f, dict) and f.get("name")}
+        return set(fields)
+    except Exception as exc:
+        logger.warning("Failed to describe jobs collection %s: %s", _collection_name, exc)
+        return set(_all_fields)
+
+
+def _get_readable_fields() -> list[str]:
+    existing = _get_existing_field_names()
+    fields = [f for f in _readable_fields if f in existing]
+    if "job_id" in existing and "job_id" not in fields:
+        fields.insert(0, "job_id")
+    return fields
 
 
 # ------------------------------------------------------------------
@@ -119,11 +149,15 @@ def _build_job_data(job_data: Dict[str, Any], current_job: Optional[Dict[str, An
         "current": True,
         "created_at": created_at or current_job.get("created_at", now) if current_job else now,
         "updated_at": now,
+        "status": job_data.get("status", current_job.get("status", "active") if current_job else "active"),
+        "metadata": job_data.get("metadata", current_job.get("metadata", {}) if current_job else {}),
         "notification": job_data.get("notification", current_job.get("notification", {}) if current_job else {}),
     }
     
-    # Filter to only valid fields
-    return {k: v for k, v in built_data.items() if k in _all_fields and (v or v == 0)}
+    # Filter to only valid fields (and only fields that exist in the remote collection)
+    existing = _get_existing_field_names()
+    allowed = set(_all_fields) & set(existing)
+    return {k: v for k, v in built_data.items() if k in allowed and (v or v == 0)}
 
 
 # ------------------------------------------------------------------
@@ -237,7 +271,7 @@ def get_all_jobs() -> List[Dict[str, Any]]:
     results = _client.query(
         collection_name=_collection_name,
         filter='current == true',
-        output_fields=_readable_fields,
+        output_fields=_get_readable_fields(),
         limit=1000  # Reasonable limit
     )
     
@@ -278,7 +312,7 @@ def get_job_by_id(job_id: str) -> Optional[Dict[str, Any]]:
     results = _client.query(
         collection_name=_collection_name,
         filter=f'job_id >= "{base_job_id}_v" and job_id < "{base_job_id}_w" and current == true',
-        output_fields=_readable_fields,
+        output_fields=_get_readable_fields(),
         limit=100
     )
     
@@ -321,10 +355,75 @@ def insert_job(**job_data) -> bool:
             
     
     
+def update_job_status(job_id: str, status: str, metadata: Optional[Dict[str, Any]] = None) -> bool:
+    """Update job status and/or metadata without creating a new version.
+    
+    This function directly updates the current version's status and metadata fields.
+    Use this when you only want to change status/metadata without versioning.
+    
+    Args:
+        job_id: Job ID to update (can be base_job_id or versioned job_id)
+        status: New status value (e.g., "active", "inactive")
+        metadata: Optional metadata dict to update
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    # Extract base job_id
+    base_job_id = get_base_job_id(job_id)
+    
+    # Get current job (where current=True)
+    current_job = get_job_by_id(base_job_id)
+    if not current_job:
+        logger.warning("Job %s not found for status update", base_job_id)
+        return False
+    
+    old_job_id = current_job.get("job_id")
+    if not old_job_id:
+        logger.warning("Job %s has no job_id", base_job_id)
+        return False
+    
+    # Prepare update data
+    update_data = {
+        "job_id": old_job_id,
+        "status": status,
+        "updated_at": datetime.now().isoformat(),
+    }
+    
+    # Include position to avoid DataNotMatchException
+    if current_job.get("position"):
+        update_data["position"] = current_job["position"]
+    
+    # Update metadata if provided
+    if metadata is not None:
+        update_data["metadata"] = metadata
+
+    # Avoid schema-drift errors (remote collection may not have status/metadata).
+    existing = _get_existing_field_names()
+    update_data = {k: v for k, v in update_data.items() if k in existing and (v or v == 0)}
+    if not update_data or update_data == {"job_id": old_job_id}:
+        logger.warning(
+            "Skip updating job status/metadata: remote schema does not include these fields for %s",
+            _collection_name,
+        )
+        return True
+    
+    # Update the current version directly
+    _client.upsert(
+        collection_name=_collection_name,
+        data=[update_data],
+        partial_update=True,
+    )
+    
+    logger.debug("Successfully updated job status: %s -> %s", old_job_id, status)
+    return True
+
+
 def update_job(job_id: str, **job_data) -> bool:
     """Update an existing job.
     
-    Creates a new version by:
+    If only status and/or metadata are being updated, directly updates the current version.
+    Otherwise, creates a new version by:
     1. Getting the current version (where current=True)
     2. Setting current=False on the old version
     3. Creating a new version with current=True and incremented version number
@@ -345,6 +444,27 @@ def update_job(job_id: str, **job_data) -> bool:
     if not current_job:
         logger.warning("Job %s not found for update", base_job_id)
         return False
+    
+    # Check if only status and/or metadata are being updated
+    # Define fields that trigger versioning (all fields except status and metadata)
+    versioning_fields = {
+        "position", "background", "description", "responsibilities", 
+        "requirements", "target_profile", "keywords", "drill_down_questions",
+        "candidate_filters", "notification"
+    }
+    
+    # Check if any versioning fields are being updated
+    has_versioning_changes = any(
+        key in job_data and job_data[key] != current_job.get(key)
+        for key in versioning_fields
+        if key in job_data
+    )
+    
+    # If only status/metadata are being updated, use direct update
+    if not has_versioning_changes and ("status" in job_data or "metadata" in job_data):
+        status = job_data.get("status", current_job.get("status", "active"))
+        metadata = job_data.get("metadata")
+        return update_job_status(base_job_id, status, metadata)
             
     # Get all versions to determine next version number
     all_versions = get_job_versions(base_job_id)
@@ -385,7 +505,7 @@ def get_job_versions(base_job_id: str) -> List[Dict[str, Any]]:
     results = _client.query(
         collection_name=_collection_name,
         filter=f'job_id >= "{base_job_id}_v" and job_id < "{base_job_id}_w"',  # String range query
-        output_fields=_readable_fields,
+        output_fields=_get_readable_fields(),
         limit=1000
     )
     

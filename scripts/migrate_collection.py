@@ -243,6 +243,14 @@ def transform_record(record: dict, schema_fields: list, collection_type: str) ->
         # Initialize notification field if not present
         if "notification" not in new_record or new_record["notification"] is None:
             new_record["notification"] = {}
+        
+        # Initialize status field if not present (default to "active")
+        if "status" not in new_record or new_record["status"] is None:
+            new_record["status"] = "active"
+        
+        # Initialize metadata field if not present
+        if "metadata" not in new_record or new_record["metadata"] is None:
+            new_record["metadata"] = {}
     
     # Ensure all required fields exist with appropriate defaults
     for field in schema_fields:
