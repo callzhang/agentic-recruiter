@@ -93,36 +93,46 @@ ACTION_PROMPTS: dict[str, str] = {
 - 面评中红灯信号：只有顺境经验、无法量化、路径依赖、管理靠“强调/督促/要求大家”。
 
 【评分标准（总分100，必须执行）】
-评分标准来自【岗位肖像】里的 `requirements`（文本，一行一个评分项）。建议格式：
-- 30 门槛：……
-- 45 场景：……
-- 15 基础：……
-- 10 契合：……
-- 备注：……（可选）
+评分标准完全来自【岗位肖像】里的 `requirements`（文本，一行一个评分项/维度）。本提示词不固定任何维度名称与数量；你必须按 requirements 逐行解析并逐行评分。
+
+建议的 requirements 写法（示例，仅供理解；不要强行套用）：
+- 40 核心硬技能与经历：……
+- 30 架构思维与成效：……
+- 20 工程治理与协作：……
+- 10 沟通与稳定性：……
 
 解析规则（必须遵守）：
-- 权重可省略；省略时默认权重：门槛30、场景45、基础15、契合10（总分100）。
-- 类别可写中文（门槛/场景/基础/契合）或英文（threshold/scenarios/foundation/fit）。
+- 每行通常以“权重数字”开头（0-100），后跟维度名与说明（用“:”或“：”分隔）。
+- 如果有“备注/说明/补充”等不计分行：忽略它（不纳入评分/总分）。
+- 如果权重缺失或权重和≠100：按比例缩放到总分100，并在 summary 里提示“权重异常已按比例归一化”。
 
-你必须按这四类给分：门槛/场景/基础/契合，每类评 0..weight 的分数；若简历未体现，按 0 计入 confirmed 分，并可放入潜力分（见下）。
-
-潜力分（0-20）
-- 仅用于“信息缺失但看起来可能具备”的项；按 50% 计入总分（P/2），并在 summary 提示HR重点核实潜力来源。
+【逐维度评分（confirmed + potential，必须执行）】
+对 requirements 的每一个计分维度，输出两类分数：
+- confirmed（0..weight）：有明确项目/职责/量化结果/故障复盘等可支撑信息才计入；未体现则为0。
+- potential（0..(weight-confirmed)）：仅在“简历/对话里确实提到相关能力/场景，但缺少项目经历细节或缺少可验证的事实描述”时可计入；否则为0。
+  - 重要：potential 不是“想当然”；必须有“提及”作为前提（简历/对话中出现相关表述），但缺少项目级细节/指标/边界处理/取舍与复盘等支撑，所以只能算潜力。
+  - potential 只按 50% 计入总分（potential/2）。
 
 【计算（必须按此计算，避免自洽性错误）】
-- confirmed_total = 门槛 + 场景 + 基础 + 契合（0-100，不含潜力）
-- effective_total = min(100, confirmed_total + 潜力分/2)
-- overall(1-10) = clamp(1,10, int((effective_total + 5)//10))（四舍五入到整数）
-- skill(1-10) = clamp(1,10, int((((门槛+场景) / 75) * 10) + 0.5))
-- background(1-10) = clamp(1,10, int(((基础 / 15) * 10) + 0.5))
-- startup_fit(1-10) = clamp(1,10, int(((契合 / 10) * 10) + 0.5))
+- effective_total = sum_over_dims(min(weight, confirmed + potential/2))（0-100）
+- overall(1-10) = clamp(1,10, round(effective_total / 10))（四舍五入到整数）
+- 额外输出三个“聚合评分”（仍为1-10，强制）：
+  - 先把每个维度归类到以下三桶之一（按维度名/说明语义判断；不需要完全准确，但要自洽）：
+    1) skill：技术深度/编码能力/架构能力/场景经验/性能与规模/可靠性/数据正确性/工程质量等
+    2) background：基础背景/学习能力/简历质量/表达逻辑/稳定性等
+    3) startup_fit：沟通合作/主动性/结果导向/匹配度/工作方式等
+    - 若无法归类：默认归入 skill（更保守）。
+  - 对每桶：bucket_total = sum_over_bucket(min(weight, confirmed + potential/2))；bucket_weight = sum_over_bucket(weight)。
+  - 若某桶 bucket_weight=0：该桶分数=overall。
+  - 否则：bucket_score(1-10)=clamp(1,10, round((bucket_total / bucket_weight) * 10))。
+  - skill=startup_fit/background 分别使用三桶的 bucket_score。
 
 【输出要求（必须遵守）】
 - 必须按 AnalysisSchema 输出全部字段（skill/startup_fit/background/overall/summary/followup_tips）。
 - summary <=200字：只写“概述”（不是下一步 action），必须严格两行且不要省略前缀：
-  1) 必须以“门槛=”开头的评分表（不要用A/B/C符号）：门槛/场景/基础/契合/潜力(按50%)/总分（例如：门槛=28,场景=30,基础=6,契合=7,潜力=8(+4),总分=75/100=>8/10）
-  2) 必须以“画像判断：”开头：技术深度=顶尖/优秀/合格/欠缺；抽象能力=顶尖/优秀/合格/欠缺；机制化=顶尖/优秀/合格/欠缺；建议=作为架构师推进/作为高级IC推进/不推进
-- 在 summary 给出主观判断：不匹配/有潜力/匹配，并给出阶段建议（PASS/CHAT/SEEK/CONTACT），阶段建议参考 `candidate_stages.determine_stage` 默认阈值：overall<6 PASS；<7 CHAT；<8 SEEK；>=8 CONTACT
+  1) 必须以“评分表：”开头：按 requirements 的维度逐个给出“维度名=confirmed/weight(+潜力折半贡献)”并给出总分（例如：评分表：硬技能=28/40(+4),架构成效=18/30(+2),治理协作=10/20,沟通稳定=6/10,总分=64(+6)/100=>6/10）
+  2) 必须以“画像判断：”开头：技术深度=顶尖/优秀/合格/欠缺；抽象能力=顶尖/优秀/合格/欠缺；机制化=顶尖/优秀/合格/欠缺；主观=不匹配/有潜力/匹配；阶段=PASS/CHAT/SEEK/CONTACT；建议=作为架构师推进/作为高级IC推进/不推进
+- 阶段建议参考 `candidate_stages.determine_stage` 默认阈值：overall<6 PASS；<7 CHAT；<8 SEEK；>=8 CONTACT
 - followup_tips <=200字：
   - 若阶段建议为 PASS：只写“无需追问/建议PASS”的一句话（不要再给澄清问题）。
   - 其他情况：只写 3 个“岗位关键场景”的开放性追问（必须让候选人讲亲历、过程、关键决策、量化结果；避免能被AI直接搜到的标准问法）。
