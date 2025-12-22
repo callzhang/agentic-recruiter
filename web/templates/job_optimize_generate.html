@@ -1,0 +1,423 @@
+{% extends "base.html" %}
+
+{% block title %}生成岗位画像 - BOSS招聘助手{% endblock %}
+
+{% block content %}
+<div class="space-y-4">
+    <style>
+        .diff-view { white-space: pre-wrap; word-break: break-word; }
+        .diff-add { color: #15803d; font-weight: 600; }
+        .diff-del { color: #9ca3af; text-decoration: line-through; }
+        .diff-ctx { color: #374151; }
+    </style>
+    <div class="bg-white rounded-lg shadow p-5">
+        <div class="flex items-center justify-between">
+            <div>
+                <h1 class="text-2xl font-bold text-gray-800">生成新版岗位肖像</h1>
+                <p class="text-gray-600 mt-1">
+                    岗位：<span class="font-medium text-gray-800">{{ job.position }}</span>
+                    <span class="text-gray-400">({{ base_job_id }})</span>
+                </p>
+            </div>
+            <div class="flex gap-2">
+                <a href="/jobs/optimize?job_id={{ base_job_id }}"
+                   class="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition">
+                    ← 返回优化页
+                </a>
+                <a href="/jobs?tab={{ base_job_id }}"
+                   class="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition">
+                    返回岗位页
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Progress -->
+    <div id="gen-progress-card" class="bg-white rounded-lg border shadow-sm p-5">
+        <div class="flex items-center justify-between">
+            <div class="font-semibold text-gray-800">生成中（GPT-5.2）</div>
+            <div class="text-sm text-gray-600"><span id="gen-progress-text">0</span>%</div>
+        </div>
+        <div class="mt-3 w-full bg-gray-200 rounded-full h-3 overflow-hidden">
+            <div id="gen-progress-bar" class="h-3 bg-blue-600 rounded-full transition-all duration-300" style="width:0%"></div>
+        </div>
+        <p class="text-xs text-gray-500 mt-2">
+            <span id="gen-estimate-text">预计计算中...</span>（视网络与模型负载而定）。
+        </p>
+    </div>
+
+    <!-- Result -->
+    <div id="gen-result" class="hidden space-y-4">
+        <div class="bg-white rounded-lg border shadow-sm">
+            <div class="flex items-center justify-between border-b bg-gray-100 p-2">
+                <h3 class="font-bold text-gray-800">总体优化建议</h3>
+            </div>
+            <div id="gen-overall-notes" class="p-4 text-sm text-gray-700 whitespace-pre-wrap">暂无</div>
+        </div>
+
+        <div class="bg-white rounded-lg border shadow-sm">
+            <div class="flex items-center justify-between border-b bg-gray-100 p-2">
+                <h3 class="font-bold text-gray-800">对比与编辑（可修改后提交）</h3>
+                <button onclick="publishGeneratedPortrait()"
+                        class="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 transition">
+                    确认提交（发布新版本）
+                </button>
+            </div>
+            <div class="p-4 space-y-4">
+                <p class="text-xs text-gray-500">左侧为当前版本，右侧为生成版本（可编辑）。字符串会做 url decode（若看起来像被编码过）。</p>
+
+                <div id="gen-fields" class="space-y-4"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="/static/vendor/diff.min.js"></script>
+<script>
+const GEN_BASE_JOB_ID = {{ base_job_id | tojson }};
+const GEN_ITEM_IDS = {{ item_ids | tojson }};
+const GEN_EST_SECONDS = 20 + 10 * (GEN_ITEM_IDS?.length || 0);
+
+function _safeDecodeURIComponent(s) {
+    if (typeof s !== 'string') return s;
+    if (!s.includes('%')) return s;
+    try { return decodeURIComponent(s); } catch { return s; }
+}
+
+function _normalizeDisplay(s) {
+    if (s === null || s === undefined) return '';
+    if (typeof s !== 'string') return s;
+    // If strings were double-escaped somewhere, try to make it readable for humans.
+    let out = _safeDecodeURIComponent(s);
+    // Turn literal backslash escapes into real whitespace for readability.
+    out = out.replace(/\\r\\n/g, '\n').replace(/\\n/g, '\n').replace(/\\t/g, '\t');
+    return out;
+}
+
+function _escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = String(text ?? '');
+    return div.innerHTML;
+}
+
+function _appendRationaleCallout(container, text) {
+    const t = String(text || '').trim();
+    if (!t) return;
+
+    const wrap = document.createElement('div');
+    wrap.className = 'mt-2 flex gap-2 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2';
+
+    const icon = document.createElement('div');
+    icon.className = 'text-gray-500 text-xl leading-none select-none';
+    icon.textContent = '❝';
+
+    const body = document.createElement('div');
+    body.className = 'text-sm text-gray-700 whitespace-pre-wrap';
+    body.textContent = t;
+
+    wrap.appendChild(icon);
+    wrap.appendChild(body);
+    container.appendChild(wrap);
+}
+
+function _splitLines(text) {
+    if (!text) return [];
+    return String(text).split(/\r?\n/);
+}
+
+function _renderCharDiffHtml(oldText, newText) {
+    const oldValue = _normalizeDisplay(oldText || '');
+    const newValue = _normalizeDisplay(newText || '');
+    const diffApi = (window.Diff && typeof window.Diff.diffChars === 'function') ? window.Diff : null;
+    if (!diffApi) {
+        return `<span class="diff-ctx">${_escapeHtml(newValue)}</span>`;
+    }
+    const parts = diffApi.diffChars(oldValue, newValue);
+    return parts.map(p => {
+        const v = _escapeHtml(p.value || '');
+        if (p.added) return `<span class="diff-add">${v}</span>`;
+        if (p.removed) return `<span class="diff-del">${v}</span>`;
+        return `<span class="diff-ctx">${v}</span>`;
+    }).join('');
+}
+
+function _buildDiffEditor(fieldKey, currentValue, newValue) {
+    const wrap = document.createElement('div');
+    wrap.className = 'w-full';
+
+    const diffView = document.createElement('div');
+    diffView.className = 'diff-view w-full min-h-[120px] px-3 py-2 border rounded-lg bg-white text-xs font-mono overflow-auto';
+    diffView.innerHTML = _renderCharDiffHtml(currentValue || '', newValue || '');
+
+    const textarea = document.createElement('textarea');
+    textarea.className = 'hidden w-full min-h-[120px] px-3 py-2 border rounded-lg text-xs font-mono focus:ring-2 focus:ring-blue-500 focus:border-blue-500';
+    textarea.dataset.fieldKey = fieldKey;
+    textarea.value = _normalizeDisplay(newValue || '');
+
+    // Live update diff while editing (debounced).
+    let t = null;
+    textarea.addEventListener('input', () => {
+        if (t) clearTimeout(t);
+        t = setTimeout(() => {
+            diffView.innerHTML = _renderCharDiffHtml(currentValue || '', textarea.value || '');
+        }, 120);
+    });
+
+    wrap.appendChild(diffView);
+    wrap.appendChild(textarea);
+    wrap.__diffView = diffView;
+    wrap.__textarea = textarea;
+    wrap.__currentValue = currentValue || '';
+    wrap.__setEditing = (editing) => {
+        if (editing) {
+            diffView.classList.add('hidden');
+            textarea.classList.remove('hidden');
+            textarea.focus();
+        } else {
+            textarea.classList.add('hidden');
+            diffView.classList.remove('hidden');
+            diffView.innerHTML = _renderCharDiffHtml(wrap.__currentValue || '', textarea.value || '');
+        }
+    };
+    wrap.__isEditing = () => !textarea.classList.contains('hidden');
+    return wrap;
+}
+
+function _renderTwoColumnField(container, label, key, currentValue, newValue) {
+    const changed = (currentValue || '') !== (newValue || '');
+    const rationaleText = container.__rationale?.[key] || '';
+    const header = document.createElement('div');
+    header.className = 'flex items-center justify-between';
+    const leftTitle = document.createElement('div');
+    leftTitle.className = 'font-medium text-gray-800';
+    leftTitle.textContent = label;
+
+    const rightControls = document.createElement('div');
+    rightControls.className = 'flex items-center gap-2';
+    const status = document.createElement('div');
+    status.className = `text-xs ${changed ? 'text-amber-700' : 'text-gray-400'}`;
+    status.textContent = changed ? '已变化' : '无变化';
+    const editBtn = document.createElement('button');
+    editBtn.type = 'button';
+    editBtn.className = 'px-2 py-1 text-xs bg-gray-100 hover:bg-gray-200 rounded text-gray-700';
+    editBtn.textContent = '编辑';
+
+    rightControls.appendChild(status);
+    rightControls.appendChild(editBtn);
+    header.appendChild(leftTitle);
+    header.appendChild(rightControls);
+    container.appendChild(header);
+
+    _appendRationaleCallout(container, rationaleText);
+
+    const grid = document.createElement('div');
+    grid.className = 'grid grid-cols-2 gap-3';
+
+    const left = document.createElement('textarea');
+    left.className = 'w-full min-h-[120px] px-3 py-2 border rounded-lg bg-gray-50 text-xs font-mono';
+    left.readOnly = true;
+    left.value = _normalizeDisplay(currentValue || '');
+
+    const right = _buildDiffEditor(key, currentValue || '', newValue || '');
+    editBtn.addEventListener('click', () => {
+        const nowEditing = !right.__isEditing();
+        right.__setEditing(nowEditing);
+        editBtn.textContent = nowEditing ? '预览' : '编辑';
+    });
+
+    grid.appendChild(left);
+    grid.appendChild(right);
+    container.appendChild(grid);
+}
+
+function _renderKeywords(container, currentKeywords, newKeywords) {
+    const rationaleText = container.__rationale?.keywords || '';
+    const norm = (kw) => (kw && typeof kw === 'object') ? kw : { positive: [], negative: [] };
+    const c = norm(currentKeywords);
+    const n = norm(newKeywords);
+
+    const block = document.createElement('div');
+    block.className = 'space-y-2';
+    const header = document.createElement('div');
+    header.className = 'font-medium text-gray-800';
+    header.textContent = 'keywords（逐行编辑）';
+    block.appendChild(header);
+
+    _appendRationaleCallout(block, rationaleText);
+
+    const grid = document.createElement('div');
+    grid.className = 'grid grid-cols-2 gap-3';
+
+    const left = document.createElement('textarea');
+    left.className = 'w-full min-h-[120px] px-3 py-2 border rounded-lg bg-gray-50 text-xs font-mono';
+    left.readOnly = true;
+    left.value = `positive:\\n${(c.positive || []).join('\\n')}\\n\\nnegative:\\n${(c.negative || []).join('\\n')}`;
+
+    const rightText = `positive:\\n${(n.positive || []).join('\\n')}\\n\\nnegative:\\n${(n.negative || []).join('\\n')}`;
+    const right = _buildDiffEditor('keywords', left.value, rightText);
+
+    grid.appendChild(left);
+    grid.appendChild(right);
+    block.appendChild(grid);
+    container.appendChild(block);
+}
+
+function _parseKeywords(text) {
+    const lines = (text || '').split(/\\r?\\n/);
+    let mode = null;
+    const positive = [];
+    const negative = [];
+    for (const raw of lines) {
+        const line = raw.trim();
+        if (!line) continue;
+        if (line.toLowerCase().startsWith('positive')) { mode = 'positive'; continue; }
+        if (line.toLowerCase().startsWith('negative')) { mode = 'negative'; continue; }
+        if (mode === 'positive') positive.push(line);
+        else if (mode === 'negative') negative.push(line);
+    }
+    return { positive, negative };
+}
+
+function _progressByElapsedSeconds(t) {
+    // Phase 1 (0-30s): ease-out to ~95%
+    // Phase 2 (30s+): slow down, asymptotically approach ~99.9% (never reaches 100 until the real result returns)
+    const x = Math.max(0, t);
+    const phase1 = Math.max(20.0, GEN_EST_SECONDS || 30.0);
+    const p1 = 95.0;
+    const pMax = 99.9;
+
+    if (x <= phase1) {
+        const u = x / phase1; // 0..1
+        // easeOutCubic
+        return p1 * (1 - Math.pow(1 - u, 3));
+    }
+
+    const dt = x - phase1;
+    const k2 = 0.08; // smaller => slower approach after 30s
+    return p1 + (pMax - p1) * (1 - Math.exp(-k2 * dt));
+}
+
+async function startGeneration() {
+    const startedAt = Date.now();
+    const bar = document.getElementById('gen-progress-bar');
+    const text = document.getElementById('gen-progress-text');
+
+    let done = false;
+    const timer = setInterval(() => {
+        if (done) return;
+        const t = (Date.now() - startedAt) / 1000.0;
+        const p = _progressByElapsedSeconds(t);
+        const pInt = Math.floor(p);
+        bar.style.width = `${p.toFixed(1)}%`;
+        text.textContent = String(pInt);
+    }, 200);
+
+    try {
+        const resp = await fetch('/jobs/api/optimizations/generate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ job_id: GEN_BASE_JOB_ID, item_ids: GEN_ITEM_IDS }),
+        });
+        const payload = await resp.json();
+        if (!payload?.success) {
+            throw new Error(payload?.error || '生成失败');
+        }
+
+        done = true;
+        clearInterval(timer);
+        bar.style.width = '100%';
+        text.textContent = '100';
+        setTimeout(() => {
+            const card = document.getElementById('gen-progress-card');
+            card?.classList.add('hidden');
+        }, 300);
+
+        renderResult(payload);
+    } catch (e) {
+        done = true;
+        clearInterval(timer);
+        console.error(e);
+        showToast(e.message || '生成失败', 'error');
+    }
+}
+
+function renderResult(payload) {
+    const result = payload.data || {};
+    const currentPortrait = payload.current_job_portrait || {};
+    const generatedPortrait = result.job_portrait || {};
+
+    const rationale = result.rationale;
+    const overallEl = document.getElementById('gen-overall-notes');
+    if (!rationale || typeof rationale === 'string') {
+        overallEl.textContent = rationale || '暂无';
+    } else {
+        overallEl.textContent = String(rationale.overall_notes || '暂无').trim() || '暂无';
+    }
+
+    const fields = document.getElementById('gen-fields');
+    fields.innerHTML = '';
+    fields.__rationale = (rationale && typeof rationale === 'object') ? rationale : {};
+
+    _renderTwoColumnField(fields, 'description', 'description', currentPortrait.description, generatedPortrait.description);
+    _renderTwoColumnField(fields, 'responsibilities', 'responsibilities', currentPortrait.responsibilities, generatedPortrait.responsibilities);
+    _renderTwoColumnField(fields, 'requirements（评分标准）', 'requirements', currentPortrait.requirements, generatedPortrait.requirements);
+    _renderTwoColumnField(fields, 'target_profile', 'target_profile', currentPortrait.target_profile, generatedPortrait.target_profile);
+    _renderKeywords(fields, currentPortrait.keywords, generatedPortrait.keywords);
+    _renderTwoColumnField(fields, 'drill_down_questions', 'drill_down_questions', currentPortrait.drill_down_questions, generatedPortrait.drill_down_questions);
+
+    document.getElementById('gen-result').classList.remove('hidden');
+}
+
+async function publishGeneratedPortrait() {
+    const edited = {};
+    for (const el of document.querySelectorAll('textarea[data-field-key]')) {
+        const key = el.dataset.fieldKey;
+        if (key === 'keywords') {
+            edited.keywords = _parseKeywords(el.value || '');
+        } else {
+            edited[key] = el.value || '';
+        }
+    }
+
+    // keep required fields, position stays on server side
+    const jobPortrait = {
+        description: edited.description || '',
+        responsibilities: edited.responsibilities || '',
+        requirements: edited.requirements || '',
+        target_profile: edited.target_profile || '',
+        keywords: edited.keywords || { positive: [], negative: [] },
+        drill_down_questions: edited.drill_down_questions || '',
+    };
+
+    try {
+        const resp = await fetch('/jobs/api/optimizations/publish', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ job_id: GEN_BASE_JOB_ID, job_portrait: jobPortrait, item_ids: GEN_ITEM_IDS }),
+        });
+        const data = await resp.json();
+        if (!data?.success) {
+            showToast(data?.error || '发布失败', 'error');
+            return;
+        }
+        showToast('已发布新版本，并切换为 current', 'success');
+        setTimeout(() => {
+            window.location.href = `/jobs?tab=${encodeURIComponent(GEN_BASE_JOB_ID)}`;
+        }, 600);
+    } catch (e) {
+        console.error(e);
+        showToast('发布失败（网络/服务异常）', 'error');
+    }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    if (!GEN_ITEM_IDS.length) {
+        showToast('没有选择反馈项，返回优化页重新选择', 'error');
+        return;
+    }
+    const estEl = document.getElementById('gen-estimate-text');
+    if (estEl) estEl.textContent = `预计约 ${GEN_EST_SECONDS} 秒完成`;
+    startGeneration();
+});
+</script>
+{% endblock %}

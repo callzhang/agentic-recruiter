@@ -1,0 +1,313 @@
+{% extends "base.html" %}
+
+{% block title %}优化岗位画像 - BOSS招聘助手{% endblock %}
+
+{% block content %}
+<div class="space-y-4">
+    <div class="bg-white rounded-lg shadow p-5">
+        <div class="flex items-center justify-between">
+            <div>
+                <h1 class="text-2xl font-bold text-gray-800">岗位画像优化</h1>
+                <p class="text-gray-600 mt-1">
+                    岗位：<span class="font-medium text-gray-800">{{ job.position }}</span>
+                    <span class="text-gray-400">({{ base_job_id }})</span>
+                </p>
+            </div>
+            <div class="flex gap-2">
+                <a href="/jobs?tab={{ base_job_id }}"
+                   class="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition">
+                    ← 返回岗位页
+                </a>
+                <a href="/search"
+                   class="px-4 py-2 bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 transition">
+                    去查询页添加反馈
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <div class="grid grid-cols-12 gap-4">
+        <!-- Left: feedback list -->
+        <div class="col-span-4 space-y-3">
+            <div class="bg-white rounded-lg border shadow-sm p-4">
+                <div class="flex items-center justify-between">
+                    <h2 class="text-lg font-semibold text-gray-800">
+                        优化清单
+                        <span class="ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-gray-100 text-gray-700"
+                              id="opt-feedback-count">{{ items | length }}</span>
+                    </h2>
+                    <button onclick="refreshOptimizationList()"
+                            class="px-3 py-1 text-xs bg-gray-100 text-gray-700 rounded hover:bg-gray-200 transition">
+                        刷新
+                    </button>
+                </div>
+                <p class="text-xs text-gray-500 mt-2">
+                    先选中“有问题”的候选人反馈（可多选），再生成新版岗位肖像。
+                </p>
+            </div>
+
+            <div id="opt-feedback-list" class="space-y-2">
+                {% if items %}
+                    {% for it in items %}
+                    <div class="bg-white rounded-lg border shadow-sm p-3 hover:border-blue-300 transition cursor-pointer"
+                         data-item-id="{{ it.id }}"
+                         onclick="selectOptimizationItem('{{ it.id }}')">
+                        <div class="flex items-start justify-between gap-2">
+                            <label class="flex items-start gap-2 cursor-pointer">
+                                <input type="checkbox" class="opt-item-checkbox mt-1" value="{{ it.id }}" onclick="event.stopPropagation()">
+                                <div>
+                                    <div class="font-medium text-gray-800">{{ it.candidate_name or '未命名' }}</div>
+                                    <div class="text-xs text-gray-500 mt-0.5">
+                                        {{ it.job_applied or '' }}
+                                        {% if it.updated_at %} · {{ it.updated_at }}{% endif %}
+                                    </div>
+                                </div>
+                            </label>
+                        </div>
+                        <div class="mt-2 text-xs text-gray-600 line-clamp-3">
+                            {{ it.suggestion or '' }}
+                        </div>
+                        <div class="mt-2 text-xs text-gray-500">
+                            目标分：
+                            {% set ts = it.target_scores or {} %}
+                            overall={{ ts.overall if ts.overall is defined else '-' }},
+                            skill={{ ts.skill if ts.skill is defined else '-' }},
+                            background={{ ts.background if ts.background is defined else '-' }},
+                            startup_fit={{ ts.startup_fit if ts.startup_fit is defined else '-' }}
+                        </div>
+                    </div>
+                    {% endfor %}
+                {% else %}
+                    <div class="bg-white rounded-lg border shadow-sm p-6 text-center text-gray-500">
+                        暂无优化清单。请先去查询页打开候选人详情，点击“评分不准”添加反馈。
+                    </div>
+                {% endif %}
+            </div>
+
+            <div class="bg-white rounded-lg border shadow-sm p-4 space-y-2">
+                <button onclick="goToGeneratePage()"
+                        class="w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition">
+                    生成新版岗位肖像（GPT-5.2）
+                </button>
+                <p class="text-xs text-gray-500">
+                    注意：生成只用于辅助撰写；最终以你确认提交的岗位肖像为准。
+                </p>
+            </div>
+        </div>
+
+        <!-- Right: candidate detail + feedback editor + generator result -->
+        <div class="col-span-8 space-y-4">
+            <div class="bg-white rounded-lg border shadow-sm">
+                <div class="flex items-center justify-between border-b bg-gray-100 p-2">
+                    <h3 class="font-bold text-gray-800">优化建议（可编辑）</h3>
+                    <button onclick="saveOptimizationItem()"
+                            class="px-3 py-1 text-xs bg-green-100 text-green-700 rounded hover:bg-green-200 transition">
+                        保存修改
+                    </button>
+                </div>
+                <div class="p-4 space-y-3">
+                    <div class="grid grid-cols-4 gap-3">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">目标 overall</label>
+                            <input id="opt-edit-overall" type="number" min="1" max="10"
+                                   class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">目标 skill</label>
+                            <input id="opt-edit-skill" type="number" min="1" max="10"
+                                   class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">目标 background</label>
+                            <input id="opt-edit-background" type="number" min="1" max="10"
+                                   class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">目标 startup_fit</label>
+                            <input id="opt-edit-startup-fit" type="number" min="1" max="10"
+                                   class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">建议与理由 *</label>
+                        <textarea id="opt-edit-suggestion"
+                                  rows="4"
+                                  class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"></textarea>
+                    </div>
+                    <input type="hidden" id="opt-active-item-id" value="">
+                </div>
+            </div>
+
+            <div class="bg-white rounded-lg border shadow-sm">
+                <div class="flex items-center justify-between border-b bg-gray-100 p-2">
+                    <h3 class="font-bold text-gray-800">候选人信息（只读）</h3>
+                    <div class="text-xs text-gray-500">复用候选人详情视图</div>
+                </div>
+                <div id="opt-candidate-detail" class="p-2">
+                    <div class="text-center text-gray-500 py-10">请选择左侧一个候选人</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+const OPT_BASE_JOB_ID = {{ base_job_id | tojson }};
+const OPT_ITEMS = {{ items | tojson }};
+let __opt_dirty = false;
+
+function _clampScore(v) {
+    if (v === undefined || v === null || v === '') return null;
+    const n = parseInt(v, 10);
+    if (Number.isNaN(n)) return null;
+    return Math.max(1, Math.min(10, n));
+}
+
+function _getSelectedItemIds() {
+    return Array.from(document.querySelectorAll('.opt-item-checkbox:checked')).map(el => el.value);
+}
+
+async function refreshOptimizationList() {
+    window.location.reload();
+}
+
+function selectOptimizationItem(itemId) {
+    // If current editor has unsaved changes, ask whether to save before switching.
+    const activeId = document.getElementById('opt-active-item-id')?.value;
+    if (__opt_dirty && activeId) {
+        const shouldSave = window.confirm('你有未保存的修改，是否先保存？\n确定=保存并继续；取消=忽略修改并继续');
+        if (shouldSave) {
+            // Fire-and-wait save, then continue selection.
+            saveOptimizationItem({ reload: false, silent: true }).then(() => {
+                __opt_dirty = false;
+                _selectOptimizationItemInternal(itemId);
+            });
+            return;
+        }
+        __opt_dirty = false;
+    }
+    _selectOptimizationItemInternal(itemId);
+}
+
+function _selectOptimizationItemInternal(itemId) {
+    const it = OPT_ITEMS.find(x => x.id === itemId);
+    if (!it) {
+        showToast('未找到该记录', 'error');
+        return;
+    }
+
+    document.getElementById('opt-active-item-id').value = itemId;
+    const ts = it.target_scores || {};
+    document.getElementById('opt-edit-overall').value = ts.overall ?? '';
+    document.getElementById('opt-edit-skill').value = ts.skill ?? '';
+    document.getElementById('opt-edit-background').value = ts.background ?? '';
+    document.getElementById('opt-edit-startup-fit').value = ts.startup_fit ?? '';
+    document.getElementById('opt-edit-suggestion').value = it.suggestion || '';
+    __opt_dirty = false;
+
+    const cid = it.candidate_id;
+    if (cid) {
+        loadCandidateDetail(cid);
+    }
+}
+
+async function loadCandidateDetail(candidateId) {
+    const container = document.getElementById('opt-candidate-detail');
+    container.innerHTML = '<div class="text-center text-gray-500 py-10">加载中...</div>';
+    try {
+        const resp = await fetch(`/search/detail/${encodeURIComponent(candidateId)}`);
+        if (!resp.ok) throw new Error('failed');
+        const html = await resp.text();
+        container.innerHTML = html;
+    } catch (e) {
+        console.error(e);
+        container.innerHTML = '<div class="text-center text-gray-500 py-10">加载失败</div>';
+    }
+}
+
+async function saveOptimizationItem({ reload = true, silent = false } = {}) {
+    const itemId = document.getElementById('opt-active-item-id').value;
+    if (!itemId) {
+        if (!silent) showToast('请先选择一个候选人记录', 'error');
+        return;
+    }
+    const suggestion = document.getElementById('opt-edit-suggestion').value.trim();
+    if (!suggestion || suggestion.length < 5) {
+        if (!silent) showToast('请填写建议与理由（至少5个字）', 'error');
+        return;
+    }
+    const targetScores = {
+        overall: _clampScore(document.getElementById('opt-edit-overall').value),
+        skill: _clampScore(document.getElementById('opt-edit-skill').value),
+        background: _clampScore(document.getElementById('opt-edit-background').value),
+        startup_fit: _clampScore(document.getElementById('opt-edit-startup-fit').value),
+    };
+    try {
+        const resp = await fetch('/jobs/api/optimizations/update', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: itemId, target_scores: targetScores, suggestion }),
+        });
+        const data = await resp.json();
+        if (!data?.success) {
+            if (!silent) showToast(data?.error || '保存失败', 'error');
+            return;
+        }
+        // Update local cache so subsequent selections use latest data without reload.
+        const updated = data?.data;
+        if (updated) {
+            const idx = OPT_ITEMS.findIndex(x => x.id === itemId);
+            if (idx !== -1) OPT_ITEMS[idx] = updated;
+        }
+        __opt_dirty = false;
+        if (!silent) showToast('已保存', 'success');
+        if (reload) setTimeout(() => window.location.reload(), 200);
+    } catch (e) {
+        console.error(e);
+        if (!silent) showToast('保存失败（网络/服务异常）', 'error');
+    }
+}
+
+function goToGeneratePage() {
+    const ids = _getSelectedItemIds();
+    if (!ids.length) {
+        showToast('请先勾选要用于优化的候选人反馈（可多选）', 'error');
+        return;
+    }
+
+    // Auto-save current edits if dirty, so we don't lose user effort.
+    const activeId = document.getElementById('opt-active-item-id')?.value;
+    if (__opt_dirty && activeId) {
+        saveOptimizationItem({ reload: false, silent: true }).then(() => {
+            const qp = encodeURIComponent(ids.join(','));
+            window.location.href = `/jobs/optimize/generate?job_id=${encodeURIComponent(OPT_BASE_JOB_ID)}&item_ids=${qp}`;
+        });
+        return;
+    }
+
+    const qp = encodeURIComponent(ids.join(','));
+    window.location.href = `/jobs/optimize/generate?job_id=${encodeURIComponent(OPT_BASE_JOB_ID)}&item_ids=${qp}`;
+}
+
+function _markDirty() {
+    __opt_dirty = true;
+}
+
+// Dirty tracking for editor fields
+document.addEventListener('DOMContentLoaded', () => {
+    for (const id of ['opt-edit-overall', 'opt-edit-skill', 'opt-edit-background', 'opt-edit-startup-fit', 'opt-edit-suggestion']) {
+        const el = document.getElementById(id);
+        if (!el) continue;
+        el.addEventListener('input', _markDirty);
+        el.addEventListener('change', _markDirty);
+    }
+});
+
+// Warn on refresh/close when there are unsaved edits.
+window.addEventListener('beforeunload', (e) => {
+    if (!__opt_dirty) return;
+    e.preventDefault();
+    e.returnValue = '';
+});
+</script>
+{% endblock %}
