@@ -127,6 +127,9 @@ async def search_candidate_detail(request: Request, candidate_id: str):
     """Return candidate detail view in read-only mode for the search page."""
     with profile_operation(f"search_candidate_detail({candidate_id})", log_threshold_ms=0.0) as profiler:
         profiler.step("start")
+
+        context = (request.query_params.get("context") or "").strip().lower()
+        allow_optimization_feedback = context != "optimize"
         
         # Search candidate by ID (database query, no browser lock needed)
         profiler.step("before_db_query")
@@ -166,6 +169,7 @@ async def search_candidate_detail(request: Request, candidate_id: str):
                 "full_resume": full_resume,
                 "candidate": candidate,
                 "view_mode": "readonly",
+                "allow_optimization_feedback": allow_optimization_feedback,
             })
         
         profiler.step("before_template_render")
@@ -173,4 +177,3 @@ async def search_candidate_detail(request: Request, candidate_id: str):
         profiler.step("after_template_render")
         
         return HTMLResponse(content=html_content)
-

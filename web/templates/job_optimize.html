@@ -215,7 +215,7 @@ async function loadCandidateDetail(candidateId) {
     const container = document.getElementById('opt-candidate-detail');
     container.innerHTML = '<div class="text-center text-gray-500 py-10">加载中...</div>';
     try {
-        const resp = await fetch(`/search/detail/${encodeURIComponent(candidateId)}`);
+        const resp = await fetch(`/search/detail/${encodeURIComponent(candidateId)}?context=optimize`);
         if (!resp.ok) throw new Error('failed');
         const html = await resp.text();
         container.innerHTML = html;

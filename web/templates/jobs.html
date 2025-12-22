@@ -103,10 +103,23 @@
                 <h1 class="text-3xl font-bold text-gray-800">岗位画像</h1>
                 <p class="text-gray-600 mt-2">管理招聘岗位的背景、职责、要求和理想人选画像</p>
             </div>
-            <button onclick="createNewJob()"
-                    class="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium">
-                ➕ 创建新岗位
-            </button>
+            <div class="flex items-center gap-3">
+                <button type="button"
+                        id="jobs-optimize-btn"
+                        disabled
+                        title="正在读取人类反馈数据..."
+                        class="relative px-6 py-3 rounded-lg font-medium shadow-sm bg-gray-200 text-gray-500 cursor-not-allowed">
+                    <span id="jobs-optimize-label">优化（读取中）</span>
+                    <span id="jobs-optimize-badge"
+                          class="hidden absolute -top-2 -right-2 min-w-[18px] h-[18px] px-1 rounded-full bg-red-600 text-white text-[11px] leading-[18px] text-center">
+                        0
+                    </span>
+                </button>
+                <button onclick="createNewJob()"
+                        class="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium">
+                    ➕ 创建新岗位
+                </button>
+            </div>
         </div>
     </div>
     
@@ -290,6 +303,7 @@ function switchToJob(jobIndex) {
         url.searchParams.delete('tab');
         // Load new job form
         loadNewJobForm();
+        updateOptimizeButtonState(null);
     }
     window.history.pushState({}, '', url);
 }
@@ -678,6 +692,9 @@ async function loadJobForm(job) {
         versions: versions,
         isCurrent: isCurrent
     });
+
+    // Load optimization feedback count and update the optimize button state.
+    updateOptimizeButtonState(baseJobId);
     
     // Initialize tag editors with existing data
     setTimeout(() => {
@@ -707,6 +724,68 @@ async function loadJobForm(job) {
         
         setTagsWhenReady();
     }, 200);
+}
+
+async function updateOptimizeButtonState(baseJobId) {
+    const btn = document.getElementById('jobs-optimize-btn');
+    const badge = document.getElementById('jobs-optimize-badge');
+    const label = document.getElementById('jobs-optimize-label');
+    if (!btn) return;
+
+    if (!baseJobId) {
+        btn.disabled = true;
+        if (label) label.textContent = '优化';
+        btn.title = '请选择岗位后读取人类反馈数据';
+        btn.className = 'relative px-6 py-3 rounded-lg font-medium shadow-sm bg-gray-200 text-gray-500 cursor-not-allowed';
+        if (badge) badge.classList.add('hidden');
+        btn.onclick = null;
+        return;
+    }
+
+    // Initial state: disabled + loading.
+    btn.disabled = true;
+    if (label) label.textContent = '优化（读取中）';
+    btn.title = '正在读取人类反馈数据...';
+    btn.className = 'relative px-6 py-3 rounded-lg font-medium shadow-sm bg-gray-200 text-gray-500 cursor-not-allowed';
+    if (badge) badge.classList.add('hidden');
+
+    try {
+        const resp = await fetch(`/jobs/api/optimizations/count?job_id=${encodeURIComponent(baseJobId)}`);
+        const data = await resp.json();
+        const count = parseInt(data?.data?.count ?? 0, 10) || 0;
+
+        // Always restore base button text
+        if (label) label.textContent = '优化';
+
+        if (count <= 0) {
+            btn.disabled = true;
+            btn.title = '优化清单为空：请去“查询”页打开候选人详情，点击“评分不准”添加反馈';
+            btn.className = 'relative px-6 py-3 rounded-lg font-medium shadow-sm bg-gray-200 text-gray-500 cursor-not-allowed';
+            if (badge) badge.classList.add('hidden');
+            btn.onclick = null;
+            return;
+        }
+
+        // Has feedback: enable + show badge, click to optimize directly.
+        btn.disabled = false;
+        btn.title = '';
+        btn.className = 'relative px-6 py-3 rounded-lg font-medium shadow-sm bg-green-600 text-white hover:bg-green-700';
+        if (badge) {
+            badge.textContent = String(count);
+            badge.classList.remove('hidden');
+        }
+        btn.onclick = () => {
+            window.location.href = `/jobs/optimize?job_id=${encodeURIComponent(baseJobId)}`;
+        };
+    } catch (e) {
+        console.error('Failed to load optimization count:', e);
+        btn.disabled = true;
+        if (label) label.textContent = '优化';
+        btn.title = '读取人类反馈失败，请刷新页面重试';
+        btn.className = 'relative px-6 py-3 rounded-lg font-medium shadow-sm bg-gray-200 text-gray-500 cursor-not-allowed';
+        if (badge) badge.classList.add('hidden');
+        btn.onclick = null;
+    }
 }
 
 // Load new job form

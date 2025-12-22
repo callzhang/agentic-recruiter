@@ -251,9 +251,9 @@ function _renderKeywords(container, currentKeywords, newKeywords) {
     const left = document.createElement('textarea');
     left.className = 'w-full min-h-[120px] px-3 py-2 border rounded-lg bg-gray-50 text-xs font-mono';
     left.readOnly = true;
-    left.value = `positive:\\n${(c.positive || []).join('\\n')}\\n\\nnegative:\\n${(c.negative || []).join('\\n')}`;
+    left.value = `positive:\n${(c.positive || []).join('\n')}\n\nnegative:\n${(c.negative || []).join('\n')}`;
 
-    const rightText = `positive:\\n${(n.positive || []).join('\\n')}\\n\\nnegative:\\n${(n.negative || []).join('\\n')}`;
+    const rightText = `positive:\n${(n.positive || []).join('\n')}\n\nnegative:\n${(n.negative || []).join('\n')}`;
     const right = _buildDiffEditor('keywords', left.value, rightText);
 
     grid.appendChild(left);
@@ -263,7 +263,8 @@ function _renderKeywords(container, currentKeywords, newKeywords) {
 }
 
 function _parseKeywords(text) {
-    const lines = (text || '').split(/\\r?\\n/);
+    const normalized = String(text || '').replace(/\\r\\n/g, '\n').replace(/\\n/g, '\n');
+    const lines = normalized.split(/\r?\n/);
     let mode = null;
     const positive = [];
     const negative = [];

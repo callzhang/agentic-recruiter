@@ -157,17 +157,32 @@ def list_feedback_advanced(job_id: str, *, limit: int = 200, include_closed: boo
     if not include_closed:
         filter_expr = f'{filter_expr} and (status != "closed")'
     try:
+        # NOTE: MilvusClient.query does not support server-side sorting for this client.
+        # Some code used `output_fields_order`, but it's not a real PyMilvus parameter
+        # and will be ignored via **kwargs, resulting in unpredictable ordering.
+        # We fetch a reasonably large window and sort client-side by `updated_at`.
+        fetch_limit = 1000
         results = _client.query(
             collection_name=_collection_name,
             filter=filter_expr,
             output_fields=_readable_fields,
-            limit=min(max(limit, 1), 500),
-            output_fields_order="updated_at DESC",
+            limit=fetch_limit,
         )
     except Exception as exc:
         logger.exception("Failed to list feedback: %s", exc)
         return []
-    return [{k: v for k, v in (r or {}).items() if v or v == 0} for r in results or []]
+
+    cleaned = [{k: v for k, v in (r or {}).items() if v or v == 0} for r in results or []]
+    cleaned.sort(
+        key=lambda r: (
+            str(r.get("updated_at") or ""),
+            str(r.get("created_at") or ""),
+            str(r.get("id") or ""),
+        ),
+        reverse=True,
+    )
+    max_out = min(max(int(limit or 0), 1), 500)
+    return cleaned[:max_out]
 
 
 def count_feedback(job_id: str) -> int:

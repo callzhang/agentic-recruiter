@@ -6,7 +6,9 @@
     - "full_resume": data.pop("full_resume"),
     - "candidate": data,
 -->
-<div id="candidate-detail-root" class="space-y-6" data-view-mode="{{ view_mode or 'interactive' }}">
+{% set view_mode = view_mode or 'interactive' %}
+{% set allow_optimization_feedback = allow_optimization_feedback if allow_optimization_feedback is defined else (view_mode != 'readonly') %}
+<div id="candidate-detail-root" class="space-y-6" data-view-mode="{{ view_mode }}">
     <!-- Header -->
     <div class="flex justify-between items-start">
         <div class="flex items-center gap-2">
@@ -145,12 +147,14 @@
                 <!-- Will be populated by JavaScript based on analysis result -->
             </div>
             <div class="flex-1"></div>
-            {% if view_mode != 'readonly' %}
+            {% if allow_optimization_feedback %}
             <button onclick="openOptimizationFeedbackModal()"
                     class="px-3 py-1 text-xs bg-amber-100 text-amber-800 rounded hover:bg-amber-200 transition flex items-center gap-1 mr-2">
                 <span>✍️</span>
                 <span>评分不准</span>
             </button>
+            {% endif %}
+            {% if view_mode != 'readonly' %}
             <button onclick="startAnalysis()"
                     class="px-3 py-1 text-xs bg-purple-100 text-purple-700 rounded hover:bg-purple-200 transition flex items-center gap-1">
                 <span>🔄</span>
@@ -167,7 +171,7 @@
         </div>
     </div>
 
-    {% if view_mode != 'readonly' %}
+    {% if allow_optimization_feedback %}
     <!-- Optimization Feedback Modal (评分不准) -->
     <div id="optimization-feedback-modal"
          class="fixed inset-0 z-50 hidden items-center justify-center bg-black bg-opacity-50 p-4"
