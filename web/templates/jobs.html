@@ -109,7 +109,7 @@
                         disabled
                         title="正在读取人类反馈数据..."
                         class="relative px-6 py-3 rounded-lg font-medium shadow-sm bg-gray-200 text-gray-500 cursor-not-allowed">
-                    <span id="jobs-optimize-label">优化（读取中）</span>
+                    <span id="jobs-optimize-label">优化肖像（读取反馈中）</span>
                     <span id="jobs-optimize-badge"
                           class="hidden absolute -top-2 -right-2 min-w-[18px] h-[18px] px-1 rounded-full bg-red-600 text-white text-[11px] leading-[18px] text-center">
                         0
@@ -734,7 +734,7 @@ async function updateOptimizeButtonState(baseJobId) {
 
     if (!baseJobId) {
         btn.disabled = true;
-        if (label) label.textContent = '优化';
+        if (label) label.textContent = '优化肖像';
         btn.title = '请选择岗位后读取人类反馈数据';
         btn.className = 'relative px-6 py-3 rounded-lg font-medium shadow-sm bg-gray-200 text-gray-500 cursor-not-allowed';
         if (badge) badge.classList.add('hidden');
@@ -744,7 +744,7 @@ async function updateOptimizeButtonState(baseJobId) {
 
     // Initial state: disabled + loading.
     btn.disabled = true;
-    if (label) label.textContent = '优化（读取中）';
+    if (label) label.textContent = '优化肖像（读取反馈中）';
     btn.title = '正在读取人类反馈数据...';
     btn.className = 'relative px-6 py-3 rounded-lg font-medium shadow-sm bg-gray-200 text-gray-500 cursor-not-allowed';
     if (badge) badge.classList.add('hidden');
@@ -755,7 +755,7 @@ async function updateOptimizeButtonState(baseJobId) {
         const count = parseInt(data?.data?.count ?? 0, 10) || 0;
 
         // Always restore base button text
-        if (label) label.textContent = '优化';
+        if (label) label.textContent = '优化肖像';
 
         if (count <= 0) {
             btn.disabled = true;
@@ -780,7 +780,7 @@ async function updateOptimizeButtonState(baseJobId) {
     } catch (e) {
         console.error('Failed to load optimization count:', e);
         btn.disabled = true;
-        if (label) label.textContent = '优化';
+        if (label) label.textContent = '优化肖像';
         btn.title = '读取人类反馈失败，请刷新页面重试';
         btn.className = 'relative px-6 py-3 rounded-lg font-medium shadow-sm bg-gray-200 text-gray-500 cursor-not-allowed';
         if (badge) badge.classList.add('hidden');
