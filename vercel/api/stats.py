@@ -445,7 +445,7 @@ def get_all_jobs() -> List[Dict[str, Any]]:
     results = client.query(
         collection_name=JOB_COLLECTION_NAME,
         filter="current == true",
-        output_fields=["job_id", "position", "notification"],
+        output_fields=["job_id", "position", "notification", "status"],
         limit=1000,
     )
     
@@ -553,7 +553,10 @@ def compile_all_jobs() -> Dict[str, Any]:
         position = job.get("position") or job.get("job_id")
         if not position:
             continue
-        stats.append(compile_job_stats(position))
+        job_stats = compile_job_stats(position)
+        # Add job status to stats for filtering
+        job_stats["status"] = job.get("status", "active")
+        stats.append(job_stats)
     best = max(stats, key=lambda s: s["today"]["metric"], default=None)
     return {"jobs": stats, "best": best}
 
@@ -1044,6 +1047,14 @@ def send_daily_reports() -> Dict[str, Any]:
 
     # 2. Send individual job reports (raises on first failure)
     for job_index, job_stat in enumerate(stats["jobs_serialized"]):
+        # Skip inactive jobs
+        job_status = job_stat.get("status", "active")
+        if job_status == "inactive":
+            print(
+                f"Skipping job report for inactive job: {job_stat.get('job', 'unknown')}",
+                file=sys.stderr,
+            )
+            continue
         # Keep quiet per-job; failures will raise with context.
         job_result = send_job_report(job_index, stats=stats)
         results["job_reports_sent"] += 1 if job_result["sent"] else 0
