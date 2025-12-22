@@ -96,6 +96,7 @@
                 完整简历
             </button>
             <div class="flex-1"></div>
+            {% if view_mode != 'readonly' %}
             <button 
                 id="fetch-online-resume-btn"
                 onclick="fetchOnlineResume()"
@@ -110,6 +111,7 @@
                 <span>🔄</span>
                 <span>重新获取完整简历</span>
             </button>
+            {% endif %}
         </div>
         <!-- Tab Content -->
         <div id="resume-content" class="p-2"> 
@@ -140,11 +142,13 @@
                 <!-- Will be populated by JavaScript based on analysis result -->
             </div>
             <div class="flex-1"></div>
+            {% if view_mode != 'readonly' %}
             <button onclick="startAnalysis()"
                     class="px-3 py-1 text-xs bg-purple-100 text-purple-700 rounded hover:bg-purple-200 transition flex items-center gap-1">
                 <span>🔄</span>
                 <span>重新分析</span>
             </button>
+            {% endif %}
         </div>
         <div id="analysis-content" class="p-2">
             {% if analysis %}
