@@ -29,6 +29,7 @@ browser:
 zilliz:
   candidate_collection_name: CN_candidates
   job_collection_name: CN_jobs
+  job_optimization_collection_name: CN_job_optimizations
   embedding_model: text-embedding-3-small
   embedding_dim: 1536
   similarity_top_k: 5

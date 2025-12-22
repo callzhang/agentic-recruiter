@@ -7,6 +7,7 @@ vendor/get_jobs/
 __pycache__/
 config/secrets.yaml
 data/state.json
+data/job_optimization_feedback.json
 screenshots/
 .DS_Store
 .langgraph_api/

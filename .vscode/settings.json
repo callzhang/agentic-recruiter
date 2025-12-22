@@ -2,5 +2,8 @@
     "chatgpt.openOnStartup": true,
     "zenMode.hideActivityBar": false,
     "workbench.sideBar.location": "left",
-    "workbench.activityBar.orientation": "vertical"
+    "workbench.activityBar.orientation": "vertical",
+    "python.analysis.extraPaths": ["${workspaceFolder}"],
+    "python.analysis.typeCheckingMode": "basic",
+    "python.analysis.autoImportCompletions": true
 }
