@@ -161,9 +161,10 @@ The deployment includes a daily report feature that automatically sends statisti
 1. **Vercel Cron Jobs** automatically calls `/api/send-daily-report` daily at UTC 23:00 (7:00 AM Beijing time)
 2. The function generates and sends:
    - **1 overall report**: Summary of all jobs, sent to default DingTalk webhook (from `DINGTALK_WEBHOOK` environment variable)
-   - **N job reports**: Individual report for each job, sent to:
+   - **N job reports**: Individual report for each **active** job, sent to:
      - Job-specific DingTalk webhook (if configured in job's `notification` field)
      - Default DingTalk webhook (fallback if job doesn't have notification config)
+   - **Note**: Jobs with `status` set to `"inactive"` are automatically skipped and will not receive daily reports
 
 ### Configuration
 
@@ -183,8 +184,14 @@ The deployment includes a daily report feature that automatically sends statisti
      ```
    - If a job has `notification` configured, its report will be sent to that webhook
    - Otherwise, it falls back to the default webhook
+   
+3. **Job Status** (optional):
+   - Each job can have a `status` field in the job collection:
+     - `"active"` (default): Job will receive daily reports
+     - `"inactive"`: Job will **not** receive daily reports (skipped automatically)
+   - To set a job as inactive, update the job's `status` field to `"inactive"` in the jobs editor
 
-3. **Cron Schedule**:
+4. **Cron Schedule**:
    - Configured in `vercel.json`:
      ```json
      {

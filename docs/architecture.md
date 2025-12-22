@@ -107,6 +107,11 @@ Zilliz 数据存储
 - 岗位信息版本管理
 - 支持岗位版本历史（`job_id_v1`, `job_id_v2`, ...）
 - `current` 字段标识当前使用的版本
+- **岗位状态管理**（v2.6.2+）：
+  - `status` 字段：`"active"`（默认）或 `"inactive"`
+  - `metadata` 字段：用于存储额外的灵活数据
+  - 只更新 `status` 或 `metadata` 时不会创建新版本，直接修改当前版本
+  - `status` 为 `"inactive"` 的岗位不会收到 Vercel 定时任务发送的每日报告
 - 内置 OpenAI 嵌入函数（`text-embedding-3-small`）
 - 自动向量生成
 
@@ -416,6 +421,7 @@ settings.get_zilliz_config()
 | AI 助手 | ✅ | OpenAI Responses API + Zilliz |
 | Agent 系统 | ✅ | LangGraph 双 Agent 架构 |
 | 岗位版本管理 | ✅ | 支持版本历史和切换 |
+| 岗位状态管理 | ✅ | 支持 active/inactive 状态，控制每日报告（v2.6.2+） |
 | DingTalk 通知 | ✅ | 自动通知优质候选人 |
 | Sentry 追踪 | ✅ | 错误监控 |
 
@@ -448,8 +454,8 @@ Vercel 部署使用 `BaseHTTPRequestHandler` 模式，而非 FastAPI：
 
 ## 版本
 
-**当前版本**: v2.6.1+  
-**最后更新**: 2025-12
+**当前版本**: v2.6.2+  
+**最后更新**: 2025-12-21
 
 ---
 

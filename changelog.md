@@ -1,5 +1,38 @@
 # 更新日志
 
+## v2.6.2 (2025-12-21) - Job Status 功能与每日报告优化
+
+### ✨ 新功能
+
+#### Job Status 管理
+- **添加 job status 字段支持**
+  - 在 `CN_jobs` collection 中添加 `status` 和 `metadata` 字段
+  - `status` 支持 `"active"` (默认) 和 `"inactive"` 两种状态
+  - `metadata` 字段用于存储额外的灵活数据
+  - 在 jobs 编辑页面添加状态选择器，可设置岗位为激活或停用
+  - 只更新 status 时不会创建新版本，直接修改当前版本
+
+#### 每日报告优化
+- **根据 job status 过滤报告**
+  - 当 job 的 `status` 设置为 `"inactive"` 时，自动跳过该 job 的每日报告发送
+  - 只有 `status` 为 `"active"` 的 job 会收到每日报告
+  - 在 `vercel/api/stats.py` 中实现状态检查和过滤逻辑
+
+### 🔧 数据库迁移
+
+- **执行数据迁移**
+  - 创建迁移脚本备份旧数据到 `CN_jobs_20251221_115634`
+  - 创建新 collection 包含 `status` 和 `metadata` 字段
+  - 迁移所有现有数据，默认 `status` 为 `"active"`，`metadata` 为 `{}`
+  - 验证迁移完整性，确保所有记录正确迁移
+
+### 📝 文档更新
+
+- **更新 Vercel 文档**
+  - 在 `vercel/README.md` 中添加 job status 配置说明
+  - 说明 inactive jobs 不会收到每日报告
+  - 添加如何设置 job status 的说明
+
 ## v2.6.1 (2025-12-18) - 跟进消息生成与搜索功能优化
 
 ### ✨ 新功能
