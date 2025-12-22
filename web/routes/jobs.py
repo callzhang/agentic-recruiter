@@ -13,7 +13,11 @@ from pydantic import BaseModel, Field
 
 from src.global_logger import get_logger
 from src.jobs_store import (
-    get_all_jobs, get_job_by_id, insert_job, update_job as update_job_store,
+    get_all_jobs,
+    get_job_by_id,
+    get_job_by_versioned_id,
+    insert_job,
+    update_job as update_job_store,
     delete_job as delete_job_store, delete_job_version,
     get_job_versions, switch_job_version, get_base_job_id
 )
@@ -600,12 +604,16 @@ async def api_list_jobs():
 
 @router.get("/api/{job_id}", response_class=JSONResponse)
 async def api_get_job(job_id: str):
-    """API endpoint to get specific job (returns current version)."""
-    # Extract base job_id (remove _vN suffix if present) - pure function, very fast
-    base_job_id = get_base_job_id(job_id)
-    
-    # Get job (database query, no browser lock needed)
-    job = get_job_by_id(base_job_id)
+    """API endpoint to get a job.
+
+    - If `job_id` is versioned (ends with `_vN`), returns that exact version.
+    - Otherwise, returns the current version for the base job_id.
+    """
+    if re.search(r"_v\d+$", job_id or ""):
+        job = get_job_by_versioned_id(job_id)
+    else:
+        base_job_id = get_base_job_id(job_id)
+        job = get_job_by_id(base_job_id)
     
     if not job:
         return JSONResponse(

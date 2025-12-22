@@ -88,12 +88,37 @@ npm install -g vercel
 
 # Run local dev server
 cd vercel
-vercel dev
+
+# (Recommended) Use the safety wrapper to avoid "hangs" caused by iCloud
+# `dataless` lockfiles in parent directories on macOS:
+chmod +x ./vercel_safe.sh
+./vercel_safe.sh dev
+# If you run it in a non-interactive environment and see a confirmation error,
+# add `--yes`:
+# ./vercel_safe.sh dev --yes
 ```
 
 The pages will be available at:
 - Homepage: `http://localhost:3000`
 - Jobs Editor: `http://localhost:3000/jobs`
+
+### Troubleshooting: `vercel dev` / `vercel --prod` hangs
+
+On macOS, if your repo is under an iCloud-managed folder (commonly `~/Documents`),
+some files may become iCloud "dataless" placeholders. If Vercel/Node tooling tries
+to read such a lockfile (e.g. a parent `package-lock.json`), the read can block
+waiting for iCloud to download it, making Vercel commands appear to freeze.
+
+Check (from `vercel/`):
+
+```bash
+./vercel_safe.sh doctor
+```
+
+Fix options:
+- Download the reported lockfile (or mark its folder as “Always Keep on This Device”)
+- Move the repo to a non‑iCloud folder (e.g. `~/Dev/...`)
+- Remove/rename the unneeded lockfile so it won’t be detected
 
 ## API Endpoints
 
@@ -251,4 +276,3 @@ For production use:
 1. Add authentication (e.g., Vercel's password protection)
 2. Use Vercel's access control features
 3. Restrict API endpoints if needed
-

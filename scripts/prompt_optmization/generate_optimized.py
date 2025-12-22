@@ -37,7 +37,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from src.config import get_openai_config
 from src.global_logger import logger
-from src.prompts.assistant_actions_prompts import AnalysisSchema, ChatActionSchema
+from src.prompts.assistant_actions_prompts import ACTION_PROMPTS as MODULE_ACTION_PROMPTS, AnalysisSchema, ChatActionSchema
 
 try:
     from openai import OpenAI  # type: ignore
@@ -441,7 +441,7 @@ def main() -> int:
     parser.add_argument(
         "--prompt-source",
         default="md",
-        choices=["optimized_py", "md"],
+        choices=["optimized_py", "md", "module"],
         help="Where to load ACTION_PROMPTS from (default: scripts/prompt_optmization/assistant_actions_prompts.md)",
     )
     parser.add_argument(
@@ -471,6 +471,8 @@ def main() -> int:
         if not prompt_py.exists():
             raise SystemExit(f"prompt_optimized.py not found: {prompt_py}")
         prompts = _load_action_prompts_from_python(prompt_py)
+    elif args.prompt_source == "module":
+        prompts = dict(MODULE_ACTION_PROMPTS)
     else:
         prompts = _load_action_prompts_from_md(Path(args.assistant_prompts_md))
 

@@ -415,7 +415,7 @@ async function process_candidate() {
         [newStage, currentScore, analysis] = determineStage();
         let isFullAnalysis = analysis?.resume_type === 'full';
         let needReply = await shouldReply();
-        const mode = getCandidateData('mode');
+        const {mode, name, job_applied, notified} = getCandidateData();
         const handleChatAction = async (gen) => {
             const action = gen?.action || '';
             if (action === 'PASS') {
@@ -430,7 +430,7 @@ async function process_candidate() {
             if (action === 'CONTACT') {
                 newStage = 'CONTACT';
                 if (!getCandidateData('notified')) {
-                    await sendDingNotification(analysis, getCandidateData('name'), getCandidateData('job_applied'));
+                    await sendDingNotification(analysis, name, job_applied);
                 }
                 await greetAndSendMessage();
                 if (mode !== 'recommend') {
@@ -441,7 +441,6 @@ async function process_candidate() {
             await greetAndSendMessage();
             return false;
         };
-
         // Hard stop: score-based PASS (must still emit completion event for batch runner)
         if (currentScore <= 4) {
             await passCandidate('分数低于 4，不匹配');
@@ -854,7 +853,6 @@ function determineStage() {
 }
 
 async function passCandidate(reason = '') {
-    debugger;
     url = '/candidates/pass';
     const values = getCandidateData();
     const chat_id = values.chat_id;
@@ -1095,8 +1093,13 @@ function updateCopyLinkButton() {
 // UI Helper Functions
 // ============================================================================
 
-let __optimization_jobs_cache = null;
-let __resolved_optimization_job_id = null;
+// Use window object to avoid redeclaration errors when HTMX swaps content
+if (typeof window.__optimization_jobs_cache === 'undefined') {
+    window.__optimization_jobs_cache = null;
+}
+if (typeof window.__resolved_optimization_job_id === 'undefined') {
+    window.__resolved_optimization_job_id = null;
+}
 
 async function openOptimizationFeedbackModal() {
     const modal = document.getElementById('optimization-feedback-modal');
@@ -1128,22 +1131,22 @@ function getCurrentAnalysisForOptimization() {
 }
 
 async function ensureOptimizationJobsLoaded() {
-    if (__optimization_jobs_cache) return __optimization_jobs_cache;
+    if (window.__optimization_jobs_cache) return window.__optimization_jobs_cache;
     try {
         const resp = await fetch('/jobs/api/list');
         const data = await resp.json();
         if (!data?.success) throw new Error(data?.error || 'failed');
-        __optimization_jobs_cache = data.data || [];
+        window.__optimization_jobs_cache = data.data || [];
     } catch (e) {
         console.error('Failed to load jobs:', e);
-        __optimization_jobs_cache = [];
+        window.__optimization_jobs_cache = [];
     }
 
-    return __optimization_jobs_cache;
+    return window.__optimization_jobs_cache;
 }
 
 function _normalizeText(s) {
-    return (s || '').toString().replace(/\\s+/g, '').trim().toLowerCase();
+    return (s || '').toString().replace(/\s+/g, '').trim().toLowerCase();
 }
 
 function _getOptScoreInputValue(id) {
@@ -1155,7 +1158,7 @@ function _getOptScoreInputValue(id) {
 }
 
 async function resolveOptimizationJobIdAndRender() {
-    __resolved_optimization_job_id = null;
+    window.__resolved_optimization_job_id = null;
     const display = document.getElementById('optimization-job-display');
     const contextJobId = (getCandidateData('job_id') || '').trim();
     const jobApplied = (getCandidateData('job_applied') || '').trim();
@@ -1164,12 +1167,12 @@ async function resolveOptimizationJobIdAndRender() {
 
     // Prefer explicit job_id from context (candidates page sets it).
     if (contextJobId) {
-        const baseId = contextJobId.replace(/_v\\d+$/, '');
-        const matchedById = (__optimization_jobs_cache || []).find(j => {
-            const jBase = (j.base_job_id || (j.job_id || '').replace(/_v\\d+$/, '')).trim();
+        const baseId = contextJobId.replace(/_v\d+$/, '');
+        const matchedById = (window.__optimization_jobs_cache || []).find(j => {
+            const jBase = (j.base_job_id || (j.job_id || '').replace(/_v\d+$/, '')).trim();
             return jBase === baseId;
         });
-        __resolved_optimization_job_id = baseId;
+        window.__resolved_optimization_job_id = baseId;
         display.textContent = matchedById ? `${matchedById.position || baseId} (${baseId})` : baseId;
         return baseId;
     }
@@ -1181,15 +1184,15 @@ async function resolveOptimizationJobIdAndRender() {
     }
 
     const normalizedJobApplied = _normalizeText(jobApplied);
-    const matched = (__optimization_jobs_cache || []).find(j => _normalizeText(j.position) === normalizedJobApplied);
+    const matched = (window.__optimization_jobs_cache || []).find(j => _normalizeText(j.position) === normalizedJobApplied);
 
     if (!matched) {
-        display.textContent = `⚠️ 未找到匹配岗位：${jobApplied}（请先在“岗位画像”页创建同名岗位）`;
+        display.textContent = `⚠️ 未找到匹配岗位：${jobApplied}（请先在"岗位画像"页创建同名岗位）`;
         return null;
     }
 
-    const baseId = matched.base_job_id || (matched.job_id || '').replace(/_v\\d+$/, '');
-    __resolved_optimization_job_id = baseId;
+    const baseId = matched.base_job_id || (matched.job_id || '').replace(/_v\d+$/, '');
+    window.__resolved_optimization_job_id = baseId;
     display.textContent = `${matched.position || jobApplied} (${baseId})`;
     return baseId;
 }
@@ -1229,7 +1232,7 @@ async function submitOptimizationFeedback() {
     const candidateName = getCandidateData('name') || '';
     const jobApplied = getCandidateData('job_applied') || '';
 
-    const jobId = __resolved_optimization_job_id || (await resolveOptimizationJobIdAndRender());
+    const jobId = window.__resolved_optimization_job_id || (await resolveOptimizationJobIdAndRender());
     if (!jobId) {
         showToast('无法匹配岗位：请先在“岗位画像”页创建与 job_applied 同名的岗位', 'error');
         return;

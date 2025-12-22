@@ -325,6 +325,30 @@ def get_job_by_id(job_id: str) -> Optional[Dict[str, Any]]:
             return job_dict
     
     return None
+
+
+def get_job_by_versioned_id(versioned_job_id: str) -> Optional[Dict[str, Any]]:
+    """Get a specific job version by its exact versioned job_id (e.g. "foo_v3")."""
+    versioned_job_id = (versioned_job_id or "").strip()
+    if not versioned_job_id:
+        return None
+    try:
+        results = _client.query(
+            collection_name=_collection_name,
+            filter=f'job_id == "{versioned_job_id}"',
+            output_fields=_get_readable_fields(),
+            limit=1,
+        )
+    except Exception as exc:
+        logger.exception("Failed to get job by versioned id %s: %s", versioned_job_id, exc)
+        return None
+    if not results:
+        return None
+    job = results[0] or {}
+    job_dict = {k: v for k, v in job.items() if v or v == 0}
+    if "job_id" in job_dict:
+        job_dict["base_job_id"] = get_base_job_id(job_dict["job_id"])
+    return job_dict
             
 
 def insert_job(**job_data) -> bool:

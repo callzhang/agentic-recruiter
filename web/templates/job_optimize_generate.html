@@ -55,16 +55,26 @@
             <div id="gen-overall-notes" class="p-4 text-sm text-gray-700 whitespace-pre-wrap">暂无</div>
         </div>
 
-        <div class="bg-white rounded-lg border shadow-sm">
-            <div class="flex items-center justify-between border-b bg-gray-100 p-2">
-                <h3 class="font-bold text-gray-800">对比与编辑（可修改后提交）</h3>
-                <button onclick="publishGeneratedPortrait()"
-                        class="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 transition">
-                    确认提交（发布新版本）
-                </button>
-            </div>
-            <div class="p-4 space-y-4">
-                <p class="text-xs text-gray-500">左侧为当前版本，右侧为生成版本（可编辑）。字符串会做 url decode（若看起来像被编码过）。</p>
+	        <div class="bg-white rounded-lg border shadow-sm">
+	            <div class="flex items-center justify-between border-b bg-gray-100 p-2">
+	                <h3 class="font-bold text-gray-800">对比与编辑（可修改后提交）</h3>
+	                <div class="flex items-center gap-2">
+	                    <button onclick="copyGeneratedPortraitJson()"
+	                            class="px-3 py-1 text-xs bg-gray-200 text-gray-700 rounded hover:bg-gray-300 transition">
+	                        拷贝岗位肖像文档
+	                    </button>
+	                    <button onclick="pastePortraitJsonIntoEditors()"
+	                            class="px-3 py-1 text-xs bg-gray-200 text-gray-700 rounded hover:bg-gray-300 transition">
+	                        粘贴剪切板 JSON 到页面
+	                    </button>
+	                    <button onclick="publishGeneratedPortrait()"
+	                            class="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 transition">
+	                        确认提交（发布新版本）
+	                    </button>
+	                </div>
+	            </div>
+	            <div class="p-4 space-y-4">
+	                <p class="text-xs text-gray-500">左侧为当前版本，右侧为生成版本（可编辑）。字符串会做 url decode（若看起来像被编码过）。</p>
 
                 <div id="gen-fields" class="space-y-4"></div>
             </div>
@@ -98,6 +108,60 @@ function _escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = String(text ?? '');
     return div.innerHTML;
+}
+
+function _unwrapPortraitPayload(obj) {
+    if (!obj || typeof obj !== 'object') return null;
+    if (obj.job_portrait && typeof obj.job_portrait === 'object') return obj.job_portrait;
+    if (obj.data && typeof obj.data === 'object' && obj.data.job_portrait && typeof obj.data.job_portrait === 'object') return obj.data.job_portrait;
+    if (obj.payload && typeof obj.payload === 'object' && obj.payload.job_portrait && typeof obj.payload.job_portrait === 'object') return obj.payload.job_portrait;
+    return obj;
+}
+
+async function _readClipboardText() {
+    try {
+        if (navigator.clipboard?.readText) return await navigator.clipboard.readText();
+    } catch (e) {
+        // fall through
+    }
+    const fallback = window.prompt('浏览器限制无法直接读取剪切板，请粘贴 JSON：');
+    return fallback || '';
+}
+
+async function _writeClipboardText(text) {
+    try {
+        await navigator.clipboard.writeText(text);
+        return true;
+    } catch (e) {
+        window.prompt('浏览器限制无法直接写入剪切板，请手动复制：', text);
+        return false;
+    }
+}
+
+function _formatKeywordsBlock(kw) {
+    const positive = Array.isArray(kw?.positive) ? kw.positive : [];
+    const negative = Array.isArray(kw?.negative) ? kw.negative : [];
+    return `positive:\n${positive.map(s => String(s || '').trim()).filter(Boolean).join('\n')}\n\nnegative:\n${negative.map(s => String(s || '').trim()).filter(Boolean).join('\n')}`;
+}
+
+function _collectEditedPortraitFromPage() {
+    const edited = {};
+    for (const el of document.querySelectorAll('textarea[data-field-key]')) {
+        const key = el.dataset.fieldKey;
+        if (key === 'keywords') {
+            edited.keywords = _parseKeywords(el.value || '');
+        } else {
+            edited[key] = el.value || '';
+        }
+    }
+    return {
+        description: edited.description || '',
+        responsibilities: edited.responsibilities || '',
+        requirements: edited.requirements || '',
+        target_profile: edited.target_profile || '',
+        keywords: edited.keywords || { positive: [], negative: [] },
+        drill_down_questions: edited.drill_down_questions || '',
+    };
 }
 
 function _appendRationaleCallout(container, text) {
@@ -277,6 +341,58 @@ function _parseKeywords(text) {
         else if (mode === 'negative') negative.push(line);
     }
     return { positive, negative };
+}
+
+async function copyGeneratedPortraitJson() {
+    try {
+        const portrait = _collectEditedPortraitFromPage();
+        const text = JSON.stringify(portrait, null, 2);
+        await _writeClipboardText(text);
+        showToast('已复制岗位肖像 JSON', 'success');
+    } catch (e) {
+        console.error(e);
+        showToast('复制失败', 'error');
+    }
+}
+
+async function pastePortraitJsonIntoEditors() {
+    try {
+        const raw = await _readClipboardText();
+        if (!raw || raw.trim().length < 2) {
+            showToast('剪切板为空或不是 JSON', 'error');
+            return;
+        }
+        let obj;
+        try {
+            obj = JSON.parse(raw);
+        } catch (e) {
+            showToast('解析 JSON 失败', 'error');
+            return;
+        }
+        const portrait = _unwrapPortraitPayload(obj) || {};
+
+        const fieldKeys = ['description', 'responsibilities', 'requirements', 'target_profile', 'drill_down_questions'];
+        for (const key of fieldKeys) {
+            if (!(key in portrait)) continue; // missing => keep current
+            const textarea = document.querySelector(`textarea[data-field-key="${key}"]`);
+            if (!textarea) continue;
+            textarea.value = _normalizeDisplay(portrait[key] ?? '');
+            textarea.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+
+        if ('keywords' in portrait) {
+            const textarea = document.querySelector('textarea[data-field-key="keywords"]');
+            if (textarea) {
+                textarea.value = _formatKeywordsBlock(portrait.keywords || { positive: [], negative: [] });
+                textarea.dispatchEvent(new Event('input', { bubbles: true }));
+            }
+        }
+
+        showToast('已从剪切板应用 JSON（缺少字段不会覆盖）', 'success');
+    } catch (e) {
+        console.error(e);
+        showToast('粘贴失败', 'error');
+    }
 }
 
 function _progressByElapsedSeconds(t) {
