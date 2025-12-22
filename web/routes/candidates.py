@@ -627,6 +627,8 @@ async def notify_hr(
     chat_id: Optional[str] = Body(None),
     conversation_id: Optional[str] = Body(None),
     candidate_id: Optional[str] = Body(None),
+    name: Optional[str] = Body(None),
+    job_applied: Optional[str] = Body(None),
 ):
     """Send DingTalk notification to HR."""
     # Double check if candidate has already been notified
@@ -642,8 +644,8 @@ async def notify_hr(
         return {"success": False, "error": "该候选人已发送过通知，避免重复发送"}
     
     # Generate message from analysis if not provided
-    name = candidate.get("name", "未知候选人")
-    job_applied = candidate.get("job_applied", "未指定岗位")
+    name = candidate.get("name") or name or "未知候选人"
+    job_applied = candidate.get("job_applied") or job_applied or "未指定岗位"
     resume_type = '完整简历' if analysis.get('resume_type') == 'full' else '在线简历'
     
     # Get Vercel URL and generate candidate detail link
