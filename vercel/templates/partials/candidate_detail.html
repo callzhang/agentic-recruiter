@@ -6,7 +6,9 @@
     - "full_resume": data.pop("full_resume"),
     - "candidate": data,
 -->
-<div id="candidate-detail-root" class="space-y-6" data-view-mode="{{ view_mode or 'interactive' }}">
+{% set view_mode = view_mode or 'interactive' %}
+{% set allow_optimization_feedback = allow_optimization_feedback if allow_optimization_feedback is defined else (view_mode != 'readonly') %}
+<div id="candidate-detail-root" class="space-y-6" data-view-mode="{{ view_mode }}">
     <!-- Header -->
     <div class="flex justify-between items-start">
         <div class="flex items-center gap-2">
@@ -142,6 +144,13 @@
                 <!-- Will be populated by JavaScript based on analysis result -->
             </div>
             <div class="flex-1"></div>
+            {% if allow_optimization_feedback %}
+            <button onclick="openOptimizationFeedbackModal()"
+                    class="px-3 py-1 text-xs bg-red-100 text-red-800 rounded hover:bg-amber-200 transition flex items-center gap-1 mr-2">
+                <span>✍️</span>
+                <span>评分不准</span>
+            </button>
+            {% endif %}
             {% if view_mode != 'readonly' %}
             <button onclick="startAnalysis()"
                     class="px-3 py-1 text-xs bg-purple-100 text-purple-700 rounded hover:bg-purple-200 transition flex items-center gap-1">
@@ -158,6 +167,80 @@
             {% endif %}
         </div>
     </div>
+
+    {% if allow_optimization_feedback %}
+    <!-- Optimization Feedback Modal (评分不准) -->
+    <div id="optimization-feedback-modal"
+         class="fixed inset-0 z-50 hidden items-center justify-center bg-black bg-opacity-50 p-4"
+         role="dialog"
+         aria-modal="true">
+        <div class="bg-white rounded-lg shadow-2xl w-full max-w-2xl">
+            <div class="flex items-center justify-between px-5 py-4 border-b">
+                <h3 class="text-lg font-semibold text-gray-800">评分不准（用于优化岗位肖像）</h3>
+                <button onclick="closeOptimizationFeedbackModal()" class="text-gray-500 hover:text-gray-800">✕</button>
+            </div>
+            <div class="p-5 space-y-4">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">岗位（固定）</label>
+                    <div id="optimization-job-display"
+                         class="w-full px-3 py-2 border rounded-lg bg-gray-50 text-gray-800">
+                        ⏳ 解析中...
+                    </div>
+                    <p class="text-xs text-gray-500 mt-1">根据候选人的 job_applied 自动匹配岗位（不允许手动选择）。</p>
+                </div>
+
+                <div class="grid grid-cols-4 gap-3">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">目标 overall</label>
+                        <input id="opt-score-overall" type="number" min="1" max="10"
+                               class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                               placeholder="不变">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">目标 skill</label>
+                        <input id="opt-score-skill" type="number" min="1" max="10"
+                               class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                               placeholder="不变">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">目标 background</label>
+                        <input id="opt-score-background" type="number" min="1" max="10"
+                               class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                               placeholder="不变">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">目标 startup_fit</label>
+                        <input id="opt-score-startup-fit" type="number" min="1" max="10"
+                               class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                               placeholder="不变">
+                    </div>
+                </div>
+                <div class="text-xs text-gray-500" id="opt-original-scores">
+                    当前分数：-
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">优化建议与理由 *</label>
+                    <textarea id="optimization-suggestion"
+                              rows="4"
+                              class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                              placeholder="例如：这个候选人的 overall 被打低/打高了，原因是...；希望岗位评分标准明确...；哪些信息不应该在线上追问..."></textarea>
+                    <p class="text-xs text-gray-500 mt-1">这段会用于让 AI 重写岗位肖像（不直接发给候选人）。</p>
+                </div>
+            </div>
+            <div class="flex justify-end gap-2 px-5 py-4 border-t bg-gray-50">
+                <button onclick="closeOptimizationFeedbackModal()"
+                        class="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition">
+                    取消
+                </button>
+                <button onclick="submitOptimizationFeedback()"
+                        class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition">
+                    保存到优化清单
+                </button>
+            </div>
+        </div>
+    </div>
+    {% endif %}
 
     <!-- 3. Generated Message Section (shown only in interactive/write mode) -->
     {% if view_mode != 'readonly' %}
@@ -301,6 +384,57 @@ var viewMode = root?.dataset?.viewMode || 'interactive';
 // Persist on window for other scripts
 window.__candidate_detail_root = window.__candidate_detail_root || root;
 window.__candidate_detail_view_mode = window.__candidate_detail_view_mode || viewMode;
+
+// ----------------------------------------------------------------------------
+// Minimal fallbacks for standalone Vercel pages (no app.js loaded)
+// ----------------------------------------------------------------------------
+if (typeof window.handleApiResponse !== 'function') {
+    window.handleApiResponse = async function (response) {
+        let payload = null;
+        try {
+            payload = await response.json();
+        } catch (e) {
+            payload = null;
+        }
+        if (!response.ok) {
+            const msg = payload?.error || payload?.message || response.statusText || `HTTP ${response.status}`;
+            throw new Error(msg);
+        }
+        // Match existing callers that expect the inner "data" sometimes.
+        return payload?.data ?? payload;
+    };
+}
+
+if (typeof window.showToast !== 'function') {
+    window.showToast = function (message, type = 'info') {
+        try {
+            let container = document.getElementById('toast-container');
+            if (!container) {
+                container = document.createElement('div');
+                container.id = 'toast-container';
+                container.className = 'fixed top-4 right-4 z-50 flex flex-col gap-2';
+                document.body.appendChild(container);
+            }
+            const el = document.createElement('div');
+            const color =
+                type === 'error' ? 'bg-red-600' :
+                type === 'success' ? 'bg-green-600' :
+                type === 'warning' ? 'bg-amber-600' :
+                'bg-gray-800';
+            el.className = `${color} text-white text-sm px-3 py-2 rounded shadow max-w-sm`;
+            el.textContent = String(message || '');
+            container.appendChild(el);
+            setTimeout(() => el.remove(), 3500);
+        } catch (e) {
+            console.log('[toast]', type, message);
+        }
+    };
+}
+
+// Ensure `showToast(...)` works even if only `window.showToast` exists.
+if (typeof showToast !== 'function') {
+    var showToast = window.showToast;
+}
 
 async function process_candidate() {
     let newStage, currentScore, analysis;
@@ -504,7 +638,6 @@ function getMessageResultState(purpose = '') {
 }
 
 async function generateMessage(force = false) {
-    showToast('生成消息...', 'info');
     const values = getCandidateData();
     const purpose = force ? 'FOLLOWUP_ACTION' : 'CHAT_ACTION';
     await htmxAjaxPromise('POST', '/candidates/generate-message', {
@@ -847,14 +980,16 @@ async function updateCandidateData(data) {
         delete data.analysis;
     }
     if (data.generated_message) {
-        const messageTextArea = document.getElementById('message-text')
-        messageTextArea.value = data.generated_message;
-        messageTextArea.textContent = data.generated_message;
+        const messageTextArea = document.getElementById('message-text');
+        if (messageTextArea) {
+            messageTextArea.value = data.generated_message;
+            messageTextArea.textContent = data.generated_message;
+        }
         // delete data.generated_message; //保留generated_message，用于更新UI，同时保留last_message不变
     }
 
-    // Get current data from hx-vals
-    const currentData = getCandidateData();
+	    // Get current data from hx-vals
+	    const currentData = getCandidateData();
     // get the updated fields
     const updates = Object.fromEntries(
         Object.entries(dataCopy).filter(([k, v]) => v!== currentData[k] && v !== null && v !== undefined && v !== '')
@@ -907,6 +1042,214 @@ function getCandidateData(key) {
     }
     return key !== undefined ? null : {};
 }
+
+// ============================================================================
+// Job Portrait Optimization Feedback (评分不准)
+// NOTE: Must be in global scope (button uses inline `onclick=...`).
+// ============================================================================
+
+if (typeof window.__optimization_jobs_cache === 'undefined') {
+    window.__optimization_jobs_cache = null;
+}
+if (typeof window.__resolved_optimization_job_id === 'undefined') {
+    window.__resolved_optimization_job_id = null;
+}
+
+async function openOptimizationFeedbackModal() {
+    const modal = document.getElementById('optimization-feedback-modal');
+    if (!modal) return;
+    const display = document.getElementById('optimization-job-display');
+    if (display) display.textContent = '⏳ 解析中...';
+    modal.classList.remove('hidden');
+    modal.classList.add('flex');
+    try {
+        await ensureOptimizationJobsLoaded();
+        await resolveOptimizationJobIdAndRender();
+    } catch (e) {
+        console.error('Failed to resolve optimization job id:', e);
+        if (display) display.textContent = `⚠️ 解析岗位失败：${e?.message || e}`;
+    }
+    try {
+        renderOptimizationOriginalScores();
+        clearOptimizationTargetScores();
+    } catch (e) {
+        // Keep modal usable even if analysis is missing or malformed.
+        console.warn('Failed to render original scores:', e);
+    }
+}
+
+function closeOptimizationFeedbackModal() {
+    const modal = document.getElementById('optimization-feedback-modal');
+    if (!modal) return;
+    modal.classList.add('hidden');
+    modal.classList.remove('flex');
+}
+
+function getCurrentAnalysisForOptimization() {
+    const container = document.getElementById('analysis-result-container');
+    const raw = container?.dataset?.analysis;
+    if (!raw) return null;
+    try {
+        return JSON.parse(raw);
+    } catch (e) {
+        return null;
+    }
+}
+
+async function ensureOptimizationJobsLoaded() {
+    if (window.__optimization_jobs_cache) return window.__optimization_jobs_cache;
+    try {
+        const resp = await fetch('/api/jobs/list');
+        const data = await resp.json();
+        if (!data?.success) throw new Error(data?.error || 'failed');
+        window.__optimization_jobs_cache = data.data || [];
+    } catch (e) {
+        console.error('Failed to load jobs:', e);
+        window.__optimization_jobs_cache = [];
+    }
+    return window.__optimization_jobs_cache;
+}
+
+function _normalizeText(s) {
+    return (s || '').toString().replace(/\s+/g, '').trim().toLowerCase();
+}
+
+function _getOptScoreInputValue(id) {
+    const v = document.getElementById(id)?.value;
+    if (v === undefined || v === null || v === '') return null;
+    const n = parseInt(v, 10);
+    if (Number.isNaN(n)) return null;
+    return Math.max(1, Math.min(10, n));
+}
+
+async function resolveOptimizationJobIdAndRender() {
+    window.__resolved_optimization_job_id = null;
+    const display = document.getElementById('optimization-job-display');
+    const jobApplied = (getCandidateData('job_applied') || '').trim();
+
+    if (!display) return null;
+    if (!jobApplied) {
+        display.textContent = '⚠️ 无 job_applied，无法匹配岗位';
+        return null;
+    }
+
+    const normalizedJobApplied = _normalizeText(jobApplied);
+    const jobs = (window.__optimization_jobs_cache || []);
+    let matched = jobs.find(j => _normalizeText(j.position) === normalizedJobApplied);
+    if (!matched) {
+        // Best-effort fallback: allow contains match to handle small formatting differences.
+        matched = jobs.find(j => {
+            const pos = _normalizeText(j.position);
+            return pos.includes(normalizedJobApplied) || normalizedJobApplied.includes(pos);
+        });
+    }
+    if (!matched) {
+        display.textContent = `⚠️ 未找到匹配岗位：${jobApplied}（请先在“岗位画像”页创建同名岗位）`;
+        return null;
+    }
+
+    const baseId = matched.base_job_id || (matched.job_id || '').replace(/_v\\d+$/, '');
+    window.__resolved_optimization_job_id = baseId;
+    display.textContent = `${matched.position || jobApplied} (${baseId})`;
+    return baseId;
+}
+
+function renderOptimizationOriginalScores() {
+    const analysis = getCurrentAnalysisForOptimization();
+    const label = document.getElementById('opt-original-scores');
+    if (!label) return;
+    if (!analysis) {
+        label.textContent = '当前分数：暂无（请先完成分析）';
+        return;
+    }
+    const overall = analysis.overall ?? null;
+    const skill = analysis.skill ?? null;
+    const background = analysis.background ?? null;
+    const startupFit = analysis.startup_fit ?? null;
+    label.textContent = `当前分数：overall=${overall ?? '-'}，skill=${skill ?? '-'}，background=${background ?? '-'}，startup_fit=${startupFit ?? '-'}`;
+}
+
+function clearOptimizationTargetScores() {
+    const ids = ['opt-score-overall', 'opt-score-skill', 'opt-score-background', 'opt-score-startup-fit'];
+    for (const id of ids) {
+        const el = document.getElementById(id);
+        if (el) el.value = '';
+    }
+}
+
+async function submitOptimizationFeedback() {
+    const suggestion = document.getElementById('optimization-suggestion')?.value?.trim() || '';
+    const analysis = getCurrentAnalysisForOptimization();
+    const candidateId = getCandidateData('candidate_id');
+    const conversationId = getCandidateData('conversation_id');
+    const candidateName = getCandidateData('name') || '';
+    const jobApplied = getCandidateData('job_applied') || '';
+
+    const jobId = window.__resolved_optimization_job_id || (await resolveOptimizationJobIdAndRender());
+    if (!jobId) {
+        showToast('无法匹配岗位：请先在“岗位画像”页创建与 job_applied 同名的岗位', 'error');
+        return;
+    }
+    if (!analysis) {
+        showToast('暂无可用的分析结果，请先完成分析后再反馈', 'error');
+        return;
+    }
+    if (!candidateId || !conversationId) {
+        showToast('候选人信息不完整（缺少 candidate_id / conversation_id）', 'error');
+        return;
+    }
+    if (!suggestion || suggestion.length < 5) {
+        showToast('请填写优化建议与理由（至少5个字）', 'error');
+        return;
+    }
+
+    const targetScores = {
+        overall: _getOptScoreInputValue('opt-score-overall'),
+        skill: _getOptScoreInputValue('opt-score-skill'),
+        background: _getOptScoreInputValue('opt-score-background'),
+        startup_fit: _getOptScoreInputValue('opt-score-startup-fit'),
+    };
+    const hasAnyScore = Object.values(targetScores).some(v => v !== null);
+    if (!hasAnyScore) {
+        showToast('请至少填写一个目标分数（1-10）；未填写表示“不变/不需要优化”', 'error');
+        return;
+    }
+
+    const body = {
+        job_id: jobId,
+        candidate_id: candidateId,
+        conversation_id: conversationId,
+        candidate_name: candidateName,
+        job_applied: jobApplied,
+        current_analysis: analysis,
+        target_scores: targetScores,
+        suggestion: suggestion,
+    };
+
+    try {
+        const resp = await fetch('/api/jobs/optimizations/add', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        const result = await resp.json();
+        if (!result?.success) {
+            showToast(result?.error || '保存失败', 'error');
+            return;
+        }
+        showToast('已加入优化清单', 'success');
+        closeOptimizationFeedbackModal();
+    } catch (e) {
+        console.error(e);
+        showToast('保存失败（网络/服务异常）', 'error');
+    }
+}
+
+// Expose optimization feedback handlers for inline onclick=... (and for module/iframe contexts).
+// Some bundlers/runtimes don't attach top-level declarations to `window` reliably.
+window.openOptimizationFeedbackModal = openOptimizationFeedbackModal;
+window.closeOptimizationFeedbackModal = closeOptimizationFeedbackModal;
+window.submitOptimizationFeedback = submitOptimizationFeedback;
 
 
 function getThresholdValues() {

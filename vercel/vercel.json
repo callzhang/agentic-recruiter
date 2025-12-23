@@ -10,6 +10,14 @@
       "destination": "/api/jobs.py"
     },
     {
+      "source": "/jobs/optimize/generate",
+      "destination": "/job_optimize_generate.html"
+    },
+    {
+      "source": "/jobs/optimize",
+      "destination": "/job_optimize.html"
+    },
+    {
       "source": "/api/stats",
       "destination": "/api/stats.py"
     },
@@ -52,4 +60,3 @@
     }
   ]
 }
-

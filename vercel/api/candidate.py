@@ -7,6 +7,7 @@ import os
 import sys
 import json
 from urllib.parse import unquote
+from urllib.parse import parse_qs
 from http.server import BaseHTTPRequestHandler
 from datetime import datetime
 from typing import Any, Dict, Optional
@@ -208,7 +209,7 @@ def get_candidate_by_id(candidate_id: str) -> dict:
     return candidate
 
 
-def render_candidate_detail(candidate: dict) -> str:
+def render_candidate_detail(candidate: dict, *, allow_optimization_feedback: bool) -> str:
     """Render candidate detail template in readonly mode."""
     # Create a copy to avoid modifying original
     candidate_copy = dict(candidate) if candidate else {}
@@ -238,6 +239,7 @@ def render_candidate_detail(candidate: dict) -> str:
         resume_text=resume_text,
         full_resume=full_resume,
         view_mode="readonly",
+        allow_optimization_feedback=bool(allow_optimization_feedback),
         request=MockRequest(),
     )
     
@@ -302,6 +304,8 @@ class handler(BaseHTTPRequestHandler):
     
     def do_GET(self):
         path = self.path.split('?', 1)[0]
+        query_string = self.path.split('?', 1)[1] if '?' in self.path else ''
+        query = parse_qs(query_string) if query_string else {}
         
         try:
             # Extract candidate_id from path
@@ -319,7 +323,9 @@ class handler(BaseHTTPRequestHandler):
                 return
             
             # Render template
-            html_content = render_candidate_detail(candidate)
+            context = (query.get('context', [''])[0] or '').strip().lower()
+            allow_feedback = context != 'optimize'
+            html_content = render_candidate_detail(candidate, allow_optimization_feedback=allow_feedback)
             _send_html(self, 200, html_content)
             
         except Exception as e:
@@ -331,4 +337,3 @@ class handler(BaseHTTPRequestHandler):
             sys.stderr.flush()
             
             _send_html(self, 500, f'<html><body><h1>500 Internal Server Error</h1><p>{error_msg}</p></body></html>')
-

@@ -549,16 +549,24 @@ def compile_all_jobs() -> Dict[str, Any]:
     """Compile statistics for all jobs."""
     jobs = get_all_jobs() or []
     stats: List[Dict[str, Any]] = []
+    skipped_inactive_jobs = 0
     for job in jobs:
         position = job.get("position") or job.get("job_id")
         if not position:
             continue
+        status = str(job.get("status", "active") or "active").strip().lower()
+        if status == "inactive":
+            skipped_inactive_jobs += 1
+            continue
         job_stats = compile_job_stats(position)
         # Add job status to stats for filtering
-        job_stats["status"] = job.get("status", "active")
+        job_stats["status"] = status
         stats.append(job_stats)
     best = max(stats, key=lambda s: s["today"]["metric"], default=None)
-    return {"jobs": stats, "best": best}
+    result: Dict[str, Any] = {"jobs": stats, "best": best}
+    if skipped_inactive_jobs:
+        result["skipped_inactive_jobs"] = skipped_inactive_jobs
+    return result
 
 def convert_score_analysis(obj):
     """Recursively convert ScoreAnalysis objects to dictionaries."""
