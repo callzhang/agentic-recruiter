@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>优化岗位肖像 - BOSS招聘助手</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+</head>
+<body class="bg-gray-50 min-h-screen">
+    <nav class="bg-white shadow-lg sticky top-0 z-50">
+        <div class="container mx-auto px-4">
+            <div class="flex justify-between items-center py-4">
+                <div class="flex items-center space-x-4">
+                    <a href="/" class="text-2xl font-bold text-blue-600">🤖 BOSS招聘助手</a>
+                </div>
+                <div class="flex space-x-6">
+                    <a href="/" class="text-gray-700 hover:text-blue-600 transition">首页</a>
+                    <a href="/jobs" class="text-gray-700 hover:text-blue-600 transition">岗位画像</a>
+                    <span class="text-gray-500">优化</span>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div id="toast-container" class="fixed top-4 right-4 z-50 flex flex-col space-y-2"></div>
+
+    <div class="container mx-auto p-4">
+        <div class="space-y-6">
+            <div class="bg-white rounded-lg shadow p-6">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <h1 class="text-2xl font-bold text-gray-800">岗位画像优化</h1>
+                        <p class="text-gray-600 mt-2">
+                            岗位：<span class="font-medium text-gray-800" id="job-position">加载中...</span>
+                            <span class="text-gray-400" id="job-base-id"></span>
+                        </p>
+                    </div>
+                    <div class="flex gap-2">
+                        <a id="back-to-jobs" href="/jobs"
+                           class="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition">
+                            ← 返回岗位页
+                        </a>
+                    </div>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-12 gap-4">
+                <div class="col-span-4 space-y-3">
+                    <div class="bg-white rounded-lg border shadow-sm p-4">
+                        <div class="flex items-center justify-between">
+                            <h2 class="text-lg font-semibold text-gray-800">
+                                优化清单
+                                <span class="ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-gray-100 text-gray-700"
+                                      id="opt-feedback-count">0</span>
+                            </h2>
+                            <button onclick="refreshOptimizationList()"
+                                    class="px-3 py-1 text-xs bg-gray-100 text-gray-700 rounded hover:bg-gray-200 transition">
+                                刷新
+                            </button>
+                        </div>
+                        <p class="text-xs text-gray-500 mt-2">
+                            选择“有问题”的候选人反馈（可多选），再生成新版岗位肖像。
+                        </p>
+                    </div>
+
+                    <div id="opt-feedback-list" class="space-y-2"></div>
+
+                    <div class="bg-white rounded-lg border shadow-sm p-4 space-y-2">
+                        <button onclick="goToGeneratePage()"
+                                class="w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition">
+                            生成新版岗位肖像（GPT-5.2）
+                        </button>
+                        <p class="text-xs text-gray-500">
+                            生成后可逐字段对比与编辑，确认提交后会发布新版本并自动关闭本次选中的反馈。
+                        </p>
+                    </div>
+                </div>
+
+                <div class="col-span-8 space-y-4">
+                    <div class="bg-white rounded-lg border shadow-sm">
+                        <div class="flex items-center justify-between border-b bg-gray-100 p-2">
+                            <h3 class="font-bold text-gray-800">优化建议（可编辑）</h3>
+                            <div class="flex items-center gap-2">
+                                <span class="text-xs text-gray-500" id="opt-active-updated-at"></span>
+                                <button onclick="saveOptimizationItem()"
+                                        class="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 transition">
+                                    保存
+                                </button>
+                            </div>
+                        </div>
+                        <div class="p-4 space-y-4">
+                            <div class="grid grid-cols-4 gap-3">
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">目标 overall *</label>
+                                    <input id="opt-edit-overall" type="number" min="1" max="10"
+                                           class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                                           placeholder="不变">
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">目标 skill *</label>
+                                    <input id="opt-edit-skill" type="number" min="1" max="10"
+                                           class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                                           placeholder="不变">
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">目标 background *</label>
+                                    <input id="opt-edit-background" type="number" min="1" max="10"
+                                           class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                                           placeholder="不变">
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">目标 startup_fit *</label>
+                                    <input id="opt-edit-startup-fit" type="number" min="1" max="10"
+                                           class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                                           placeholder="不变">
+                                </div>
+                            </div>
+                            <div class="text-xs text-gray-500" id="opt-original-scores">当前分数：-</div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-2">建议与理由 *</label>
+                                <textarea id="opt-edit-suggestion"
+                                          rows="5"
+                                          class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                                          placeholder="写清楚：哪里不准→原因→希望如何调整评分标准/红旗/问法（不要让AI约面试/聊薪资）"></textarea>
+                            </div>
+                            <input type="hidden" id="opt-active-item-id" value="">
+                        </div>
+                    </div>
+
+                    <div class="bg-white rounded-lg border shadow-sm">
+                        <div class="flex items-center justify-between border-b bg-gray-100 p-2">
+                            <h3 class="font-bold text-gray-800">候选人信息（只读）</h3>
+                            <div class="text-xs text-gray-500">使用候选人详情页</div>
+                        </div>
+                        <div class="p-0">
+                            <iframe id="candidate-iframe"
+                                    class="w-full h-[780px] border-0"
+                                    src="about:blank"></iframe>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = '/api';
+        let BASE_JOB_ID = '';
+        let ITEMS = [];
+        let __opt_dirty = false;
+
+        function showToast(message, type = 'info') {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            const colors = {
+                info: 'bg-blue-600',
+                success: 'bg-green-600',
+                error: 'bg-red-600',
+                warning: 'bg-yellow-600'
+            };
+            toast.className = `${colors[type] || colors.info} text-white px-6 py-3 rounded-lg shadow-lg mb-2`;
+            toast.textContent = message;
+            container.appendChild(toast);
+            setTimeout(() => {
+                toast.style.opacity = '0';
+                toast.style.transition = 'opacity 0.3s';
+                setTimeout(() => toast.remove(), 300);
+            }, 3000);
+        }
+
+        function _clampScore(v) {
+            if (v === undefined || v === null || v === '') return null;
+            const n = parseInt(v, 10);
+            if (Number.isNaN(n)) return null;
+            return Math.max(1, Math.min(10, n));
+        }
+
+        function _getSelectedItemIds() {
+            return Array.from(document.querySelectorAll('.opt-item-checkbox:checked')).map(el => el.value);
+        }
+
+        function _qs(name) {
+            return new URL(window.location.href).searchParams.get(name) || '';
+        }
+
+        async function apiCall(endpoint, method = 'GET', body = null) {
+            const options = { method, headers: { 'Content-Type': 'application/json' } };
+            if (body) options.body = JSON.stringify(body);
+            const resp = await fetch(`${API_BASE}${endpoint}`, options);
+            const data = await resp.json();
+            if (!data || data.success === false) {
+                throw new Error(data?.error || 'request failed');
+            }
+            return data;
+        }
+
+        async function initPage() {
+            BASE_JOB_ID = (_qs('job_id') || '').trim();
+            if (!BASE_JOB_ID) {
+                showToast('缺少 job_id 参数', 'error');
+                document.getElementById('job-position').textContent = '缺少 job_id';
+                return;
+            }
+            document.getElementById('job-base-id').textContent = `(${BASE_JOB_ID})`;
+            document.getElementById('back-to-jobs').href = `/jobs?tab=${encodeURIComponent(BASE_JOB_ID)}`;
+
+            try {
+                const jobResp = await apiCall(`/jobs/${encodeURIComponent(BASE_JOB_ID)}`);
+                const job = jobResp.data || {};
+                document.getElementById('job-position').textContent = job.position || BASE_JOB_ID;
+            } catch (e) {
+                document.getElementById('job-position').textContent = BASE_JOB_ID;
+            }
+
+            await refreshOptimizationList();
+
+            // Dirty tracking
+            ['opt-edit-overall','opt-edit-skill','opt-edit-background','opt-edit-startup-fit','opt-edit-suggestion'].forEach(id => {
+                const el = document.getElementById(id);
+                if (!el) return;
+                el.addEventListener('input', () => { __opt_dirty = true; });
+            });
+
+            window.addEventListener('beforeunload', (e) => {
+                if (!__opt_dirty) return;
+                e.preventDefault();
+                e.returnValue = '';
+            });
+        }
+
+        async function refreshOptimizationList() {
+            const listEl = document.getElementById('opt-feedback-list');
+            listEl.innerHTML = '<div class="bg-white rounded-lg border shadow-sm p-6 text-center text-gray-500">加载中...</div>';
+            try {
+                const resp = await apiCall(`/jobs/optimizations/list?job_id=${encodeURIComponent(BASE_JOB_ID)}`);
+                ITEMS = resp.data || [];
+                document.getElementById('opt-feedback-count').textContent = String(ITEMS.length);
+                if (!ITEMS.length) {
+                    listEl.innerHTML = '<div class="bg-white rounded-lg border shadow-sm p-6 text-center text-gray-500">暂无优化清单。请先打开候选人详情页，点击“评分不准”添加反馈。</div>';
+                    return;
+                }
+
+                listEl.innerHTML = ITEMS.map(it => {
+                    const ts = it.target_scores || {};
+                    const updatedAt = it.updated_at ? ` · ${it.updated_at}` : '';
+                    const jobApplied = it.job_applied || '';
+                    const name = it.candidate_name || '未命名';
+                    const suggestion = (it.suggestion || '').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+                    return `
+                        <div class="bg-white rounded-lg border shadow-sm p-3 hover:border-blue-300 transition cursor-pointer"
+                             data-item-id="${it.id}"
+                             onclick="selectOptimizationItem('${it.id}')">
+                            <div class="flex items-start justify-between gap-2">
+                                <label class="flex items-start gap-2 cursor-pointer" onclick="event.stopPropagation()">
+                                    <input type="checkbox" class="opt-item-checkbox mt-1" value="${it.id}">
+                                    <div>
+                                        <div class="font-medium text-gray-800">${name}</div>
+                                        <div class="text-xs text-gray-500 mt-0.5">${jobApplied}${updatedAt}</div>
+                                    </div>
+                                </label>
+                            </div>
+                            <div class="mt-2 text-xs text-gray-600 line-clamp-3">${suggestion}</div>
+                            <div class="mt-2 text-xs text-gray-500">
+                                目标分：overall=${ts.overall ?? '-'}, skill=${ts.skill ?? '-'}, background=${ts.background ?? '-'}, startup_fit=${ts.startup_fit ?? '-'}
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+
+                // Preselect first item
+                const first = ITEMS[0];
+                if (first?.id) {
+                    selectOptimizationItem(first.id);
+                }
+            } catch (e) {
+                console.error(e);
+                listEl.innerHTML = `<div class="bg-white rounded-lg border shadow-sm p-6 text-center text-red-600">加载失败：${e.message}</div>`;
+            }
+        }
+
+        async function selectOptimizationItem(itemId) {
+            const activeId = document.getElementById('opt-active-item-id')?.value;
+            if (__opt_dirty && activeId) {
+                const shouldSave = window.confirm('你有未保存的修改，是否先保存？\n确定=保存并继续；取消=忽略修改并继续');
+                if (shouldSave) {
+                    await saveOptimizationItem({ silent: true });
+                }
+                __opt_dirty = false;
+            }
+
+            const it = ITEMS.find(x => x.id === itemId);
+            if (!it) {
+                showToast('未找到该记录', 'error');
+                return;
+            }
+            document.getElementById('opt-active-item-id').value = it.id;
+            document.getElementById('opt-active-updated-at').textContent = it.updated_at ? `updated_at: ${it.updated_at}` : '';
+
+            const ts = it.target_scores || {};
+            document.getElementById('opt-edit-overall').value = ts.overall ?? '';
+            document.getElementById('opt-edit-skill').value = ts.skill ?? '';
+            document.getElementById('opt-edit-background').value = ts.background ?? '';
+            document.getElementById('opt-edit-startup-fit').value = ts.startup_fit ?? '';
+            document.getElementById('opt-edit-suggestion').value = it.suggestion || '';
+            __opt_dirty = false;
+
+            // Render original scores if available
+            const a = it.current_analysis || {};
+            document.getElementById('opt-original-scores').textContent =
+                `当前分数：overall=${a.overall ?? '-'}，skill=${a.skill ?? '-'}，background=${a.background ?? '-'}，startup_fit=${a.startup_fit ?? '-'}`;
+
+            const iframe = document.getElementById('candidate-iframe');
+            if (iframe && it.candidate_id) {
+                iframe.src = `/candidate/${encodeURIComponent(it.candidate_id)}?context=optimize`;
+            }
+        }
+
+        async function saveOptimizationItem({ silent = false } = {}) {
+            const itemId = document.getElementById('opt-active-item-id')?.value || '';
+            if (!itemId) {
+                if (!silent) showToast('请先选择一个候选人记录', 'warning');
+                return;
+            }
+            const suggestion = document.getElementById('opt-edit-suggestion')?.value?.trim() || '';
+            if (!suggestion || suggestion.length < 5) {
+                showToast('建议与理由至少 5 个字', 'error');
+                return;
+            }
+            const targetScores = {
+                overall: _clampScore(document.getElementById('opt-edit-overall')?.value),
+                skill: _clampScore(document.getElementById('opt-edit-skill')?.value),
+                background: _clampScore(document.getElementById('opt-edit-background')?.value),
+                startup_fit: _clampScore(document.getElementById('opt-edit-startup-fit')?.value),
+            };
+            const hasAnyScore = Object.values(targetScores).some(v => v !== null);
+            if (!hasAnyScore) {
+                showToast('请至少填写一个目标分数（未填表示“不变”）', 'error');
+                return;
+            }
+            try {
+                await apiCall('/jobs/optimizations/update', 'POST', { id: itemId, suggestion, target_scores: targetScores });
+                __opt_dirty = false;
+                if (!silent) showToast('已保存', 'success');
+                await refreshOptimizationList();
+            } catch (e) {
+                console.error(e);
+                showToast('保存失败：' + e.message, 'error');
+            }
+        }
+
+        function goToGeneratePage() {
+            const selected = _getSelectedItemIds();
+            if (!selected.length) {
+                showToast('请先勾选至少一个候选人反馈', 'warning');
+                return;
+            }
+            const qp = selected.map(encodeURIComponent).join(',');
+            window.location.href = `/jobs/optimize/generate?job_id=${encodeURIComponent(BASE_JOB_ID)}&item_ids=${qp}`;
+        }
+
+        document.addEventListener('DOMContentLoaded', initPage);
+    </script>
+</body>
+</html>
+
