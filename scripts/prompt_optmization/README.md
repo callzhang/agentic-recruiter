@@ -10,7 +10,9 @@
 
 ## 0) 一句话工作流
 
-1) 跑脚本拉最新 10 份候选人 → 2) 先读 `优化报告.md` 的“问题清单/引用示例/对比指标”，按引用抽样查看候选人 → 3) 修改本批次的 `prompt_optimized.py` / `job_portrait_optimized.json` → 4) 挑 2-5 个“有问题的候选人”回放验证（`generate_optimized.py --start-index/--limit`）→ 5) 满意后发布岗位肖像到线上（Vercel API）并验证 → 6) 再跑下一批验证“合规性/稳定性”是否提升。
+1) 跑脚本拉最新 10 份候选人 → 2) 先读 `优化报告.md` 的“问题清单/引用示例/对比指标”，按引用抽样查看候选人 → 3) 修改本批次的 `prompt_optimized.py` / `job_portrait_optimized.json` → 4) 挑 2-5 个“有问题的候选人”回放验证（`generate_optimized.py --start-index/--limit`）→ 5) 满意后发布岗位肖像（Vercel UI/API 或本地 API）并验证 → 6) 再跑下一批验证“合规性/稳定性”是否提升。
+
+> 如果你不需要离线回放验证，优先使用线上闭环：候选人详情页点击“评分不准” → `/jobs/optimize` → 生成并发布（详见 `vercel/README.md`）。
 
 ---
 
@@ -21,6 +23,7 @@
 - Python 3.11+，建议在虚拟环境中运行
 - 安装依赖：`pip install -r requirements.txt`
 - 确保本项目连接候选人库/岗位库所需的环境变量与配置已就绪（否则脚本无法拉取岗位/候选人）
+- 回放生成需要 OpenAI：确保 `config/secrets.yaml` 的 `openai` 配置可用（或使用环境变量覆盖）
 
 ### 1.2 运行命令（仓库根目录）
 
@@ -62,6 +65,13 @@ python scripts/prompt_optmization/download_data_for_prompt_optimization.py --job
 
 > 重要：`download_data_for_prompt_optimization.py` **只负责下载与生成复盘骨架**，不会调用 OpenAI 重跑分析。  
 > 需要用你最新的 `prompt_optimized.py` / `job_portrait_optimized.json` 生成“新口径 analysis + 新 message”时，请使用 `scripts/prompt_optmization/generate_optimized.py`（会把结果写入本批次目录，便于验证迭代是否生效）。
+
+### 1.3.0 推荐顺序（减少浪费）
+
+1) 先跑下载脚本（拿候选人样本与旧 analysis）
+2) 先抽样回放 2-5 个“有问题”的候选人（用 `generate_optimized.py`）
+3) 修 prompt/肖像后再回放验证，确认解决“典型问题”
+4) 最后再考虑全量回放（本批次 10 个）与发布
 
 例如（先跑下载脚本拿到 `run_...` 目录后）：
 
