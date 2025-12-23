@@ -7,6 +7,7 @@ import os
 import sys
 import json
 import re
+import uuid
 from datetime import datetime
 from typing import Dict, List, Any, Optional
 
@@ -23,10 +24,48 @@ ZILLIZ_TOKEN = os.environ.get('ZILLIZ_TOKEN', '')
 ZILLIZ_USER = os.environ.get('ZILLIZ_USER')
 ZILLIZ_PASSWORD = os.environ.get('ZILLIZ_PASSWORD')
 COLLECTION_NAME = os.environ.get('ZILLIZ_JOB_COLLECTION_NAME', 'CN_jobs')
+OPT_COLLECTION_NAME = os.environ.get('ZILLIZ_JOB_OPTIMIZATION_COLLECTION_NAME', 'CN_job_optimizations')
+DEFAULT_OPENAI_BASE_URL = os.environ.get('OPENAI_BASE_URL', 'https://api.openai.com/v1')
+DEFAULT_OPENAI_MODEL = os.environ.get('OPENAI_MODEL', 'gpt-5.2')
 EMBEDDING_DIM = int(os.environ.get('ZILLIZ_EMBEDDING_DIM', '1536'))
 
 # Initialize Zilliz client
 _client = None
+
+# Requests is already a dependency for Vercel stats; reuse it here to call OpenAI.
+import requests
+
+# --- JSON safety utilities (mirrors vercel/api/stats.py) -----------------------------
+
+_KEY_TYPES = (str, int, float, bool, type(None))
+
+
+def _safe_key(key: Any) -> Any:
+    if isinstance(key, _KEY_TYPES):
+        return key
+    if isinstance(key, bytes):
+        try:
+            return key.decode("utf-8")
+        except Exception:
+            return key.hex()
+    return str(key)
+
+
+def _json_safe(obj: Any) -> Any:
+    if isinstance(obj, dict):
+        return {_safe_key(k): _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple, set)):
+        return [_json_safe(v) for v in obj]
+    if isinstance(obj, bytes):
+        try:
+            return obj.decode("utf-8")
+        except Exception:
+            return obj.hex()
+    if isinstance(obj, (datetime,)):
+        return obj.isoformat()
+    return obj
+
+# --- End JSON safety utilities -------------------------------------------------------
 
 def _truncate_utf8(text: Any, max_bytes: int) -> str:
     """Truncate text by UTF-8 byte length (Milvus VARCHAR max_length is strict)."""
@@ -79,6 +118,271 @@ def _validate_notification_required(notification: Any) -> tuple[bool, str]:
     if not url or not secret:
         return False, "notification.url and notification.secret are required"
     return True, ""
+
+# --- Job portrait optimization (OpenAI + CN_job_optimizations) -----------------------
+
+def _utc_now() -> str:
+    return datetime.utcnow().isoformat()
+
+
+def _truncate_field(value: Any, max_bytes: int) -> str:
+    return _truncate_utf8("" if value is None else value, max_bytes)
+
+
+_OPT_READABLE_FIELDS = [
+    "id",
+    "job_id",
+    "job_applied",
+    "candidate_id",
+    "conversation_id",
+    "candidate_name",
+    "current_analysis",
+    "target_scores",
+    "suggestion",
+    "status",
+    "created_at",
+    "updated_at",
+]
+
+
+def _list_feedback(job_id: str, *, limit: int = 200, include_closed: bool = False) -> list[dict[str, Any]]:
+    job_id = (job_id or "").strip()
+    if not job_id:
+        return []
+    filter_expr = f'job_id == "{job_id}"'
+    if not include_closed:
+        filter_expr = f'{filter_expr} and (status != "closed")'
+    try:
+        results = get_client().query(
+            collection_name=OPT_COLLECTION_NAME,
+            filter=filter_expr,
+            output_fields=_OPT_READABLE_FIELDS,
+            limit=1000,
+        )
+    except Exception as exc:
+        print(f"Failed to list optimizations: {exc}", file=sys.stderr)
+        return []
+    cleaned = [{k: v for k, v in (r or {}).items() if v or v == 0} for r in results or []]
+    cleaned.sort(
+        key=lambda r: (
+            str(r.get("updated_at") or ""),
+            str(r.get("created_at") or ""),
+            str(r.get("id") or ""),
+        ),
+        reverse=True,
+    )
+    max_out = min(max(int(limit or 0), 1), 500)
+    return cleaned[:max_out]
+
+
+def _count_feedback(job_id: str, *, include_closed: bool = False) -> int:
+    job_id = (job_id or "").strip()
+    if not job_id:
+        return 0
+    filter_expr = f'job_id == "{job_id}"'
+    if not include_closed:
+        filter_expr = f'{filter_expr} and (status != "closed")'
+    try:
+        results = get_client().query(
+            collection_name=OPT_COLLECTION_NAME,
+            filter=filter_expr,
+            output_fields=["id"],
+            limit=1000,
+        )
+        return len(results or [])
+    except Exception as exc:
+        print(f"Failed to count optimizations: {exc}", file=sys.stderr)
+        return 0
+
+
+def _get_feedback(item_id: str) -> Optional[dict[str, Any]]:
+    item_id = (item_id or "").strip()
+    if not item_id:
+        return None
+    try:
+        results = get_client().query(
+            collection_name=OPT_COLLECTION_NAME,
+            filter=f'id == "{item_id}"',
+            output_fields=_OPT_READABLE_FIELDS + ["feedback_vector"],
+            limit=1,
+        )
+    except Exception:
+        return None
+    if not results:
+        return None
+    rec = results[0] or {}
+    return {k: v for k, v in rec.items() if v or v == 0}
+
+
+def _upsert_feedback(record: dict[str, Any]) -> dict[str, Any]:
+    get_client().upsert(collection_name=OPT_COLLECTION_NAME, data=[record], partial_update=True)
+    return record
+
+
+def _close_feedback_items(job_id: str, item_ids: list[str]) -> int:
+    job_id = (job_id or "").strip()
+    ids = [i.strip() for i in (item_ids or []) if i and i.strip()]
+    if not job_id or not ids:
+        return 0
+    now = _utc_now()
+    updated = 0
+    for item_id in ids:
+        existing = _get_feedback(item_id)
+        if not existing:
+            continue
+        if (existing.get("job_id") or "").strip() != job_id:
+            continue
+        patch = {
+            "id": _truncate_field(item_id, 64),
+            "status": "closed",
+            "updated_at": _truncate_field(now, 64),
+        }
+        if "feedback_vector" in existing:
+            patch["feedback_vector"] = existing.get("feedback_vector") or [0.0, 0.0]
+        try:
+            get_client().upsert(collection_name=OPT_COLLECTION_NAME, data=[patch], partial_update=True)
+            updated += 1
+        except Exception as exc:
+            print(f"Failed to close optimization item {item_id}: {exc}", file=sys.stderr)
+    return updated
+
+
+_DOWNSTREAM_USAGE = """
+岗位肖像会被系统用于两类动作：
+1) ANALYZE：根据 requirements（文本，一行一个评分项/维度）逐行打分（confirmed + potential，potential 只按 50% 计入），并给出 overall/skill/background/startup_fit（1-10）与阶段建议（PASS/CHAT/SEEK/CONTACT）。
+2) CHAT/FOLLOWUP：从 drill_down_questions 中挑 1 个主问题（线上甄别），避免做题式连环追问；PASS 候选人不发消息；不聊薪资、不约时间、不替 HR 安排面试。
+""".strip()
+
+
+def _openai_generate_job_portrait_optimization(current_job: dict[str, Any], feedback_items: list[dict[str, Any]]) -> dict[str, Any]:
+    api_key = (os.environ.get("OPENAI_API_KEY") or "").strip()
+    if not api_key:
+        raise RuntimeError("Missing OPENAI_API_KEY env var")
+    base_url = (os.environ.get("OPENAI_BASE_URL") or DEFAULT_OPENAI_BASE_URL).strip()
+    model = (os.environ.get("OPENAI_MODEL_OPTIMIZATION") or DEFAULT_OPENAI_MODEL or "gpt-5.2").strip()
+
+    # Schema: strict JSON output for job portrait + per-field rationale.
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["job_portrait", "rationale"],
+        "properties": {
+            "job_portrait": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": [
+                    "position",
+                    "description",
+                    "responsibilities",
+                    "requirements",
+                    "target_profile",
+                    "keywords",
+                    "drill_down_questions",
+                    "candidate_filters",
+                ],
+                "properties": {
+                    "position": {"type": "string"},
+                    "description": {"type": "string"},
+                    "responsibilities": {"type": "string"},
+                    "requirements": {"type": "string"},
+                    "target_profile": {"type": "string"},
+                    "drill_down_questions": {"type": "string"},
+                    "candidate_filters": {"type": ["string", "null"]},
+                    "keywords": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": ["positive", "negative"],
+                        "properties": {
+                            "positive": {"type": "array", "items": {"type": "string"}},
+                            "negative": {"type": "array", "items": {"type": "string"}},
+                        },
+                    },
+                },
+            },
+            "rationale": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": [
+                    "description",
+                    "responsibilities",
+                    "requirements",
+                    "target_profile",
+                    "keywords",
+                    "drill_down_questions",
+                    "candidate_filters",
+                    "overall_notes",
+                ],
+                "properties": {
+                    "description": {"type": "string"},
+                    "responsibilities": {"type": "string"},
+                    "requirements": {"type": "string"},
+                    "target_profile": {"type": "string"},
+                    "keywords": {"type": "string"},
+                    "drill_down_questions": {"type": "string"},
+                    "candidate_filters": {"type": "string"},
+                    "overall_notes": {"type": "string"},
+                },
+            },
+        },
+    }
+
+    prompt = f"""
+你是招聘策略与岗位画像优化专家。请基于“当前岗位肖像”和“人类反馈清单”，输出一版更适合线上甄别候选人的岗位肖像，要求评分更稳定、更少幻觉、更能筛掉不匹配人群。
+
+【硬约束（必须遵守）】
+1) position 必须保持不变（与 current_job_portrait.position 完全一致）。
+2) requirements 必须是文本评分标准：严格 4 行，每行以权重数字开头（40/30/20/10），权重之和=100；每行写可判定信号（强信号/红旗），避免正确废话。
+3) drill_down_questions 仅用于线上甄别：每行 1 个问题；问题必须逼候选人讲“亲历+过程+关键取舍+指标变化+你负责的部分”；不问管理/绩效/组织类问题；不问能直接查标准答案的问题；不让候选人画图/交材料。
+4) keywords 必须保留 positive/negative 两组语义：每个元素一个短语；不要随意清空/大量删除；若删改必须在 rationale.keywords 说明原因。
+5) candidate_filters 输出必须为 null（系统会继承上一版，不允许本次优化修改）。
+6) 强调底层核心能力与边界问题处理经验（取舍/边界/故障与恢复/一致性/版本兼容/成本与性能/机制化治理），不要只写“私有化交付”这类表层能力。
+
+【输入】
+current_job_portrait = {json.dumps(_json_safe(current_job), ensure_ascii=False)}
+feedback_items = {json.dumps(_json_safe(feedback_items), ensure_ascii=False)}
+downstream_usage = {_json_safe(_DOWNSTREAM_USAGE)!r}
+
+【输出（强制 JSON，且必须满足给定 schema）】
+""".strip()
+
+    url = base_url.rstrip("/") + "/chat/completions"
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": "只输出 JSON，不要 markdown，不要解释。严格遵守 schema。"},
+            {"role": "user", "content": prompt},
+        ],
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {"name": "JobPortraitOptimizationSchema", "schema": schema, "strict": True},
+        },
+        "temperature": 0.2,
+    }
+    # NOTE: do not set a client-side timeout here; some providers can take minutes for long outputs.
+    # If you want to enforce a timeout anyway, set OPENAI_HTTP_TIMEOUT_SECONDS (float).
+    timeout_raw = (os.environ.get("OPENAI_HTTP_TIMEOUT_SECONDS") or "").strip()
+    timeout: Optional[float] = None
+    if timeout_raw:
+        timeout = float(timeout_raw)
+
+    request_kwargs: Dict[str, Any] = {
+        "url": url,
+        "headers": {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        "json": payload,
+    }
+    if timeout is not None:
+        request_kwargs["timeout"] = timeout
+
+    resp = requests.post(**request_kwargs)
+    if resp.status_code >= 400:
+        raise RuntimeError(f"OpenAI error {resp.status_code}: {resp.text[:800]}")
+    data = resp.json()
+    content = (((data.get("choices") or [{}])[0].get("message") or {}).get("content")) or ""
+    try:
+        parsed = json.loads(content)
+    except Exception:
+        raise RuntimeError("OpenAI returned non-JSON content")
+    return parsed
 
 
 def get_client():
@@ -442,7 +746,7 @@ class handler(BaseHTTPRequestHandler):
     
     def _send_json_response(self, status_code, data):
         """Helper to send JSON response"""
-        response_body = json.dumps(data, ensure_ascii=False).encode('utf-8')
+        response_body = json.dumps(_json_safe(data), ensure_ascii=False).encode('utf-8')
         self.send_response(status_code)
         self.send_header('Content-type', 'application/json')
         self.send_header('Access-Control-Allow-Origin', '*')
@@ -490,6 +794,188 @@ class handler(BaseHTTPRequestHandler):
         """Handle routing logic"""
         try:
             print(f"DEBUG: Method={method}, Path={path}, Query={query}", file=sys.stderr)
+
+            # ------------------------------------------------------------------
+            # Job portrait optimization APIs (CN_job_optimizations)
+            # ------------------------------------------------------------------
+            if path.startswith("/api/jobs/optimizations"):
+                # GET /api/jobs/optimizations/count?job_id=...
+                if method == "GET" and path.endswith("/count"):
+                    job_id = self._extract_job_id(path, query) or (query.get("job_id", [None])[0] if "job_id" in query else None)
+                    job_id = unquote(job_id) if job_id else ""
+                    base_job_id = get_base_job_id(job_id)
+                    count = _count_feedback(base_job_id, include_closed=False)
+                    self._send_json_response(200, {"success": True, "data": {"job_id": base_job_id, "count": count}})
+                    return
+
+                # GET /api/jobs/optimizations/list?job_id=...
+                if method == "GET" and path.endswith("/list"):
+                    job_id = self._extract_job_id(path, query) or (query.get("job_id", [None])[0] if "job_id" in query else None)
+                    job_id = unquote(job_id) if job_id else ""
+                    base_job_id = get_base_job_id(job_id)
+                    items = _list_feedback(base_job_id, limit=500, include_closed=False)
+                    self._send_json_response(200, {"success": True, "data": items})
+                    return
+
+                # POST /api/jobs/optimizations/add
+                if method == "POST" and path.endswith("/add"):
+                    job_id = get_base_job_id((body.get("job_id") or "").strip())
+                    candidate_id = (body.get("candidate_id") or "").strip()
+                    conversation_id = (body.get("conversation_id") or "").strip()
+                    candidate_name = (body.get("candidate_name") or "").strip()
+                    job_applied = (body.get("job_applied") or "").strip()
+                    suggestion = (body.get("suggestion") or "").strip()
+                    current_analysis = body.get("current_analysis") or {}
+                    target_scores = body.get("target_scores") or {}
+
+                    if not job_id:
+                        self._send_json_response(400, {"success": False, "error": "job_id is required"})
+                        return
+                    if not candidate_id:
+                        self._send_json_response(400, {"success": False, "error": "candidate_id is required"})
+                        return
+                    if not conversation_id:
+                        self._send_json_response(400, {"success": False, "error": "conversation_id is required"})
+                        return
+                    if not suggestion:
+                        self._send_json_response(400, {"success": False, "error": "suggestion is required"})
+                        return
+
+                    # Must provide at least one target score.
+                    has_any_score = any(v is not None and v != "" for v in target_scores.values())
+                    if not has_any_score:
+                        self._send_json_response(400, {"success": False, "error": "at least one target score is required"})
+                        return
+
+                    now = _utc_now()
+                    item_id = str(uuid.uuid4())
+                    record = {
+                        "id": _truncate_field(item_id, 64),
+                        "feedback_vector": [0.0, 0.0],
+                        "job_id": _truncate_field(job_id, 64),
+                        "job_applied": _truncate_field(job_applied, 200),
+                        "candidate_id": _truncate_field(candidate_id, 64),
+                        "conversation_id": _truncate_field(conversation_id, 128),
+                        "candidate_name": _truncate_field(candidate_name, 200),
+                        "current_analysis": current_analysis or {},
+                        "target_scores": target_scores or {},
+                        "suggestion": _truncate_field(suggestion, 5000),
+                        "status": "open",
+                        "created_at": _truncate_field(now, 64),
+                        "updated_at": _truncate_field(now, 64),
+                    }
+                    try:
+                        _upsert_feedback(record)
+                        self._send_json_response(200, {"success": True, "data": record})
+                    except Exception as exc:
+                        self._send_json_response(500, {"success": False, "error": str(exc)})
+                    return
+
+                # POST /api/jobs/optimizations/update
+                if method == "POST" and path.endswith("/update"):
+                    item_id = (body.get("id") or "").strip()
+                    if not item_id:
+                        self._send_json_response(400, {"success": False, "error": "id is required"})
+                        return
+                    existing = _get_feedback(item_id)
+                    if not existing:
+                        self._send_json_response(404, {"success": False, "error": "item not found"})
+                        return
+                    suggestion = (body.get("suggestion") or "").strip()
+                    target_scores = body.get("target_scores") or {}
+                    if suggestion:
+                        existing["suggestion"] = _truncate_field(suggestion, 5000)
+                    if target_scores:
+                        has_any_score = any(v is not None and v != "" for v in target_scores.values())
+                        if not has_any_score:
+                            self._send_json_response(400, {"success": False, "error": "at least one target score is required"})
+                            return
+                        existing["target_scores"] = target_scores
+                    existing["updated_at"] = _truncate_field(_utc_now(), 64)
+                    try:
+                        _upsert_feedback(existing)
+                        self._send_json_response(200, {"success": True, "data": existing})
+                    except Exception as exc:
+                        self._send_json_response(500, {"success": False, "error": str(exc)})
+                    return
+
+                # POST /api/jobs/optimizations/generate
+                if method == "POST" and path.endswith("/generate"):
+                    job_id = get_base_job_id((body.get("job_id") or "").strip())
+                    item_ids = body.get("item_ids") or []
+                    if not job_id:
+                        self._send_json_response(400, {"success": False, "error": "job_id is required"})
+                        return
+                    if not item_ids:
+                        self._send_json_response(400, {"success": False, "error": "item_ids is required"})
+                        return
+                    current_job = get_job_by_id(job_id)
+                    if not current_job:
+                        self._send_json_response(404, {"success": False, "error": "job not found"})
+                        return
+                    feedback_items = []
+                    for iid in item_ids:
+                        it = _get_feedback(str(iid))
+                        if not it:
+                            continue
+                        if get_base_job_id(it.get("job_id", "")) != job_id:
+                            continue
+                        feedback_items.append(it)
+                    if not feedback_items:
+                        self._send_json_response(400, {"success": False, "error": "no valid feedback items"})
+                        return
+                    try:
+                        out = _openai_generate_job_portrait_optimization(current_job, feedback_items)
+                        self._send_json_response(200, {"success": True, "data": out})
+                    except Exception as exc:
+                        self._send_json_response(500, {"success": False, "error": str(exc)})
+                    return
+
+                # POST /api/jobs/optimizations/publish
+                if method == "POST" and path.endswith("/publish"):
+                    job_id = get_base_job_id((body.get("job_id") or "").strip())
+                    item_ids = body.get("item_ids") or []
+                    job_portrait = body.get("job_portrait") or {}
+                    if not job_id:
+                        self._send_json_response(400, {"success": False, "error": "job_id is required"})
+                        return
+                    if not item_ids:
+                        self._send_json_response(400, {"success": False, "error": "item_ids is required"})
+                        return
+                    current_job = get_job_by_id(job_id)
+                    if not current_job:
+                        self._send_json_response(404, {"success": False, "error": "job not found"})
+                        return
+
+                    # Defensive merges: candidate_filters + notification + background must be preserved.
+                    merged = {
+                        "position": current_job.get("position", ""),
+                        "description": job_portrait.get("description", current_job.get("description", "")),
+                        "responsibilities": job_portrait.get("responsibilities", current_job.get("responsibilities", "")),
+                        "requirements": job_portrait.get("requirements", current_job.get("requirements", "")),
+                        "target_profile": job_portrait.get("target_profile", current_job.get("target_profile", "")),
+                        "drill_down_questions": job_portrait.get("drill_down_questions", current_job.get("drill_down_questions", "")),
+                        "keywords": job_portrait.get("keywords") or current_job.get("keywords") or {"positive": [], "negative": []},
+                        "candidate_filters": current_job.get("candidate_filters"),
+                        "notification": current_job.get("notification"),
+                        "background": current_job.get("background", ""),
+                    }
+                    # If generator accidentally clears keywords, keep current.
+                    kw = merged.get("keywords") or {}
+                    if not (kw.get("positive") or kw.get("negative")):
+                        merged["keywords"] = current_job.get("keywords") or {"positive": [], "negative": []}
+
+                    try:
+                        ok = update_job(job_id, **merged)
+                        if not ok:
+                            self._send_json_response(500, {"success": False, "error": "failed to publish job"})
+                            return
+                        closed = _close_feedback_items(job_id, item_ids)
+                        updated_job = get_job_by_id(job_id)
+                        self._send_json_response(200, {"success": True, "data": {"job": updated_job, "closed": closed}})
+                    except Exception as exc:
+                        self._send_json_response(500, {"success": False, "error": str(exc)})
+                    return
             
             # Route handling
             if method == 'GET' and (path.endswith('/list') or path == '/api/jobs' or '/list' in path):

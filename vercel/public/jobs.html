@@ -204,10 +204,20 @@
                         <h1 class="text-3xl font-bold text-gray-800">岗位画像</h1>
                         <p class="text-gray-600 mt-2">管理招聘岗位的背景、职责、要求和理想人选画像</p>
                     </div>
-                    <button onclick="createNewJob()"
-                            class="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium">
-                        ➕ 创建新岗位
-                    </button>
+                    <div class="flex items-center gap-2">
+                        <button id="jobs-optimize-btn"
+                                disabled
+                                title="优化清单为空：请打开候选人详情，点击“评分不准”添加反馈"
+                                class="relative px-6 py-3 bg-green-600 text-white rounded-lg font-medium opacity-50 cursor-not-allowed">
+                            <span id="jobs-optimize-label">优化肖像（读取反馈中）</span>
+                            <span id="jobs-optimize-badge"
+                                  class="absolute -top-2 -right-2 hidden w-6 h-6 text-xs font-bold rounded-full bg-red-600 text-white items-center justify-center"></span>
+                        </button>
+                        <button onclick="createNewJob()"
+                                class="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium">
+                            ➕ 创建新岗位
+                        </button>
+                    </div>
                 </div>
             </div>
             
@@ -427,11 +437,70 @@
                 const baseJobId = job.base_job_id || getBaseJobId(job.job_id || '');
                 url.searchParams.set('tab', baseJobId);
                 loadJobForm(job);
+                updateOptimizeButtonState(baseJobId);
             } else {
                 url.searchParams.delete('tab');
                 loadNewJobForm();
+                updateOptimizeButtonState(null);
             }
             window.history.pushState({}, '', url);
+        }
+
+        async function updateOptimizeButtonState(baseJobId) {
+            const btn = document.getElementById('jobs-optimize-btn');
+            const badge = document.getElementById('jobs-optimize-badge');
+            const label = document.getElementById('jobs-optimize-label');
+            if (!btn || !badge || !label) return;
+
+            badge.classList.add('hidden');
+            badge.classList.remove('flex');
+
+            if (!baseJobId) {
+                btn.disabled = true;
+                btn.classList.add('opacity-50', 'cursor-not-allowed');
+                btn.classList.remove('hover:bg-green-700');
+                label.textContent = '优化肖像（请选择岗位）';
+                btn.title = '请先选择一个岗位';
+                return;
+            }
+
+            btn.disabled = true;
+            btn.classList.add('opacity-50', 'cursor-not-allowed');
+            btn.classList.remove('hover:bg-green-700');
+            label.textContent = '优化肖像（读取反馈中）';
+            btn.title = '正在读取人类反馈数据…';
+            btn.onclick = null;
+
+            try {
+                const resp = await apiCall(`/jobs/optimizations/count?job_id=${encodeURIComponent(baseJobId)}`);
+                const count = resp?.data?.count ?? 0;
+                if (!count) {
+                    btn.disabled = true;
+                    btn.classList.add('opacity-50', 'cursor-not-allowed');
+                    btn.classList.remove('hover:bg-green-700');
+                    label.textContent = '优化肖像（无反馈）';
+                    btn.title = '优化清单为空：请打开候选人详情，点击“评分不准”添加反馈';
+                    return;
+                }
+                btn.disabled = false;
+                btn.classList.remove('opacity-50', 'cursor-not-allowed');
+                btn.classList.add('hover:bg-green-700');
+                label.textContent = '优化肖像';
+                btn.title = '';
+                badge.textContent = String(count);
+                badge.classList.remove('hidden');
+                badge.classList.add('flex');
+                btn.onclick = () => {
+                    window.location.href = `/jobs/optimize?job_id=${encodeURIComponent(baseJobId)}`;
+                };
+            } catch (e) {
+                console.error('Failed to load optimization count:', e);
+                btn.disabled = true;
+                btn.classList.add('opacity-50', 'cursor-not-allowed');
+                btn.classList.remove('hover:bg-green-700');
+                label.textContent = '优化肖像（加载失败）';
+                btn.title = '反馈数量加载失败，请刷新页面重试';
+            }
         }
         
         // Helper functions
@@ -1117,4 +1186,3 @@
     </footer>
 </body>
 </html>
-

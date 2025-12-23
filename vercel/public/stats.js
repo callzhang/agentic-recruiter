@@ -546,7 +546,16 @@ function renderJobStats(data) {
     if (!container) return;
     
     let jobs = data.jobs || [];
-    const best = data.best;
+    // Skip inactive jobs on homepage stats.
+    const isInactive = (j) => String((j && j.status) || 'active').trim().toLowerCase() === 'inactive';
+    const skippedInactiveCountRaw = (
+        Number(data?.skipped_inactive_jobs) ||
+        Number(data?.skipped_inactive) ||
+        0
+    );
+    const skippedInactiveCount = skippedInactiveCountRaw > 0 ? skippedInactiveCountRaw : jobs.filter(isInactive).length;
+    jobs = jobs.filter(j => !isInactive(j));
+    const best = (data.best && !isInactive(data.best)) ? data.best : null;
     
     if (jobs.length === 0) {
         container.innerHTML = '<div class="text-gray-600">暂无数据，先去处理候选人吧。</div>';
@@ -561,6 +570,14 @@ function renderJobStats(data) {
     });
     
     let html = '';
+
+    if (skippedInactiveCount > 0) {
+        html += `
+            <div class="bg-gray-50 border rounded-lg p-3 text-sm text-gray-600">
+                已隐藏 ${skippedInactiveCount} 个 inactive 岗位的统计数据。
+            </div>
+        `;
+    }
     
     // Render best job card
     if (best) {
@@ -689,4 +706,3 @@ document.addEventListener('DOMContentLoaded', function() {
         loadStatsPage();
     }
 });
-
