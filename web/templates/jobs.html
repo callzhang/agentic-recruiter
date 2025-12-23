@@ -587,12 +587,12 @@ function generateJobFormHTML(options) {
         <button type="button"
                 onclick="copyJobPortraitJsonFromForm()"
                 class="px-3 py-1 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 text-sm font-medium shadow-sm">
-            拷贝岗位肖像文档
+            📤拷贝JSON到剪切板
         </button>
         <button type="button"
                 onclick="pasteJobPortraitJsonToForm()"
                 class="px-3 py-1 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 text-sm font-medium shadow-sm">
-            粘贴剪切板 JSON 到页面
+            🖌粘贴JSON到页面
         </button>
     `;
     
@@ -645,7 +645,7 @@ function generateJobFormHTML(options) {
                             </div>
                         </div>
                         
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
                             <div>
                                 <label for="job_id" class="block text-sm font-medium text-gray-700 mb-2">岗位 ID *</label>
                                 ${jobIdField}
@@ -658,6 +658,28 @@ function generateJobFormHTML(options) {
                                        class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                                        placeholder="例如: Python开发工程师">
                             </div>
+                            
+                            ${!isNew ? `
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-2">岗位状态</label>
+                                <div class="flex items-center gap-3">
+                                    <label class="relative inline-flex items-center cursor-pointer">
+                                        <input type="checkbox" 
+                                               id="job-status-toggle" 
+                                               ${(job.status || 'active') === 'active' ? 'checked' : ''}
+                                               onchange="toggleJobStatus('${escapeHtml(baseJobId)}', this.checked)"
+                                               class="sr-only peer">
+                                        <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                                        <span class="ml-3 text-sm font-medium text-gray-700" id="job-status-label">
+                                            ${(job.status || 'active') === 'active' ? '激活' : '停用'}
+                                        </span>
+                                    </label>
+                                    <span class="text-xs text-gray-500" id="job-status-saving" style="display: none;">保存中...</span>
+                                    <span class="text-xs text-green-600" id="job-status-saved" style="display: none;">✓ 已保存</span>
+                                </div>
+                                <p class="text-xs text-gray-500 mt-1">停用的岗位将不会在首页统计中显示</p>
+                            </div>
+                            ` : '<div></div>'}
                         </div>
                     </div>
                     
@@ -1115,6 +1137,61 @@ async function useThisVersion(baseJobId, version) {
         }
     } catch (error) {
         showToast('切换版本失败: ' + error.message, 'error');
+    }
+}
+
+// Toggle job status and auto-save
+async function toggleJobStatus(baseJobId, isActive) {
+    const status = isActive ? 'active' : 'inactive';
+    const savingEl = document.getElementById('job-status-saving');
+    const savedEl = document.getElementById('job-status-saved');
+    const labelEl = document.getElementById('job-status-label');
+    
+    // Show saving indicator
+    if (savingEl) savingEl.style.display = '';
+    if (savedEl) savedEl.style.display = 'none';
+    
+    try {
+        const result = await apiCall(`/jobs/api/update-status`, 'POST', {
+            job_id: baseJobId,
+            status: status
+        });
+        
+        if (result.success) {
+            // Update label
+            if (labelEl) labelEl.textContent = isActive ? '激活' : '停用';
+            
+            // Show saved indicator
+            if (savingEl) savingEl.style.display = 'none';
+            if (savedEl) {
+                savedEl.style.display = '';
+                setTimeout(() => {
+                    if (savedEl) savedEl.style.display = 'none';
+                }, 2000);
+            }
+            
+            // Update job data in memory
+            const jobIndex = jobsData.findIndex(j => getBaseJobId(j.job_id || j.base_job_id || '') === baseJobId);
+            if (jobIndex !== -1) {
+                jobsData[jobIndex].status = status;
+            }
+            
+            showToast(`岗位状态已更新为${isActive ? '激活' : '停用'}`, 'success');
+        } else {
+            // Revert checkbox on error
+            const toggleEl = document.getElementById('job-status-toggle');
+            if (toggleEl) toggleEl.checked = !isActive;
+            
+            if (savingEl) savingEl.style.display = 'none';
+            showToast('更新状态失败: ' + (result.error || '未知错误'), 'error');
+        }
+    } catch (error) {
+        // Revert checkbox on error
+        const toggleEl = document.getElementById('job-status-toggle');
+        if (toggleEl) toggleEl.checked = !isActive;
+        
+        if (savingEl) savingEl.style.display = 'none';
+        showToast('更新状态失败: ' + error.message, 'error');
     }
 }
 </script>

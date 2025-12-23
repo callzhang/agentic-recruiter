@@ -18,6 +18,7 @@ from src.jobs_store import (
     get_job_by_versioned_id,
     insert_job,
     update_job as update_job_store,
+    update_job_status,
     delete_job as delete_job_store, delete_job_version,
     get_job_versions, switch_job_version, get_base_job_id
 )
@@ -34,6 +35,7 @@ from src.job_optimization_feedback_store import (
 )
 from src.assistant_utils import _openai_client
 from src.config import get_openai_config
+from openai import OpenAI
 from src.prompts.assistant_actions_prompts import ACTION_PROMPTS as ASSISTANT_ACTION_PROMPTS, AnalysisSchema
 from src.prompts.job_portrait_optimization_prompts import (
     JOB_PORTRAIT_OPTIMIZATION_PROMPT,
@@ -43,6 +45,23 @@ from src.prompts.job_portrait_optimization_prompts import (
 logger = get_logger()
 router = APIRouter()
 templates = Jinja2Templates(directory="web/templates")
+
+def _get_openai_client_from_config(openai_config: dict[str, Any]) -> OpenAI:
+    """Create an OpenAI client using OpenAI-specific keys from config.
+
+    For this project we keep compatibility with two config shapes:
+    - {api_key, base_url, model, ...}
+    - {OPENAI_API_KEY, OPENAI_BASE_URL, ...} (preferred for the job optimization flow)
+    """
+    api_key = (openai_config.get("OPENAI_API_KEY") or openai_config.get("api_key") or "").strip()
+    base_url = (openai_config.get("OPENAI_BASE_URL") or openai_config.get("base_url") or "").strip()
+
+    if not api_key:
+        raise HTTPException(status_code=500, detail="OpenAI 配置缺失：OPENAI_API_KEY/api_key 为空")
+
+    if base_url:
+        return OpenAI(api_key=api_key, base_url=base_url)
+    return OpenAI(api_key=api_key)
 
 def _validate_requirements_scorecard(requirements: str) -> tuple[bool, str]:
     text = (requirements or "").strip()
@@ -679,6 +698,46 @@ async def switch_job_version_endpoint(job_id: str, request: Request):
         )
 
 
+@router.post("/api/update-status", response_class=JSONResponse)
+async def api_update_job_status(request: Request):
+    """Update job status without creating a new version."""
+    try:
+        json_data = await request.json()
+        job_id = json_data.get("job_id", "").strip()
+        status = json_data.get("status", "").strip()
+        
+        if not job_id:
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "error": "job_id 不能为空"}
+            )
+        
+        if status not in ["active", "inactive"]:
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "error": "status 必须是 'active' 或 'inactive'"}
+            )
+        
+        base_job_id = get_base_job_id(job_id)
+        
+        # Update status without creating new version (database operation, no browser lock needed)
+        if update_job_status(base_job_id, status):
+            # Return updated job data
+            updated_job = get_job_by_id(base_job_id)
+            return JSONResponse(content={"success": True, "data": updated_job})
+        else:
+            return JSONResponse(
+                status_code=500,
+                content={"success": False, "error": "更新状态失败"}
+            )
+    except Exception as exc:
+        logger.exception("Failed to update job status: %s", exc)
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(exc)}
+        )
+
+
 @router.get("/api/optimizations/count", response_class=JSONResponse)
 async def api_optimization_count(job_id: str = Query(..., description="base_job_id")):
     """Return optimization feedback count for a job."""
@@ -797,8 +856,9 @@ async def api_optimization_generate(payload: GenerateOptimizationRequest):
 
     openai_config = get_openai_config()
     model = openai_config.get("model") or "gpt-5.2"
+    client = _get_openai_client_from_config(openai_config)
 
-    response = _openai_client.responses.parse(
+    response = client.responses.parse(
         model=model,
         instructions=JOB_PORTRAIT_OPTIMIZATION_PROMPT,
         input=json.dumps(
