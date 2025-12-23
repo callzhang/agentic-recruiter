@@ -543,8 +543,6 @@ const CycleReplyHelpers = {
         let candidateCards = candidateList.querySelectorAll('.candidate-card');
         
         if (candidateCards.length === 0) {
-            console.log(`查询候选人: ${mode}`);
-            
             // Use the activeTab from candidateTabs component, fallback to mode
             const activeTab = candidateTabs?.activeTab || mode;
             

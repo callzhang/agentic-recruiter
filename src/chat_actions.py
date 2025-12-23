@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional
 import time
 from playwright.async_api import Locator, Page
 from tenacity import retry, stop_after_attempt, wait_exponential, wait_fixed
-
+import random
 from .global_logger import logger
 from .resume_capture_async import (
     _create_error_result,
@@ -24,13 +24,13 @@ CHAT_MENU_SELECTOR = "dl.menu-chat"
 CHAT_ITEM_SELECTORS = "div.geek-item"
 CONVERSATION_SELECTOR = "div.conversation-message"
 MESSAGE_INPUT_SELECTOR = "#boss-chat-editor-input"
-RESUME_BUTTON_SELECTOR = "a.resume-btn-file, div.resume-btn-file"
+RESUME_BUTTON_SELECTOR = "div.resume-file-content, a.resume-btn-file, div.resume-btn-file"
 RESUME_IFRAME_SELECTOR = "iframe.attachment-box"
 PDF_VIEWER_SELECTOR = "div.pdfViewer"
 
 
 @retry(stop=stop_after_attempt(2), wait=wait_fixed(1))
-async def _prepare_chat_page(page: Page, tab = None, status = None, job_title = None, wait_timeout: int = 5000) -> Page:
+async def _prepare_chat_page(page: Page, tab = None, status = None, job_title = None, timeout_s: int = 5) -> Page:
     """
     Navigates and configures the chat page for automated actions.
 
@@ -46,7 +46,7 @@ async def _prepare_chat_page(page: Page, tab = None, status = None, job_title = 
         tab (str, optional): The chat tab to select (e.g., "新招呼", "沟通中").
         status (str, optional): The chat status filter to apply.
         job_title (str, optional): The job title to select from the dropdown.
-        wait_timeout (int, optional): Timeout in milliseconds to wait for visibility. Defaults to 5000.
+        timeout_s (int, optional): Timeout in seconds to wait for visibility. Defaults to 5.
 
     Returns:
         Page: The configured Page object, ready for further actions.
@@ -66,7 +66,9 @@ async def _prepare_chat_page(page: Page, tab = None, status = None, job_title = 
             start_time = time.time()
             while await page.locator(CHAT_ITEM_SELECTORS).first.count() == 0:
                 await page.wait_for_timeout(500)
-                if time.time() - start_time > wait_timeout:
+                if await page.locator('p.no-setting-text:has-text("暂无牛人")').count() > 0:
+                    break
+                if time.time() - start_time > timeout_s:
                     raise RuntimeError(f"未找到标签为 '{tab}' 的对话")
     
     if status:
@@ -78,7 +80,9 @@ async def _prepare_chat_page(page: Page, tab = None, status = None, job_title = 
             start_time = time.time()
             while await page.locator(CHAT_ITEM_SELECTORS).first.count() == 0:
                 await page.wait_for_timeout(500)
-                if time.time() - start_time > wait_timeout:
+                if await page.locator('p.no-setting-text:has-text("暂无牛人")').count() > 0:
+                    break
+                if time.time() - start_time > timeout_s:
                     raise RuntimeError(f"未找到状态为 '{status}' 的聊天对话")
     
     if job_title:
@@ -96,7 +100,9 @@ async def _prepare_chat_page(page: Page, tab = None, status = None, job_title = 
                     start_time = time.time()
                     while await page.locator(CHAT_ITEM_SELECTORS).first.count() == 0:
                         await page.wait_for_timeout(500)
-                        if time.time() - start_time > wait_timeout:
+                        if await page.locator('p.no-setting-text:has-text("暂无牛人")').count() > 0:
+                            break
+                        if time.time() - start_time > timeout_s:
                             raise RuntimeError(f"未找到职位为 '{job_title}' 的岗位")
                 else:
                     await page.locator(CHAT_MENU_SELECTOR).click(timeout=1000)
@@ -106,7 +112,7 @@ async def _prepare_chat_page(page: Page, tab = None, status = None, job_title = 
     return page
 
 @retry(stop=stop_after_attempt(2), wait=wait_fixed(1))
-async def _go_to_chat_dialog(page: Page, chat_id: str, wait_timeout: int = 5000) -> Optional[Locator]:
+async def _go_to_chat_dialog(page: Page, chat_id: str, wait_timeout: int = 5) -> Optional[Locator]:
     direct_selectors = f"{CHAT_ITEM_SELECTORS}[data-id=\"{chat_id}\"], [role='listitem'][data-id=\"{chat_id}\"]"
     target = page.locator(direct_selectors)
     if await target.count() == 0:
@@ -164,7 +170,7 @@ async def get_chat_stats_action(page: Page) -> Dict[str, Any]:
 
 
 @retry(stop=stop_after_attempt(2), wait=wait_fixed(1))
-async def send_message_action(page: Page, chat_id: str, message: str) -> bool:
+async def send_message_action(page: Page, chat_id: str, message: str, timeout: int = 3000) -> bool:
     """Send message to candidate. Returns True on success, raises ValueError on failure."""
     if not message:
         return False
@@ -180,7 +186,7 @@ async def send_message_action(page: Page, chat_id: str, message: str) -> bool:
         logger.error("未找到消息输入框")
         return False
 
-    await input_field.wait_for(state="visible", timeout=3000)
+    await input_field.wait_for(state="visible", timeout=timeout)
     await input_field.click()
     await input_field.fill("")
     await input_field.type(message)
@@ -189,7 +195,7 @@ async def send_message_action(page: Page, chat_id: str, message: str) -> bool:
     if await send_button.count() == 0:
         await page.keyboard.press("Enter")
     else:
-        await send_button.wait_for(state="visible", timeout=3000)
+        await send_button.wait_for(state="visible", timeout=timeout)
         await send_button.click()
 
     await page.wait_for_timeout(1000)
@@ -201,23 +207,24 @@ async def send_message_action(page: Page, chat_id: str, message: str) -> bool:
     return True
 
 
-@retry(stop=stop_after_attempt(2), wait=wait_fixed(1))
-async def discard_candidate_action(page: Page, chat_id: str) -> bool:
-    """Discard (PASS) candidate. Returns True on success, raises ValueError on failure."""
+# @retry(stop=stop_after_attempt(2), wait=wait_fixed(1))
+async def discard_candidate_action(page: Page, chat_id: str, timeout: int = 3000) -> bool:
+    """Skip (PASS) candidate. Returns True on success, raises ValueError on failure."""
     await _prepare_chat_page(page)
     dialog = await _go_to_chat_dialog(page, chat_id)
     if not dialog:
         raise RuntimeError("未找到指定对话项")
 
     not_fit_button = page.locator("div.not-fit-wrap").first
-    await not_fit_button.wait_for(state="visible", timeout=3000)
+    await not_fit_button.wait_for(state="visible", timeout=timeout)
     
     # wait for dialog to be deleted
     max_attempts = 10
     for _ in range(max_attempts):
         await not_fit_button.hover(timeout=1000)
-        await page.wait_for_timeout(1000)
+        await page.wait_for_timeout(500)
         await not_fit_button.click()
+        await page.wait_for_timeout(1000)
         if not await _go_to_chat_dialog(page, chat_id):
             return True  # Successfully discarded
     
@@ -233,7 +240,7 @@ async def list_conversations_action(
     status: str = '未读', 
     job_applied: str = '全部', 
     unread_only=True,
-    reversed_order=False
+    random_order=False
 ) -> List[Dict[str, Any]]:
     '''Get candidate list from chat page
     Args:
@@ -250,9 +257,12 @@ async def list_conversations_action(
     items = page.locator(CHAT_ITEM_SELECTORS)
     count = await items.count()
     messages: List[Dict[str, Any]] = []
-    for i in range(count):
-        item = items.nth(count-i-1 if reversed_order else i)
+    index_list = list(range(count))
+    if random_order:
+        random.shuffle(index_list)
+    for i in index_list:
         try:
+            item = items.nth(i)
             data_id = await item.get_attribute("data-id", timeout=100)
             name = (await item.locator("span.geek-name").inner_text(timeout=100)).strip()
             # job_title = (await item.locator("span.source-job").inner_text()).strip() # using job_applied instead, meaning we stick to our own job_applied field instead of the web job title
@@ -282,7 +292,7 @@ async def list_conversations_action(
 
 
 @retry(stop=stop_after_attempt(2), wait=wait_fixed(1))
-async def get_chat_history_action(page: Page, chat_id: str) -> List[Dict[str, Any]]:
+async def get_chat_history_action(page: Page, chat_id: str, timeout: int = 200) -> List[Dict[str, Any]]:
     await _prepare_chat_page(page)
     dialog = await _go_to_chat_dialog(page, chat_id)
     if not dialog:
@@ -302,7 +312,7 @@ async def get_chat_history_action(page: Page, chat_id: str) -> List[Dict[str, An
 
         timestamp_entry = message.locator("div.message-time")
         if await timestamp_entry.count() > 0:
-            timestamp_raw = await timestamp_entry.inner_text(timeout=200)
+            timestamp_raw = await timestamp_entry.inner_text(timeout=timeout)
             if len(timestamp_raw) <= 8 and not any(c in timestamp_raw for c in ("年", "月", "日", "-", "/")):
                 today_str = last_timestamp.split(" ")[0] if last_timestamp else date.today().strftime("%Y-%m-%d")
                 timestamp_raw = f"{today_str} {timestamp_raw}"
@@ -319,24 +329,24 @@ async def get_chat_history_action(page: Page, chat_id: str) -> List[Dict[str, An
         # accept system message with timestamp
         system_entry = message.locator("div.item-system[source='chat']")
         if await system_entry.count() > 0:
-            message_str = await system_entry.inner_text(timeout=200)
+            message_str = await system_entry.inner_text(timeout=timeout)
             msg_type = "developer"
             
         resume_entry = message.locator("div.item-resume")
         if await resume_entry.count() > 0:
-            message_str = await resume_entry.inner_text(timeout=200)
+            message_str = await resume_entry.inner_text(timeout=timeout)
             msg_type = "developer"
 
         my_entry = message.locator("div.item-myself >> span")
         if await my_entry.count() > 0:
-            message_str = await my_entry.inner_text(timeout=200)
+            message_str = await my_entry.inner_text(timeout=timeout)
             status_loc = message.locator("i.status")
-            status = await status_loc.inner_text(timeout=200) if await status_loc.count() > 0 else None
+            status = await status_loc.inner_text(timeout=timeout) if await status_loc.count() > 0 else None
             msg_type = "assistant"
 
         friend_entry = message.locator("div.item-friend")
         if await friend_entry.count() > 0:
-            message_str = await friend_entry.inner_text(timeout=200)
+            message_str = await friend_entry.inner_text(timeout=timeout)
             if message_str == '' and await friend_entry.locator('img').count() > 0:
                 message_str = '[图片]无法加载'
             if await friend_entry.locator('div.message-card-wrap').count() > 0:
@@ -355,7 +365,7 @@ async def get_chat_history_action(page: Page, chat_id: str) -> List[Dict[str, An
             )
         else:
             try:
-                raw = await message.inner_text(timeout=200)
+                raw = await message.inner_text(timeout=timeout)
             except Exception:
                 raw = ""
             logger.warning("不支持的消息内容: %s", raw)
@@ -404,7 +414,7 @@ async def view_online_resume_action(page: Page, chat_id: str, timeout: int = 200
 #--------------------------------------------------
 
 # @retry(stop=stop_after_attempt(2), wait=wait_fixed(1))
-async def request_full_resume_action(page: Page, chat_id: str) -> bool:
+async def request_full_resume_action(page: Page, chat_id: str, timeout: int = 3000) -> bool:
     """Request resume from candidate. Returns True on success, False on failure (e.g., dialog not found)."""
     await _prepare_chat_page(page)
     dialog = await _go_to_chat_dialog(page, chat_id)
@@ -419,21 +429,21 @@ async def request_full_resume_action(page: Page, chat_id: str) -> bool:
     
     # 求简历
     btn = page.locator("span.operate-btn:has-text('求简历')").first
-    await btn.wait_for(state="visible", timeout=3000)
+    await btn.wait_for(state="visible", timeout=timeout)
     
     t0 = time.time()
     while "disabled" not in await btn.get_attribute("class"):
         try:
-            await btn.click(timeout=1000)
+            await btn.click(timeout=timeout)
             # 境外提醒
             confirm_continue = page.locator("div.btn-sure-v2:has-text('继续交换')")
             if await confirm_continue.count() > 0:
-                await confirm_continue.click(timeout=5)
+                await confirm_continue.click(timeout=timeout)
                 logger.info("境外提醒已确认")
             # Confirm dialog
             confirm = page.locator("span.boss-btn-primary:has-text('确定')")
             if await confirm.count() > 0:
-                await confirm.click(timeout=1000)
+                await confirm.click(timeout=timeout)
                 logger.info("简历请求已发送")
         except Exception as e:
             pass
@@ -445,7 +455,7 @@ async def request_full_resume_action(page: Page, chat_id: str) -> bool:
     
 
 @retry(stop=stop_after_attempt(2), wait=wait_fixed(1))
-async def accept_full_resume_action(page: Page, chat_id: str) -> bool:
+async def accept_full_resume_action(page: Page, chat_id: str, timeout_ms: int = 1000) -> bool:
     """Accept candidate's resume. Returns True on success, raises ValueError if accept button not found."""
     await _prepare_chat_page(page)
     await _go_to_chat_dialog(page, chat_id)
@@ -455,13 +465,13 @@ async def accept_full_resume_action(page: Page, chat_id: str) -> bool:
         return False
     confirm_continue = page.locator("div.btn-sure-v2:has-text('继续交换')")
     tried = 0
-    while 'disabled' not in await accept_button.get_attribute("class", timeout=100):
+    while 'disabled' not in await accept_button.get_attribute("class", timeout=timeout_ms):
         try:
-            await accept_button.click(timeout=1000)
+            await accept_button.click(timeout=timeout_ms)
             await page.wait_for_timeout(500) 
             # 境外提醒
             if await confirm_continue.count() > 0:
-                await confirm_continue.click(timeout=1000)
+                await confirm_continue.click(timeout=timeout_ms)
                 continue
         except Exception as e:
             pass
@@ -474,7 +484,7 @@ async def accept_full_resume_action(page: Page, chat_id: str) -> bool:
 
 
 # @retry(stop=stop_after_attempt(2), wait=wait_fixed(1))
-async def check_full_resume_available(page: Page, chat_id: str):
+async def check_full_resume_available(page: Page, chat_id: str, timeout_ms: int = 2000):
     """Check if full resume is available. Returns resume_button Locator if available, None otherwise."""
     await _prepare_chat_page(page)
     dialog = await _go_to_chat_dialog(page, chat_id)
@@ -487,15 +497,14 @@ async def check_full_resume_available(page: Page, chat_id: str):
     if accepted:
         return True
     # 右上角的简历查看按钮
-    resume_button = page.locator(RESUME_BUTTON_SELECTOR)
+    resume_button = page.locator(RESUME_BUTTON_SELECTOR).first
     if await resume_button.count() == 0:
         logger.warning("未找到简历按钮")
         return False
 
     # Wait for button to become enabled (resume uploaded)
     for _ in range(10):
-        classes = await resume_button.get_attribute("class") or ""
-        if "disabled" not in classes: # 按钮不是disabled状态，则表示简历已上传
+        if "disabled" not in await resume_button.get_attribute("class"): # 按钮不是disabled状态，则表示简历已上传
             return True
         await page.wait_for_timeout(200)
     
@@ -503,7 +512,7 @@ async def check_full_resume_available(page: Page, chat_id: str):
 
 
 # @retry(stop=stop_after_attempt(2), wait=wait_fixed(1))
-async def view_full_resume_action(page: Page, chat_id: str, request: bool = True) -> Dict[str, Any]:
+async def view_full_resume_action(page: Page, chat_id: str, request: bool = True, timeout_ms: int = 20000) -> Dict[str, Any]:
     """View candidate's full offline resume. Returns dict with 'text' and 'pages'. Raises ValueError on failure."""
     await _prepare_chat_page(page)
     await _go_to_chat_dialog(page, chat_id)
@@ -518,7 +527,7 @@ async def view_full_resume_action(page: Page, chat_id: str, request: bool = True
     resume_button = page.locator(RESUME_BUTTON_SELECTOR).first
     await resume_button.click()
     
-    iframe_handle = await page.wait_for_selector(RESUME_IFRAME_SELECTOR, timeout=20000)
+    iframe_handle = await page.wait_for_selector(RESUME_IFRAME_SELECTOR, timeout=timeout_ms)
     frame = await iframe_handle.content_frame()
     if not frame:
         await close_overlay_dialogs(page)
@@ -527,7 +536,7 @@ async def view_full_resume_action(page: Page, chat_id: str, request: bool = True
             "text": None,
         }
     
-    await frame.wait_for_selector(PDF_VIEWER_SELECTOR, timeout=5000)
+    await frame.wait_for_selector(PDF_VIEWER_SELECTOR, timeout=timeout_ms)
     content = await extract_pdf_viewer_text(frame)
     await close_overlay_dialogs(page)
     
@@ -538,7 +547,7 @@ async def view_full_resume_action(page: Page, chat_id: str, request: bool = True
 
 
 @retry(stop=stop_after_attempt(2), wait=wait_fixed(1))
-async def request_contact_action(page: Page, chat_id: str) -> bool:
+async def request_contact_action(page: Page, chat_id: str, timeout_ms: int = 2000) -> bool:
     """Ask candidate for contact information in chat page. Returns True on success, raises ValueError on failure."""
     await _prepare_chat_page(page)
     dialog = await _go_to_chat_dialog(page, chat_id)
@@ -551,9 +560,9 @@ async def request_contact_action(page: Page, chat_id: str) -> bool:
     if await ask_phone_button.count() > 0:
         t0 = time.time()
         while 'disabled' not in await ask_phone_button.get_attribute("class"):
-            await ask_phone_button.click(timeout=2000)
+            await ask_phone_button.click(timeout=timeout_ms)
             try:
-                await ask_phone_button.locator("xpath=parent::div").locator("span.boss-btn-primary:has-text('确定')").click(timeout=2000)
+                await ask_phone_button.locator("xpath=parent::div").locator("span.boss-btn-primary:has-text('确定')").click(timeout=timeout_ms)
             except:
                 pass
             await page.wait_for_timeout(500)
@@ -563,17 +572,17 @@ async def request_contact_action(page: Page, chat_id: str) -> bool:
             clicked_phone = True
     view_phone_number = page.locator("span.operate-btn:has-text('查看电话')").first
     if await view_phone_number.count() > 0:
-        await view_phone_number.click(timeout=2000)
-        phone_number = await view_phone_number.locator("xpath=parent::div").locator("div.exchange-tooltip > span.exchanged > span").inner_text(timeout=2000)
+        await view_phone_number.click(timeout=timeout_ms)
+        phone_number = await view_phone_number.locator("xpath=parent::div").locator("div.exchange-tooltip > span.exchanged > span").inner_text(timeout=timeout_ms)
 
 
     ask_wechat_button = page.locator("span.operate-btn:has-text('换微信')").first
     if await ask_wechat_button.count() > 0:
         t0 = time.time()
         while 'disabled' not in await ask_wechat_button.get_attribute("class"):
-            await ask_wechat_button.click(timeout=2000)
+            await ask_wechat_button.click(timeout=timeout_ms)
             try:
-                await ask_wechat_button.locator("xpath=parent::div").locator("span.boss-btn-primary:has-text('确定')").click(timeout=2000)
+                await ask_wechat_button.locator("xpath=parent::div").locator("span.boss-btn-primary:has-text('确定')").click(timeout=timeout_ms)
             except:
                 pass
             await page.wait_for_timeout(500)
@@ -584,7 +593,7 @@ async def request_contact_action(page: Page, chat_id: str) -> bool:
     # check wechat number
     view_wechat_number = page.locator("span.operate-btn:has-text('查看微信')").first
     if await view_wechat_number.count() > 0:
-        await view_wechat_number.click(timeout=2000)
+        await view_wechat_number.click(timeout=timeout_ms)
         wechat_number = await view_wechat_number.locator("xpath=parent::div").locator("div.exchange-tooltip > span.exchanged > span").inner_text(timeout=2000)
 
     return {

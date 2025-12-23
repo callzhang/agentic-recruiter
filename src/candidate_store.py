@@ -450,18 +450,12 @@ def upsert_candidate(**candidate) -> Optional[str]:
     stored_candidate = None
     
     # Only check for existing candidate if candidate_id is not provided
-    # If candidate_id is provided, we use it directly without checking
     if not candidate_id:
         stored_candidate = get_candidate_by_dict(candidate)
-        candidate_id = stored_candidate.get('candidate_id') if stored_candidate else None
-        candidate['candidate_id'] = candidate_id
-    
-    # Merge metadata if updating existing candidate and metadata is being updated
-    if candidate_id and stored_candidate and "metadata" in candidate:
-        existing_metadata = stored_candidate.get("metadata", {}) or {}
-        new_metadata = candidate.get("metadata", {}) or {}
-        existing_metadata.update(new_metadata) 
-        candidate["metadata"] = existing_metadata
+        if stored_candidate:
+            candidate['candidate_id'] = stored_candidate.get('candidate_id')
+            if existing_metadata := stored_candidate.get("metadata", {}):
+                candidate["metadata"] = existing_metadata
     
     # fixing fields types and filtering only valid fields
     candidate['updated_at'] = datetime.now().isoformat()

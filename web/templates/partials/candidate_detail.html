@@ -386,7 +386,7 @@ window.__candidate_detail_root = window.__candidate_detail_root || root;
 window.__candidate_detail_view_mode = window.__candidate_detail_view_mode || viewMode;
 
 async function process_candidate() {
-    let newStage, currentScore, analysis;
+    let [newStage, currentScore, analysis, isFullAnalysis] = determineStage();
     try {
         // Step 0: short-circuit if already PASS
         if (getCandidateData('stage') === 'PASS') {
@@ -412,51 +412,18 @@ async function process_candidate() {
         }
 
         // Step 4: Determine stage (PASS/CHAT/SEEK by score thresholds)
-        [newStage, currentScore, analysis] = determineStage();
-        let isFullAnalysis = analysis?.resume_type === 'full';
+        [newStage, currentScore, analysis, isFullAnalysis] = determineStage();
         let needReply = await shouldReply();
         const {mode, name, job_applied, notified} = getCandidateData();
-        const handleChatAction = async (gen) => {
-            const action = gen?.action || '';
-            if (action === 'PASS') {
-                newStage = 'PASS';
-                const reason = gen?.reason || '';
-                await passCandidate(reason);
-                return true;
-            }
-            if (action === 'WAIT') {
-                return true;
-            }
-            if (action === 'CONTACT') {
-                newStage = 'CONTACT';
-                if (!getCandidateData('notified')) {
-                    await sendDingNotification(analysis, name, job_applied);
-                }
-                await greetAndSendMessage();
-                if (mode !== 'recommend') {
-                    await requestContact();
-                }
-                return true;
-            }
-            await greetAndSendMessage();
-            return false;
-        };
-        // Hard stop: score-based PASS (must still emit completion event for batch runner)
-        if (currentScore <= 4) {
-            await passCandidate('分数低于 4，不匹配');
-            newStage = 'PASS';
-            return;
-        }
 
         // Step 4a: CHAT stage -> generate message if needed
         if (newStage === 'CHAT' && needReply) {
             const gen = await generateMessage(false);
-            console.log('Generated message:', gen);
-            if (await handleChatAction(gen)) return;
+            await handleChatAction(gen, analysis);
             needReply = false;
         }
 
-        // Step 4b/4c: SEEK stage -> (chat mode) fetch full resume and re-analyze; then followup generation if needed
+        // Step 4b/4c: SEEK stage -> fetch full resume and re-analyze; then generate message if needed
         if (newStage === 'SEEK') {
             if (mode !== 'recommend') {
                 let fullResume = document.getElementById('resume-textarea-full')?.value?.trim() || '';
@@ -466,23 +433,25 @@ async function process_candidate() {
                 }
                 if (!isFullAnalysis && fullResume.length > 100) {
                     await startAnalysis();
-                    [newStage, currentScore, analysis] = determineStage();
-                    isFullAnalysis = analysis?.resume_type === 'full';
-                    if (newStage === 'SEEK') {
+                    [newStage, currentScore, analysis, isFullAnalysis] = determineStage();
+                    if (newStage === 'SEEK' && isFullAnalysis) {
                         needReply = true;
+                        sendDingNotification(analysis, name, job_applied);
                     }
                 }
             }
-
-            if (needReply && !getCandidateData('notified')) {
-                await sendDingNotification(analysis, getCandidateData('name'), getCandidateData('job_applied'));
-            }
-
+            // Step 4d: generate message if needed
             if (needReply) {
                 const gen = await generateMessage(false);
-                if (await handleChatAction(gen)) return;
+                await handleChatAction(gen, analysis);
                 needReply = false;
             }
+        }
+        // Step 5: PASS stage
+        if (currentScore <= 4) {
+            // 兜底策略，确保低分都PASS掉
+            await passCandidate('分数低于 4，不匹配');
+            newStage = 'PASS';
         }
     } catch (error) {
         console.error('Error processing candidate:', error);
@@ -500,6 +469,30 @@ async function process_candidate() {
         document.dispatchEvent(new CustomEvent('candidate:processing-complete'));
     }
 }
+
+
+async function handleChatAction(gen, analysis) {
+    const {name, job_applied, mode, notified} = getCandidateData();
+    const action = gen?.action;
+    const reason = gen?.reason || '';
+    const score = analysis?.overall;
+    switch (action) {
+        case 'PASS':
+            await passCandidate(reason);
+            break;
+        case 'WAIT':
+            console.log(`WAIT: ${reason}`);
+            break;
+        case 'CONTACT':
+            if (!notified) await sendDingNotification(analysis, name, job_applied);
+            await greetAndSendMessage();
+            await requestContact();
+            break;
+        default:
+            await greetAndSendMessage();
+            break;
+    }
+};
 
 /**
  * Send DingTalk notification when candidate score exceeds borderline threshold
@@ -561,22 +554,13 @@ async function fetchFullResume() {
     switchResumeTab('full');
 }
 
-function getMessageResultState(purpose = '') {
+function getMessageResultState() {
     const container = document.getElementById('message-result-container');
     const textarea = document.getElementById('message-text');
     const message = textarea?.value?.trim() || '';
     const action = container?.dataset?.action || '';
     const reason = container?.dataset?.reason || '';
-    let payload = null;
-    const payloadStr = container?.dataset?.payload;
-    if (payloadStr) {
-        try {
-            payload = JSON.parse(payloadStr);
-        } catch (e) {
-            payload = null;
-        }
-    }
-    return { action, reason, message, purpose, payload };
+    return { action, reason, message };
 }
 
 async function generateMessage(force = false) {
@@ -584,13 +568,13 @@ async function generateMessage(force = false) {
     const values = getCandidateData();
     const mode = values.mode;
     // if force is true or mode is followup, use followup action
-    const purpose = (force || mode == 'followup') ? 'FOLLOWUP_ACTION' : 'CHAT_ACTION';
+    const purpose = mode == 'followup' ? 'FOLLOWUP_ACTION' : 'CHAT_ACTION';
     await htmxAjaxPromise('POST', '/candidates/generate-message', {
         target: '#message-content',
         swap: 'innerHTML',
-        values: {...values, purpose: purpose}
+        values: {...values, purpose: purpose, force: force}
     });
-    const state = getMessageResultState(purpose);
+    const state = getMessageResultState();
     console.log('Generated message:', state);
     await updateCandidateData({generated_message: state.message});
     return state;
@@ -705,15 +689,12 @@ async function requestContact() {
     
     // Skip contact request for recommend mode (no chat_id available)
     if (mode === 'recommend' || !chat_id) {
-        showToast('推荐模式不支持请求联系方式', 'info');
         return;
     }
     // 如果已有联系方式，则不重复请求
     if (values.metadata?.phone_number || values.metadata?.wechat_number) {
         return;
     }
-    
-    showToast('请求联系方式...', 'info');
     
     // Call new endpoint with both chat_id and candidate_id
     const response = await fetch('/candidates/request-contact', {
@@ -725,7 +706,6 @@ async function requestContact() {
         })
     });
     const data = await window.handleApiResponse(response);
-    console.log('Contact requested:', data);
     
     // Update candidate data with contact info in metadata
     // metadata merging is now handled in backend upsert_candidate()
@@ -740,8 +720,6 @@ async function requestContact() {
         
         // Update contact info display dynamically
         updateContactInfoDisplay(data.phone_number, data.wechat_number);
-        
-        showToast('联系方式已获取并保存', 'success');
     } else if (data && data.success !== false) {
         // Contact request succeeded but no numbers obtained yet
         await updateCandidateData({stage: 'CONTACT'});
@@ -840,16 +818,17 @@ function determineStage() {
     const { chat_threshold, borderline_threshold } = getThresholdValues();
     const analysis = analysis_container ? JSON.parse(analysis_container.getAttribute('data-analysis')) : null;
     const {overall, skill, startup_fit, background} = analysis || {};
-    if (overall <= 4) {
-        stage = 'PASS';
-        return [stage, overall, analysis];
-    }
+    const isFullAnalysis = analysis?.resume_type === 'full';
     if (overall >= borderline_threshold){
         stage = 'SEEK';
-    } else if(overall >= chat_threshold || skill >= borderline_threshold || startup_fit >= borderline_threshold || background >= borderline_threshold){
+    }else if(overall >= chat_threshold || skill >= borderline_threshold || startup_fit >= borderline_threshold || background >= borderline_threshold){
         stage = 'CHAT';
+    }else if (overall <= chat_threshold) {
+        stage = 'PASS';
+    }else {
+        stage = 'PASS';
     }
-    return [stage, overall, analysis];
+    return [stage, overall, analysis, isFullAnalysis];
 }
 
 async function passCandidate(reason = '') {
@@ -871,7 +850,6 @@ async function passCandidate(reason = '') {
     });
     try{
         const data = await window.handleApiResponse(response);
-        console.log('Candidate passed:', data);
         await updateCandidateData({stage: 'PASS'});
     } catch (error) {
         console.error('Failed to pass candidate:', error);
@@ -892,7 +870,7 @@ async function passCandidate(reason = '') {
     document.dispatchEvent(event);
     
     // Show toast with reason if available
-    let toastMessage = `候选人${values.name}已标记为 PASS：${reason}`;
+    let toastMessage = `候选人 ${values.name} 已标记为 PASS：${reason}`;
     showToast(toastMessage, 'success');
 }
 

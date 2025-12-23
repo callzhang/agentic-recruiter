@@ -373,8 +373,6 @@ function candidateTabs() {
             // Batch analyze button has been removed - no longer needed
             // Save state to localStorage
             this.saveState();
-            // Automatically reload candidates when switching tabs
-            // this.loadCandidates();
         },
         
         loadCandidates() {
@@ -437,9 +435,8 @@ async function loadCandidatesList(activeTab) {
         limit: limit
     });
     
-    console.log('Loading candidates, activeTab:', activeTab, 'params:', params);
     const url = `/candidates/list?${params.toString()}`;
-    console.log('Fetching:', url);
+    console.log('Loading candidates:', url);
     
     const candidateList = document.getElementById('candidate-list');
     
@@ -484,18 +481,6 @@ async function loadCandidatesList(activeTab) {
     
     const loadedCount = candidateList.querySelectorAll('.candidate-card').length;
     console.log(`Loaded ${loadedCount} candidate cards`);
-    
-    // If no candidates, show empty state message immediately (synchronously)
-    if (loadedCount === 0) {
-        const emptyMsg = document.createElement('div');
-        emptyMsg.id = 'empty-message';
-        emptyMsg.className = 'text-center text-gray-500 py-12';
-        emptyMsg.innerHTML = `
-            <p class="text-lg mb-2">📭 暂无候选人</p>
-            <p class="text-sm">当前筛选条件下没有找到候选人</p>
-        `;
-        candidateList.appendChild(emptyMsg);
-    }
     
     // Dispatch event to notify that candidate list has been loaded
     // This allows other parts of the UI to react to the list update

@@ -127,7 +127,7 @@ async def list_candidates(
                 status=status_filter,
                 job_applied=job_applied,
                 unread_only=False if mode in ["recommend", "followup"] else True,  # True 只看未读,
-                reversed_order=True if mode == "followup" else False # followup mode 需要反转顺序，因为上面的都是最近联系的
+                random_order=True if mode == "followup" else False # followup mode 需要随机顺序，因为上面的都是最近联系的
             )
         except Exception as e:
             logger.error(f"Failed to get chat candidates: {e}")
@@ -137,7 +137,10 @@ async def list_candidates(
     
     # Return empty HTML if no candidates, let frontend handle the empty state
     if not candidates:
-        return HTMLResponse(content='<div class="text-center text-gray-500 py-12">暂无候选人</div>')
+        return HTMLResponse(content='''<div class="text-center text-gray-500 py-12" id="empty-message">
+            <p class="text-lg mb-2">📭 暂无候选人</p>
+            <p class="text-sm">当前筛选条件下没有找到候选人</p>
+            </div>''')
     
     # Batch query candidates from cloud store
     candidate_ids = [c.get("candidate_id") for c in candidates if c.get("candidate_id")]
@@ -309,6 +312,8 @@ async def init_chat(
     # Get all form data as kwargs
     form_data = await request.form()
     kwargs = dict(form_data)
+    if mode != "recommend":
+        assert chat_id is not None, "chat_id is required for chat mode"
     # check if existing candidate has been saved before by using semantic search
     if not chat_id and resume_text:
         # use semantic search to find existing candidate
@@ -423,36 +428,17 @@ async def generate_message(
     chat_id: Optional[str] = Form(None),
     conversation_id: str = Form(...),
     purpose: str = Form(...),
+    force: bool = Form(False),
     index: Optional[int] = Form(None),
 ):
     """Generate message for candidate. Requires conversation_id to be initialized first."""
     # { "type": "candidate/recruiter", "timestamp": "2025-11-10 10:00:00", "message": "你好，我叫张三", "status": "未读" }
     page = await boss_service.service._ensure_browser_session()
-
     stored_candidate = get_candidate_by_dict({"candidate_id": candidate_id, "chat_id": chat_id}, strict=False) or {}
-    stored_metadata = stored_candidate.get("metadata") or {}
-    stored_history = stored_metadata.get("history") or []
-
-    def _latest_saved_message_state() -> dict[str, Any]:
-        # Prefer latest assistant payload in stored history.
-        payload = None
-        action = ""
-        reason = ""
-        message_text = (stored_candidate.get("generated_message") or "").strip()
-        for h in reversed(stored_history):
-            if (h.get("role") or "").strip().lower() != "assistant":
-                continue
-            payload = h.get("payload") if isinstance(h.get("payload"), dict) else None
-            if payload:
-                action = (payload.get("action") or "").strip()
-                reason = (payload.get("reason") or "").strip()
-                message_text = (payload.get("message") or "").strip() or (h.get("content") or "").strip() or message_text
-                break
-        return {"message": message_text, "action": action, "reason": reason, "payload": payload}
-
+    last_message = None
     # Get chat history from browser to decide whether we have new user messages to respond to.
     if mode == "recommend":
-        new_user_messages: list[dict[str, Any]] = [{"content": "请问你有什么问题可以让我进一步解答吗？", "role": "user"}]
+        new_user_messages = [{"content": "请问你有什么问题可以让我进一步解答吗？", "role": "user"}]
         chat_history = new_user_messages
     else:
         if not chat_id:
@@ -464,31 +450,28 @@ async def generate_message(
             content = msg.get("content") or ""
             if role == "assistant":
                 if not content.startswith("方便发一份简历过来吗"):
+                    last_message = msg
                     break
             elif role == "user":
                 new_user_messages.insert(0, {"content": content, "role": role})
-
-    should_generate = bool(new_user_messages) or purpose == "FOLLOWUP_ACTION"
+    # if new_user_messages is None, return it
+    should_generate = bool(new_user_messages) or purpose == "FOLLOWUP_ACTION" or force
     if not should_generate:
-        state = _latest_saved_message_state()
         return templates.TemplateResponse(
             "partials/message_result.html",
-            {"request": request, **state},
+            {"request": request, **last_message},
         )
 
     generated = await asyncio.to_thread(
         assistant_actions.generate_message,
-        input_message=new_user_messages if new_user_messages else "[沉默]",
+        input_message=new_user_messages or "[沉默]",
         conversation_id=conversation_id,
         purpose=purpose,
     )
     logger.debug("Generated message: %s", generated)
-    if not isinstance(generated, dict) or "action" not in generated:
-        raise RuntimeError("generate_message must return a dict with {action, message, reason}")
-
-    action = (generated.get("action") or "").strip()
-    reason = (generated.get("reason") or "").strip()
-    message_text = (generated.get("message") or "").strip()
+    action = generated.get("action", "")
+    reason = generated.get("reason", "")
+    message_text = generated.get("message", "")
 
     generated_history_item: dict[str, Any] = {
         "role": "assistant",
@@ -498,38 +481,17 @@ async def generate_message(
         "action": action,
         "reason": reason,
     }
-
+    # update candidate data
     updates: dict[str, Any] = {
         "candidate_id": candidate_id,
         "chat_id": chat_id,
         "mode": mode,
         "conversation_id": conversation_id,
         "metadata": {"history": chat_history + [generated_history_item]},
+        "generated_message": message_text,
     }
-    # Persist generated_message only when it contains candidate-facing text.
-    if message_text:
-        updates["generated_message"] = message_text
     upsert_candidate(**updates)
-    # handle PASS action
-    if action == "PASS":
-        pass_reason = reason or "不合适"
-        logger.warning("候选人 %s 判断为不合适，理由: %s", name, pass_reason)
-        upsert_candidate(candidate_id=candidate_id, stage=STAGE_PASS)
-        if mode == "recommend":
-            await recommendation_actions.pass_recommend_candidate_action(page, index)
-        else:
-            await chat_actions.discard_candidate_action(page, chat_id)
-        return templates.TemplateResponse(
-            "partials/message_result.html",
-            {"request": request, "message": "", "action": "PASS", "reason": pass_reason, "payload": generated},
-            headers={
-                "HX-Trigger": json.dumps(
-                    {"showToast": {"message": f"候选人 {name} 判断为不合适，理由: {pass_reason}", "type": "info"}},
-                    ensure_ascii=True,
-                )
-            },
-        )
-
+    # return message result
     return templates.TemplateResponse(
         "partials/message_result.html",
         {"request": request, "message": message_text, "action": action, "reason": reason, "payload": generated},
@@ -818,8 +780,7 @@ async def request_contact(
 ):
     """Request contact information (phone and WeChat) from a candidate and store in metadata."""
     page = await boss_service.service._ensure_browser_session()
-    candidates = get_candidate_by_dict({"candidate_id": candidate_id, "chat_id": chat_id}, strict=False)
-    candidate = candidates[0] if candidates else {}
+    candidate = get_candidate_by_dict({"candidate_id": candidate_id, "chat_id": chat_id}, strict=False)
     if history:=candidate.get("metadata", {}).get("history"):
         if any(h for h in history if h.get("role") == "developer" and h.get("content") == "请求交换联系方式已发送"):
             phone_number = history.get("phone_number")
