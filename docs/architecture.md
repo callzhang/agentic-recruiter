@@ -115,6 +115,29 @@ Zilliz 数据存储
 - 内置 OpenAI 嵌入函数（`text-embedding-3-small`）
 - 自动向量生成
 
+### 6.1 src/job_optimization_feedback_store.py（人类反馈 → 岗位肖像优化）
+
+用于存储并管理“评分不准”反馈（写入 `CN_job_optimizations`）：
+- 候选人是谁（candidate_id / conversation_id / job_applied）
+- 当前 analysis（用于定位误判口径）
+- 目标分数（允许只填部分维度；未填为 null 表示“不要求改这一项”）
+- 人类建议与理由（用于生成新版岗位肖像）
+- 状态（open/closed）：发布后自动 close，避免重复出现
+
+### 6.2 src/prompts/job_portrait_optimization_prompts.py（岗位肖像生成约束）
+
+岗位肖像优化的核心策略提示词与输出 schema：
+- 强制结构化输出（JSON schema）
+- 强约束：评分标准/关键词/筛选项继承等
+- 输出 rationale（按字段解释“为何改/为何不改”），便于复盘
+
+### 6.3 Vercel 线上工作流（无需 FastAPI）
+
+`vercel/` 目录提供可直接部署到 Vercel 的岗位肖像优化工作流：
+- UI：`/jobs`、`/jobs/optimize`、`/jobs/optimize/generate`
+- API：`vercel/api/jobs.py`（`/api/jobs/...`）
+- 候选人只读页：`/candidate/:candidate_id`（支持“评分不准”，优化页 iframe 中禁用）
+
 ### 7. src/config.py
 配置管理
 - `config.yaml` - 非敏感配置（URLs, 端口等）
@@ -176,6 +199,13 @@ API 不返回 `{"success": bool}`，直接抛出异常：
 - 避免重复发送历史
 - 使用 `conversation_id` 作为标识符（向后兼容 `thread_id`）
 
+### OpenAI 配置约定（本地 / Vercel）
+
+- 本地 FastAPI：通过 `get_openai_config()` 读取配置，支持两套 key：
+  - `api_key` / `base_url`（常规）
+  - `OPENAI_API_KEY` / `OPENAI_BASE_URL`（用于 job portrait 优化等特定链路，优先使用）
+- Vercel：通过环境变量 `OPENAI_API_KEY`（必填）与 `OPENAI_BASE_URL`（可选）配置
+
 ### Zilliz 向量存储
 
 存储简历和分析结果：
@@ -216,6 +246,22 @@ API 不返回 `{"success": bool}`，直接抛出异常：
 5. POST /chat/{chat_id}/send_message (发送消息)
    ↓
 6. 更新 Zilliz
+
+### 岗位肖像优化（评分不准 → 生成 → 发布）
+
+```
+1) 候选人详情页点击“评分不准”
+   ↓
+2) 写入 CN_job_optimizations（open）
+   ↓
+3) 岗位页进入 /jobs/optimize（选择若干反馈）
+   ↓
+4) /jobs/optimize/generate 调用 OpenAI 生成新版岗位肖像（JSON schema）
+   ↓
+5) UI 字段级 diff + 可编辑
+   ↓
+6) 发布新版本岗位肖像 + 关闭本次反馈（status=closed）
+```
 ```
 
 ### 读取流向
@@ -430,7 +476,7 @@ settings.get_zilliz_config()
 - **API 文档**: [docs/api.md](api.md)
 - **技术细节**: [docs/architecture.md](architecture.md)（本文档）
 - **自动化工作流**: [docs/workflows.md](workflows.md)
-- **变更日志**: [CHANGELOG.md](../CHANGELOG.md)
+- **变更日志**: [`changelog.md`](../changelog.md)
 
 ## Vercel 部署架构
 

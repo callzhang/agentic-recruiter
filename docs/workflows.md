@@ -11,6 +11,36 @@ Boss直聘自动化机器人的工作流系统
 
 每个工作流可独立执行，处理不同来源的候选人，支持阶段双向转换。
 
+---
+
+## 岗位肖像滚动优化闭环（强烈建议纳入日常）
+
+目标：把“评分不准/问法不对/误判原因”等**人类反馈**沉淀成可复用的岗位肖像，提升线上初筛稳定性。
+
+### 线上（Vercel）闭环：评分不准 → 生成 → Diff → 发布
+
+1) 在候选人详情页（只读页面也可）：点击 **“评分不准”**，填写：
+   - 至少一个目标分数（overall/skill/background/startup_fit 任一）
+   - 原因与建议（>= 5 个字）
+2) 打开岗位页：`/jobs`，在岗位标签旁的绿色 **“优化肖像”** 入口进入清单：`/jobs/optimize?job_id=<base_job_id>`
+3) 勾选若干条反馈 → 进入生成页 `/jobs/optimize/generate`（进度条 + 字段级 diff + 可编辑）
+4) 确认提交（发布）后：
+   - 岗位生成新版本（仍为同一个 base_job_id）
+   - 本次选中的反馈标记为 `closed`，下次默认不再出现
+
+> 注意：`candidate_filters`（Boss 侧筛选项）与 `notification`（钉钉）会继承上一版，不让 AI 修改；keywords 也会兜底保留，避免被清空。
+
+### 离线回放（脚本）闭环：下载样本 → 回放验证 → 再发布
+
+当你希望在发布前“可复盘验证”（尤其是边界样本/典型误判），建议使用脚本回放：
+
+1) 下载候选人样本：`scripts/prompt_optmization/download_data_for_prompt_optimization.py`
+2) 选择 2-5 个“有问题”的候选人，回放生成：`scripts/prompt_optmization/generate_optimized.py`
+3) 根据回放结果迭代本批次的 `prompt_optimized.py` / `job_portrait_optimized.json`
+4) 满意后用发布脚本或 Vercel API 发布
+
+详见：`scripts/prompt_optmization/README.md`
+
 ## 工作流入口(Mode)
 
 ### 1. 推荐牛人(recommend)
@@ -58,16 +88,17 @@ Boss直聘自动化机器人的工作流系统
 ### 阶段定义
 
 - **PASS**: 不匹配，已拒绝
-- **GREET**: 表达兴趣，已索要简历
-- **SEEK**: 强匹配，寻求联系方式
+- **CHAT**: 需要进一步沟通确认（在线甄别）
+- **SEEK**: 强匹配（或接近强匹配），强推进（但不约面试）
+- **CONTACT**: 联系阶段（待拿联系方式/已拿联系方式）
+
+> 说明：历史数据里可能出现 `GREET`（推荐页“已打招呼”语义），但统一的阶段流以 `PASS/CHAT/SEEK/CONTACT` 为准（见 `src/candidate_stages.py`）。
 
 ### 阶段转换
 
 所有工作流都可以在阶段间双向转换：
 ```
-PASS ↔ GREET ↔ SEEK ↔ CONTACT
-        ↕
-  WAITING_LIST
+PASS ↔ CHAT ↔ SEEK ↔ CONTACT
 ```
 
 ## AI 消息生成
@@ -86,10 +117,16 @@ generate_message(
 - **analyze** → `ANALYZE_ACTION`: 分析候选人（返回结构化评分）
 - **chat** → `ASK_FOR_RESUME_DETAILS_ACTION`: 常规对话回复，挖掘简历细节
 - **greet** → `GREET_ACTION`: 首次打招呼
-- **followup** → `ASK_FOR_RESUME_DETAILS_ACTION`: 跟进催促
+- **followup** → `FOLLOWUP_ACTION`: 跟进催促（默认不追问，以提高回复意愿或直接 WAIT）
 - **contact** → `CONTACT_ACTION`: 请求联系方式
 
 **注意**: 使用 `conversation_id` 作为主要标识符（替代 `thread_id`），通过 `init_chat()` 创建。
+
+### 合规与边界（必须在 prompt 中约束）
+
+- **AI 不代替 HR 约面试**：所有面试时间/方式/地点由 HR 决定；AI 不要“确认时间/安排面试/指定地点”。
+- **不讨论薪资/预付等商务条款**：涉及薪资/合同/付款等，统一引导 HR 对接。
+- **PASS 不发消息**：候选人判定 PASS 时不应发送任何文本（避免无意义打扰）。
 
 ## 故障排查
 
@@ -185,4 +222,3 @@ grep ERROR logs/boss_service.log
 ---
 
 相关文档: [系统架构](architecture.md) | [API 文档](api.md)
-

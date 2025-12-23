@@ -15,7 +15,7 @@ Boss直聘自动化机器人 REST API 文档
 
 ## 基础信息
 
-**当前版本**: v2.6.2  
+**当前版本**: v2.6.3  
 **Base URL**: `http://127.0.0.1:5001`
 
 ### 响应格式 (v2.2.0+)
@@ -122,6 +122,20 @@ Boss直聘自动化机器人 REST API 文档
 | `/jobs/{job_id}/versions` | GET | 获取岗位所有版本 |
 | `/jobs/{job_id}/switch-version` | POST | 切换当前使用的版本 |
 | `/jobs/{job_id}/delete` | DELETE | 删除指定版本（需保留至少一个版本） |
+
+### 岗位肖像优化（人类反馈 → 生成 → 发布）
+
+> 说明：这些接口用于“评分不准”反馈与岗位肖像滚动优化（本地 FastAPI 版本）。  
+> Vercel 的线上版本请参考 `vercel/README.md`（路径以 `/api/jobs/...` 为主）。
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/jobs/api/optimizations/count` | GET | 查询某岗位（base_job_id）的反馈数量 |
+| `/jobs/api/optimizations/list` | GET | 列表（按 updated_at 倒序） |
+| `/jobs/api/optimizations/add` | POST | 添加反馈（评分不准） |
+| `/jobs/api/optimizations/update` | POST | 更新反馈（用户二次修改） |
+| `/jobs/api/optimizations/generate` | POST | 调用 OpenAI 生成新版岗位肖像（严格 JSON schema） |
+| `/jobs/api/optimizations/publish` | POST | 发布新版岗位肖像并关闭所选反馈（status=closed） |
 
 ### 候选人管理
 
@@ -750,11 +764,10 @@ response = requests.get(
 
 - [系统架构](architecture.md) - 架构和实现细节
 - [自动化工作流](workflows.md) - 工作流和故障排查
-- [变更日志](../CHANGELOG.md) - API 版本历史
+- [变更日志](../changelog.md) - API 版本历史
 
 ## 支持和反馈
 
 - **问题反馈**: 在 Sentry Dashboard 查看错误
 - **功能请求**: 提交 GitHub Issue
 - **文档问题**: 更新 `docs/` 目录中的相关文档
-

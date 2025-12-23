@@ -4,6 +4,10 @@ This directory contains utility scripts for managing and debugging the Boss直�
 
 ## 🗂️ Active Scripts (v2.4.0)
 
+> 注：除数据迁移/调试脚本外，岗位肖像与 prompt 的日常迭代建议优先走：
+> - 线上（Vercel）：`/jobs/optimize`（评分不准→生成→diff→发布）
+> - 离线回放：`scripts/prompt_optmization/README.md`
+
 ### Data Management
 
 #### `migrate_candidates_data.py` - Data Migration (15KB)
@@ -81,6 +85,20 @@ python scripts/migrate_jobs_to_cn_jobs_2.py
 ```
 
 ---
+
+## 🧩 Prompt / 岗位肖像迭代（离线可复盘）
+
+目录：`scripts/prompt_optmization/`
+
+核心脚本：
+- `scripts/prompt_optmization/download_data_for_prompt_optimization.py`
+  - 拉取指定岗位的最新候选人样本（默认 10 份，倒序按对话更新时间），并生成本批次复盘骨架
+  - 不会调用 OpenAI 重跑分析（只下载数据 + 统计 + 报告骨架）
+- `scripts/prompt_optmization/generate_optimized.py`
+  - 基于候选人 history + 当前 `assistant_actions_prompts.md` 与 `job_portrait_optimized.json` 生成“新口径 analysis + 新 message”
+  - 输出到 `generated/*.generated.json`，并把问题示例（带引用）写回 `优化报告.md`
+
+详见：`scripts/prompt_optmization/README.md`
 
 ### UI Assets
 
@@ -253,7 +271,7 @@ pip install -r requirements.txt
 - Check script help: `python scripts/script_name.py --help`
 - Review debug output files for detailed error information
 - Check `docs/` directory for additional documentation
-- See `CHANGELOG.md` for recent changes and known issues
+- See `changelog.md` for recent changes and known issues
 
 ---
 

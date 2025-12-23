@@ -89,12 +89,14 @@ Playwright + OpenAI + Zilliz
 **State** (RecruiterState):
 ```python
 {
-    "stage": Literal["GREET", "PASS", "CHAT", "SEEK", "CONTACT"],  # 候选人阶段
+    "stage": Literal["PASS", "CHAT", "SEEK", "CONTACT"],  # 候选人阶段（GREET 仅历史/推荐页语义）
     "candidate": Candidate,        # 候选人信息（包含 mode, chat_id/index, job_applied 等）
     "analysis": dict,              # 分析结果（skill, startup_fit, background, overall, summary, followup_tips）
     "messages": list[AnyMessage]   # 对话消息历史
 }
 ```
+
+> 合规约束：Agent/AI 不应代替 HR 约面试（时间/方式/地点由 HR 决定），也不应讨论薪资/付款等商务条款；PASS 不发送消息。
 
 ## 工作流
 

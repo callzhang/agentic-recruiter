@@ -200,6 +200,7 @@ WEB_PORTAL=http://localhost:8501
 
 # LLM configuration
 OPENAI_API_KEY=your_api_key
+OPENAI_BASE_URL=https://api.openai.com/v1  # optional
 MODEL_NAME=gpt-4
 
 # Processing limits
