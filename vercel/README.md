@@ -12,6 +12,7 @@ Unified Vercel deployment for Boss Zhipin bot, including homepage statistics das
 - ✅ Progress scores and conversion rates
 - ✅ Interactive charts (Chart.js)
 - ✅ Responsive design
+- ✅ 自动跳过 `status=inactive` 的岗位统计（避免噪音）
 
 ### Jobs Editor (`/jobs`)
 - ✅ Create, update, and delete jobs
@@ -20,6 +21,12 @@ Unified Vercel deployment for Boss Zhipin bot, including homepage statistics das
 - ✅ Candidate filters (JSON editor with validation)
 - ✅ Drill down questions
 - ✅ All job description fields
+
+### Job Portrait Optimization (`/jobs/optimize`)
+- ✅ “评分不准”人类反馈：在候选人详情页点击“评分不准”写入 `CN_job_optimizations`
+- ✅ 优化清单：按岗位查看反馈、编辑目标分与建议
+- ✅ 生成新版岗位肖像：调用 OpenAI（严格 JSON schema 输出）并提供字段级 diff 可编辑
+- ✅ 一键发布：发布新版本岗位肖像并把本次选中的反馈标记为 `closed`
 
 ## Setup
 
@@ -36,15 +43,21 @@ ZILLIZ_USER=db_xxxxx
 ZILLIZ_PASSWORD=your_password
 ZILLIZ_CANDIDATE_COLLECTION_NAME=CN_candidates
 ZILLIZ_JOB_COLLECTION_NAME=CN_jobs
+ZILLIZ_JOB_OPTIMIZATION_COLLECTION_NAME=CN_job_optimizations
 ZILLIZ_EMBEDDING_DIM=1536
 ZILLIZ_TOKEN=  (leave empty or set if using API key authentication)
 DINGTALK_WEBHOOK=https://oapi.dingtalk.com/robot/send?access_token=...
 DINGTALK_SECRET=SEC...
+OPENAI_API_KEY=sk-...
+OPENAI_MODEL=gpt-5.2
+OPENAI_MODEL_OPTIMIZATION=gpt-5.2
+OPENAI_BASE_URL=https://api.openai.com/v1
 ```
 
 **Note:** 
 - Zilliz credentials are from your `config/secrets.yaml` file. The pages use the same Zilliz database as your FastAPI service.
 - DingTalk credentials are for daily report notifications (see "Daily Reports" section below).
+- OpenAI credentials are required for `/jobs/optimize/generate`（生成新版岗位肖像）与相关 AI 能力。
 
 ### 2. Deploy to Vercel
 
@@ -79,6 +92,11 @@ Visit your Vercel URL and test:
 - ✅ Edit existing job
 - ✅ Switch versions
 - ✅ Delete version
+
+**Optimization (`/jobs/optimize`):**
+- ✅ Open a candidate detail page: `/candidate/:candidate_id` → 点击“评分不准”保存反馈
+- ✅ Open `/jobs/optimize?job_id=architecture` → 查看/编辑优化清单
+- ✅ 勾选若干反馈 → “生成新版岗位肖像” → 字段级 diff/可编辑 → “确认提交（发布新版本）”
 
 ## Local Development
 
@@ -141,6 +159,14 @@ The pages use Vercel serverless functions that connect directly to Zilliz:
 - `GET /api/jobs/:job_id/versions` - Get all versions
 - `POST /api/jobs/:job_id/switch-version` - Switch current version
 - `DELETE /api/jobs/:job_id/delete` - Delete a version
+
+### Job Optimization API (`api/jobs.py`)
+- `GET /api/jobs/optimizations/count?job_id=...` - Feedback count (open only)
+- `GET /api/jobs/optimizations/list?job_id=...` - Feedback list (open only)
+- `POST /api/jobs/optimizations/add` - Add feedback item (评分不准)
+- `POST /api/jobs/optimizations/update` - Update feedback item
+- `POST /api/jobs/optimizations/generate` - Generate optimized job portrait (OpenAI)
+- `POST /api/jobs/optimizations/publish` - Publish new version + close feedback items
 
 ## Troubleshooting
 
