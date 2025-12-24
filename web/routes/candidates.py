@@ -165,7 +165,7 @@ async def list_candidates(
         candidate["saved"] = False
         # match stored candidate by chat_id, or name + job_applied
         matched_candidate = next((c for c in found_candidates if \
-            c["name"] == candidate['name'] and candidate_matched(candidate, c, mode)), None)
+            c.get("name") == candidate['name'] and candidate_matched(candidate, c, mode)), None)
         # fallback to find individual candidate 
         if not matched_candidate:
             matched_candidate = get_candidate_by_dict(dict(**candidate, fields=fields))
@@ -312,16 +312,15 @@ async def init_chat(
     if mode != "recommend":
         assert chat_id is not None, "chat_id is required for chat/followup/greet mode"
     # check if existing candidate has been saved before by using semantic search
-    if not chat_id and resume_text:
-        # use semantic search to find existing candidate
-        candidate = get_candidate_by_dict(kwargs, strict=True)
-        if candidate:
-            logger.info(f"Found existing candidate when initializing chat: {candidate.get('candidate_id')} for name: {candidate.get('name')}")
-            current = {'chat_id': chat_id, 'job_applied': job_applied, 'resume_text': resume_text}
-            updates = {k:v for k, v in candidate.items() if current.get(k) and v != current.get(k)}
-            if updates:
-                upsert_candidate(candidate_id=candidate.get('candidate_id'), **updates)
-            return candidate
+    # use semantic search to find existing candidate
+    candidate = get_candidate_by_dict(kwargs, strict=True)
+    if candidate:
+        logger.info(f"Found existing candidate when initializing chat: {candidate.get('candidate_id')} for name: {candidate.get('name')}")
+        current = {'chat_id': chat_id, 'job_applied': job_applied, 'resume_text': resume_text}
+        updates = {k:v for k, v in candidate.items() if current.get(k) and v != current.get(k)}
+        if updates:
+            upsert_candidate(candidate_id=candidate.get('candidate_id'), **updates)
+        return candidate
     
     if mode == "recommend":
         history = [{'role': 'user', 'content': last_message}]
@@ -451,8 +450,17 @@ async def generate_message(
                     break
             elif role == "user":
                 new_user_messages.insert(0, {"content": content, "role": role})
-    # if new_user_messages is None, return it
-    should_generate = bool(new_user_messages) or purpose == "FOLLOWUP_ACTION" or force
+    # check if should generate message
+    should_generate = False
+    if bool(new_user_messages):
+        should_generate = True
+    elif purpose == "FOLLOWUP_ACTION":
+        if last_message.get('action') in ['WAIT', 'PASS']:# skip if last message is WAIT or PASS
+            should_generate = False
+        else:
+            should_generate = True
+    elif force:
+        should_generate = True
     if not should_generate:
         return templates.TemplateResponse(
             "partials/message_result.html",
@@ -498,7 +506,7 @@ async def generate_message(
 async def should_reply(
     chat_id: Optional[str] = Body(None),
     mode: Optional[str] = Body(None),
-) -> JSONResponse:
+) -> bool:
     """Check if should generate message based on chat history.
     If last message is an assistant message, return False, otherwise return True.
     
@@ -507,15 +515,15 @@ async def should_reply(
         mode: Mode (recommend/chat/greet/followup), if recommend mode, return True
     
     Returns:
-        JSONResponse with {"should_reply": bool}
+        bool
     """
     # For recommend mode, always return True (no chat history available)
     if mode == "recommend":
-        return JSONResponse({"should_reply": True})
+        return True
     
     # if chat_id is not provided, return True (default to reply)
     if not chat_id:
-        return JSONResponse({"should_reply": True})
+        return True
     
     # Get chat history from browser
     page = await boss_service.service._ensure_browser_session()
@@ -526,14 +534,14 @@ async def should_reply(
     for msg in chat_history[::-1]:
         role = msg.get("role")
         if role == "assistant":
-            return JSONResponse({"should_reply": False})
+            return False
         elif role == "user":
             message += msg.get("content", '')
             if len(message) > 5:# ignore short messages from user
-                return JSONResponse({"should_reply": True})
+                return True
     
     # no message found, or only developer message, return False
-    return JSONResponse({"should_reply": False})
+    return False
 
 @router.post("/send", response_class=HTMLResponse)
 async def send_message(
@@ -643,7 +651,6 @@ async def notify_hr(
         return {"success": False, "error": "通知发送失败"}
 
 @router.post("/fetch-online-resume", response_class=HTMLResponse)
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
 async def fetch_online_resume(
     name: str = Form(...),
     job_applied: str = Form(...),

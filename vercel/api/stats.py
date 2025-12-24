@@ -535,7 +535,8 @@ def compile_job_stats(job_name: str) -> Dict[str, Any]:
         lambda s: s >= HIGH_SCORE_THRESHOLD,
     )
     recent_7days_seek = sum(1 for c in recent_7days_candidates if normalize_stage(c.get("stage")) == STAGE_SEEK)
-    recent_7days_metric = (len(recent_7days_candidates) + recent_7days_seek) * score_summary.quality_score / 10
+    recent_7days_contacted = sum(1 for c in recent_7days_candidates if normalize_stage(c.get("stage")) == STAGE_CONTACT)
+    recent_7days_metric = (len(recent_7days_candidates) + recent_7days_seek + recent_7days_contacted * 10) * score_summary.quality_score / 10
 
     # Convert score_summary to dict
     score_summary_dict = asdict(score_summary)
@@ -549,6 +550,7 @@ def compile_job_stats(job_name: str) -> Dict[str, Any]:
             "count": len(recent_7days_candidates),
             "high": recent_7days_high,
             "seek": recent_7days_seek,
+            "contacted": recent_7days_contacted,
             "metric": round(recent_7days_metric, 2),
         },
         "total": len(candidates),
@@ -647,18 +649,26 @@ def format_homepage_stats_report(
             last_day = daily[-1]
             today_job_new = last_day.get("new", 0)
             today_job_seek = last_day.get("seek", 0)
+            today_job_contacted = last_day.get("contacted", 0)  # Note: ensure this is in your daily series if needed
+        
+        # Calculate from job stat instead for consistency
+        today_stat = job.get("today", {})
+        today_job_new = today_stat.get("count", 0)
+        today_job_seek = today_stat.get("seek", 0)
+        today_job_contacted = today_stat.get("contacted", 0)
         
         total = job.get("total", 0)
         score_summary = job.get("score_summary", {})
         quality_score = score_summary.get("quality_score", 0.0)
         
         # Calculate progress score (similar to compile_job_stats)
-        metric = (today_job_new + today_job_seek) * quality_score / 10
+        metric = (today_job_new + today_job_seek + today_job_contacted * 10) * quality_score / 10
         
         job_rows.append({
             "name": job_name,
             "today_new": today_job_new,
             "today_seek": today_job_seek,
+            "today_contacted": today_job_contacted,
             "total": total,
             "quality": quality_score,
             "metric": round(metric, 2)
@@ -688,11 +698,11 @@ def format_homepage_stats_report(
     lines.append(f"**💡 趋势**: 候选人数量{'稳步增长' if avg_daily > 0 else '保持稳定'}，近7天平均每日新增约 {avg_daily:.1f} 人\n")
     lines.append("---\n")
     lines.append("### 💼 各岗位今日统计\n")
-    lines.append("| 岗位 | 今日新增 | 今日SEEK | 总数 | 画像质量 | 进展分 |")
-    lines.append("|------|---------|----------|------|----------|--------|")
+    lines.append("| 岗位 | 今日新增 | SEEK | 已联系 | 总数 | 画像质量 | 进展分 |")
+    lines.append("|------|----------|------|--------|------|----------|--------|")
     
     for row in job_rows:
-        lines.append(f"| {row['name']} | {row['today_new']} | {row['today_seek']} | {row['total']} | {row['quality']}/10 | {row['metric']} |")
+        lines.append(f"| {row['name']} | {row['today_new']} | {row['today_seek']} | {row['today_contacted']} | {row['total']} | {row['quality']}/10 | {row['metric']} |")
     
     lines.append("\n---\n")
     
@@ -724,12 +734,10 @@ def format_job_stats_report(job_stats: Dict[str, Any]) -> Dict[str, str]:
     today_str = today.isoformat()
     
     daily = job_stats.get("daily", [])
-    today_new = 0
-    today_seek = 0
-    if daily:
-        last_day = daily[-1]
-        today_new = last_day.get("new", 0)
-        today_seek = last_day.get("seek", 0)
+    today_stat = job_stats.get("today", {})
+    today_new = today_stat.get("count", 0)
+    today_seek = today_stat.get("seek", 0)
+    today_contacted = today_stat.get("contacted", 0)
     
     total = job_stats.get("total", 0)
     score_summary = job_stats.get("score_summary", {})
@@ -738,7 +746,7 @@ def format_job_stats_report(job_stats: Dict[str, Any]) -> Dict[str, str]:
     high_share = score_summary.get("high_share", 0.0)
     
     # Calculate progress score
-    metric = (today_new + today_seek) * quality_score / 10
+    metric = (today_new + today_seek + today_contacted * 10) * quality_score / 10
     
     # Calculate 7-day trend
     new_7days = sum(d.get("new", 0) for d in daily[-7:]) if len(daily) >= 7 else sum(d.get("new", 0) for d in daily)
@@ -747,12 +755,13 @@ def format_job_stats_report(job_stats: Dict[str, Any]) -> Dict[str, str]:
     lines = []
     lines.append(f"### 💼 {job_name} - 今日统计\n")
     lines.append(f"**📈 今日新增**: {today_new} 人")
-    lines.append(f"**📈 今日SEEK**: {today_seek} 人\n")
+    lines.append(f"**📈 今日SEEK**: {today_seek} 人")
+    lines.append(f"**📈 今日已联系**: {today_contacted} 人\n")
     lines.append(f"**总数**: {total} 人")
     lines.append(f"**画像质量**: {quality_score}/10")
     lines.append(f"**平均得分**: {average_score:.2f}")
     lines.append(f"**高分占比**: {high_share*100:.1f}%")
-    lines.append(f"**进展分**: {metric:.2f}\n")
+    lines.append(f"**进展分**: {metric:.2f} = (近7日 {today_new} + SEEK {today_seek} + Contacted {today_contacted} x 10) x {quality_score} / 10\n")
     lines.append(f"**最近7天**: 新增 {new_7days} 人，SEEK {seek_7days} 人")
     
     message = "\n".join(lines)

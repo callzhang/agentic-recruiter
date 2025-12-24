@@ -316,11 +316,12 @@ def compile_job_stats(job_name: str) -> Dict[str, Any]:
         ],
         lambda s: s >= HIGH_SCORE_THRESHOLD,
     )
-    # 进展分：近7天进展到SEEK阶段的候选人数
+    # 进展分：近7天进展到SEEK和CONTACT阶段的候选人数
     recent_7days_seek = sum(1 for c in recent_7days_candidates if normalize_stage(c.get("stage")) == STAGE_SEEK)
-    # 进展分 = (近7天候选人数量 + SEEK阶段人数) × 肖像质量分 / 10 (归一化)
-    # 肖像质量分范围是1-10，除以10归一化到0-1范围
-    recent_7days_metric = (len(recent_7days_candidates) + recent_7days_seek) * score_summary.quality_score / 10
+    recent_7days_contacted = sum(1 for c in recent_7days_candidates if normalize_stage(c.get("stage")) == STAGE_CONTACT)
+    
+    # 进展分 = (近7日候选人数量 + SEEK人数 + CONTACT人数 x 10) × 肖像得分 / 10
+    recent_7days_metric = (len(recent_7days_candidates) + recent_7days_seek + recent_7days_contacted * 10) * score_summary.quality_score / 10
     
     # 今日数据（用于显示今日新增）
     today = datetime.now().date()
@@ -335,6 +336,7 @@ def compile_job_stats(job_name: str) -> Dict[str, Any]:
             "count": len(recent_7days_candidates),  # 近7天候选人数量（用于进展分计算）
             "high": recent_7days_high,  # 近7天高分人数
             "seek": recent_7days_seek,  # 近7天SEEK人数
+            "contacted": recent_7days_contacted,  # 近7天已联系人数
             "metric": round(recent_7days_metric, 2),  # 进展分（基于近7天）
         },
         "total": len(candidates),
@@ -373,7 +375,7 @@ def send_daily_dingtalk_report() -> bool:
             f"🏆 今日最优岗位：{best['job']} | 成绩 {best['today']['metric']:.1f}"
         )
         lines.append(
-            f"  今日新增 {best['today']['count']} 人，其中高分(≥{HIGH_SCORE_THRESHOLD}) {best['today']['high']} 人，进展分 {best['today']['seek']} 人"
+            f"  今日新增 {best['today']['count']} 人，其中高分(≥{HIGH_SCORE_THRESHOLD}) {best['today']['high']} 人，SEEK {best['today']['seek']}，已联系 {best['today']['contacted']}，进展分 {best['today']['metric']:.1f}"
         )
     lines.append("")
     lines.append("各岗位摘要：")

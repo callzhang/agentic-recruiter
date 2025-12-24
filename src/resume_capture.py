@@ -439,7 +439,7 @@ def _open_online_resume(page, chat_id: str, logger=None) -> Dict[str, Any]:
     except Exception:
         target = None
     if not target:
-        return { 'success': False, 'details': '未找到指定对话项' }
+        return { 'success': False, 'details': '未找到指定对话项，无法打开在线简历' }
 
     # Wait for conversation panel
     try:

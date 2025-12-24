@@ -597,7 +597,7 @@ function renderJobStats(data) {
                     <div>
                         <p class="text-sm opacity-80">今日最优秀战绩</p>
                         <h3 class="text-2xl font-bold">${best.job}</h3>
-                        <p class="mt-2 text-lg">进展分 ${best.today.metric.toFixed(1)} = (近7日 ${best.today.count} 人 + SEEK ${best.today.seek} 人) × 肖像得分 ${ss.quality_score} ÷ 10</p>
+                        <p class="mt-2 text-lg">进展分 ${best.today.metric.toFixed(1)} = (近7日 ${best.today.count} 人 + SEEK ${best.today.seek} 人 + Contacted ${best.today.contacted} 人 x 10) × 肖像得分 ${ss.quality_score} ÷ 10</p>
                         <p class="text-sm opacity-80">高分占比 ${(ss.high_share * 100).toFixed(1)}% · 平均分 ${ss.average}</p>
                     </div>
                     <div class="text-right">
@@ -627,7 +627,7 @@ function renderJobStats(data) {
                         ${job.today ? `
                         <p class="text-sm text-gray-600 mt-2">
                             <span class="font-semibold">进展分 ${job.today.metric.toFixed(1)}</span> = 
-                            (近7日 ${job.today.count} 人 + SEEK ${job.today.seek} 人) × 肖像得分 ${ss.quality_score} ÷ 10
+                            (近7日 ${job.today.count} 人 + SEEK ${job.today.seek} 人 + Contacted ${job.today.contacted} 人 x 10) × 肖像得分 ${ss.quality_score} ÷ 10
                         </p>
                         ` : ''}
                     </div>

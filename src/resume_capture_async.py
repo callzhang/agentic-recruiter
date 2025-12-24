@@ -446,7 +446,7 @@ async def _open_online_resume(page: Page, chat_id: str, logger=None) -> Dict[str
     ).first
     try:
         if not await target.count():
-            return {"success": False, "details": "未找到指定对话项"}
+            return {"success": False, "details": "未找到指定对话项，无法打开在线简历"}
         await target.scroll_into_view_if_needed(timeout=2000)
         await target.wait_for(state="visible", timeout=5000)
         await target.click()
@@ -456,7 +456,7 @@ async def _open_online_resume(page: Page, chat_id: str, logger=None) -> Dict[str
     try:
         await page.wait_for_selector("div.conversation-message", timeout=5000)
     except Exception:
-        return {"success": False, "details": "对话面板未出现"}
+        return {"success": False, "details": "对话面板未出现，无法打开在线简历"}
 
     try:
         btn = page.locator("a.resume-btn-online").first
