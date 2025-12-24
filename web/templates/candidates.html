@@ -884,18 +884,15 @@ async function processCandidateCard(card) {
         detailPane.addEventListener('htmx:swapError', onSwapError, { once: true });
     });
     
-    try {
-        // Trigger HTMX click (htmx:beforeRequest will handle scrollIntoView and highlighting)
-        htmx.trigger(card, 'click');
-        
-        // Wait for both swap and processing to complete
-        await processingPromise;
-        
-        return { success: true, name };
-    } catch (error) {
-        // Cleanup is handled in promise cleanup function
-        throw error;
-    }
+
+    // Trigger HTMX click (htmx:beforeRequest will handle scrollIntoView and highlighting)
+    htmx.trigger(card, 'click');
+    
+    // Wait for both swap and processing to complete
+    await processingPromise;
+    
+    // no need to catch error, because it will be handled by startProcessCandidate() in app.js
+    return { success: true, name };
 }
 
 // Expose to window for use in app.js

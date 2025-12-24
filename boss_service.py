@@ -938,6 +938,127 @@ class BossServiceAsync:
             await self.soft_restart()
             return True
 
+        @self.app.post("/browser/reopen")
+        async def reopen_browser_window():
+            """Reopen the Boss Zhipin standalone window.
+            
+            Reopens the Boss Zhipin chat URL in a standalone Chrome app window.
+            If a window with the URL already exists, focuses it instead of opening a new one.
+            Useful when the window is accidentally closed by the user.
+            
+            Returns:
+                dict: Status information with keys:
+                    - success: Boolean indicating if window was opened or focused
+                    - message: Status message
+            """
+            import subprocess
+            import sys
+            from src.config import get_boss_zhipin_config
+            
+            try:
+                import requests
+                
+                # Get Boss Zhipin chat URL from config
+                boss_zhipin_config = get_boss_zhipin_config()
+                chat_url = boss_zhipin_config.get("chat_url") or "about:blank"
+                
+                # Get CDP port and user data from environment
+                cdp_port = os.environ.get('CDP_PORT', '9222')
+                user_data = os.environ.get('BOSSZP_USER_DATA', '/tmp/bosszhipin_profile')
+                
+                # Check if a tab with this URL already exists using CDP
+                # This is more reliable than AppleScript because it targets the specific Chrome instance on the port
+                def _check_and_activate_via_cdp(url_fragment: str) -> bool:
+                    try:
+                        # 1. Get List of pages from CDP
+                        # timeout=2 to fail fast if Chrome isn't running
+                        response = requests.get(f"http://127.0.0.1:{cdp_port}/json", timeout=2)
+                        if response.status_code != 200:
+                            return False
+                            
+                        targets = response.json()
+                        for target in targets:
+                            target_url = target.get('url', '')
+                            # Check if URL contains our fragment (e.g. "zhipin.com")
+                            if url_fragment in target_url:
+                                target_id = target.get('id')
+                                logger.info(f"[*] Found existing target via CDP: {target_url} (ID: {target_id})")
+                                
+                                # 2. Activate the tab
+                                requests.get(f"http://127.0.0.1:{cdp_port}/json/activate/{target_id}", timeout=2)
+                                
+                                # 3. Optional: Try to bring window to front via AppleScript as backup helper
+                                # (CDP activate usually handles this, but macOS can be stubborn with separate instances)
+                                if sys.platform == "darwin":
+                                    try:
+                                        subprocess.run([
+                                            "osascript", "-e",
+                                            'tell application "Google Chrome" to activate' 
+                                        ], capture_output=True, timeout=1)
+                                    except:
+                                        pass
+                                        
+                                return True
+                        return False
+                    except Exception as e:
+                        # Connection refused = Chrome not running
+                        logger.debug(f"CDP check failed (Chrome likely not running): {e}")
+                        return False
+
+                # Check for existing window via CDP
+                if _check_and_activate_via_cdp("zhipin.com"):
+                    logger.info(f"[*] Boss Zhipin window already exists, activated via CDP")
+                    return {
+                        "success": True,
+                        "message": "Boss直聘窗口已存在，已切换到该窗口"
+                    }
+                
+                # Get Chrome path based on platform
+                if sys.platform == "darwin":
+                    chrome_path = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+                elif sys.platform == "win32":
+                    chrome_path = "chrome.exe"
+                else:
+                    chrome_path = "google-chrome"
+                
+                # Build Chrome command with app mode
+                chrome_cmd = [
+                    chrome_path,
+                    f"--remote-debugging-port={cdp_port}",
+                    f"--user-data-dir={user_data}",
+                    "--no-first-run",
+                    "--no-default-browser-check",
+                    "--disable-background-networking",
+                    "--disable-dev-shm-usage",
+                    "--disable-extensions",
+                    "--disable-default-apps",
+                    "--disable-sync",
+                    "--disable-translate",
+                    "--disable-features=VizDisplayCompositor",
+                    "--window-size=1200,800",
+                    "--disable-background-timer-throttling",
+                    "--disable-renderer-backgrounding",
+                    "--disable-backgrounding-occluded-windows",
+                    "--disable-session-crashed-bubble",
+                    "--disable-restore-session-state",
+                    f"--app={chat_url}"
+                ]
+                
+                # Open the window
+                subprocess.Popen(chrome_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                
+                logger.info(f"[+] Reopened Boss Zhipin window: {chat_url}")
+                return {
+                    "success": True,
+                    "message": f"已重新打开Boss直聘窗口: {chat_url}"
+                }
+            except Exception as e:
+                logger.error(f"[!] Failed to reopen Boss Zhipin window: {e}")
+                return {
+                    "success": False,
+                    "message": f"打开窗口失败: {str(e)}"
+                }
+
         @self.app.get("/debug/page")
         async def debug_page():
             """Get debug information about the current browser page.

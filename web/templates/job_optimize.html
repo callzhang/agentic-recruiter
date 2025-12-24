@@ -151,9 +151,12 @@
     </div>
 </div>
 
+<script type="application/json" id="opt-data-base-job-id">{{ base_job_id | tojson }}</script>
+<script type="application/json" id="opt-data-items">{{ items | tojson }}</script>
+
 <script>
-const OPT_BASE_JOB_ID = {{ base_job_id | tojson }};
-const OPT_ITEMS = {{ items | tojson }};
+const OPT_BASE_JOB_ID = JSON.parse(document.getElementById('opt-data-base-job-id').textContent);
+const OPT_ITEMS = JSON.parse(document.getElementById('opt-data-items').textContent);
 let __opt_dirty = false;
 
 function _clampScore(v) {

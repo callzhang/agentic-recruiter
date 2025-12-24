@@ -74,6 +74,15 @@
                 
                 <!-- Status indicator and version -->
                 <div class="flex items-center space-x-4">
+                    <button 
+                        onclick="reopenBossZhipin()"
+                        class="px-3 py-1.5 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 transition flex items-center space-x-2"
+                        title="重新打开Boss直聘窗口">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/>
+                        </svg>
+                        <span>重新打开Boss直聘</span>
+                    </button>
                     <div id="service-status" class="flex items-center space-x-2">
                         <div id="status-dot" class="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
                         <span id="status-text" class="text-sm text-gray-600">服务运行中</span>
@@ -171,8 +180,63 @@
         </div>
     </div>
     
+    
     <!-- Alpine.js global store -->
     <script src="/static/js/app.js"></script>
+    
+    <!-- Boss Zhipin Window Reopener -->
+    <script>
+    /**
+     * Reopen the Boss Zhipin standalone window
+     */
+    let reopenBossZhipinInProgress = false;
+    async function reopenBossZhipin() {
+        // Prevent duplicate calls while request is in progress
+        if (reopenBossZhipinInProgress) {
+            console.log('Reopen already in progress, ignoring duplicate call');
+            return;
+        }
+        
+        reopenBossZhipinInProgress = true;
+        
+        try {
+            const response = await fetch('/browser/reopen', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            });
+            
+            const data = await response.json();
+            
+            if (data.success) {
+                if (typeof showToast === 'function') {
+                    showToast(data.message || '已重新打开Boss直聘窗口', 'success');
+                } else {
+                    alert(data.message || '已重新打开Boss直聘窗口');
+                }
+            } else {
+                if (typeof showToast === 'function') {
+                    showToast(data.message || '打开窗口失败', 'error');
+                } else {
+                    alert(data.message || '打开窗口失败');
+                }
+            }
+        } catch (error) {
+            console.error('Failed to reopen Boss Zhipin window:', error);
+            if (typeof showToast === 'function') {
+                showToast('打开窗口失败: ' + error.message, 'error');
+            } else {
+                alert('打开窗口失败: ' + error.message);
+            }
+        } finally {
+            // Reset flag after a short delay to allow the operation to complete
+            setTimeout(() => {
+                reopenBossZhipinInProgress = false;
+            }, 1000);
+        }
+    }
+    </script>
     
     <!-- Runtime Check (Service Status + Version Update) -->
     <script>
@@ -208,7 +272,8 @@
         
         let runtimeCheckInterval = null;
         let lastVersionCheck = 0;
-        const VERSION_CHECK_INTERVAL = 300000; // Check version every 5 minutes (300s)
+        const VERSION_CHECK_INTERVAL = 3_600_000; // Check version every 1 hour (3600s)
+        const STATUS_CHECK_INTERVAL = 300_000; // Check status every 5 minutes (300s)
         
         async function runtimeCheck() {
             // Always check service status
@@ -338,7 +403,7 @@
         }
         
         // Then check every 30 seconds
-        runtimeCheckInterval = setInterval(runtimeCheck, 30000);
+        runtimeCheckInterval = setInterval(runtimeCheck, STATUS_CHECK_INTERVAL);
         
         // Clean up on page unload
         window.addEventListener('beforeunload', () => {

@@ -317,6 +317,8 @@ def start_service(*, scheduler_options: Optional[Dict[str, Any]] | None = None):
                 "--disable-background-timer-throttling",
                 "--disable-renderer-backgrounding",
                 "--disable-backgrounding-occluded-windows",
+                "--disable-session-crashed-bubble",
+                "--disable-restore-session-state",
                 # Launch in app mode - creates dedicated window without address bar
                 # This makes it clear the browser is for automation only
                 f"--app={chat_url}"

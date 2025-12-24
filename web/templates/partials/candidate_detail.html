@@ -390,6 +390,7 @@ async function process_candidate() {
     try {
         // Step 0: short-circuit if already PASS
         if (getCandidateData('stage') === 'PASS') {
+            if (currentScore <= 4) await passCandidate('分数低于 4，不匹配');
             return;
         }
 
@@ -422,7 +423,6 @@ async function process_candidate() {
             await handleChatAction(gen, analysis);
             needReply = false;
         }
-
         // Step 4b/4c: SEEK stage -> fetch full resume and re-analyze; then generate message if needed
         if (newStage === 'SEEK') {
             if (mode !== 'recommend') {

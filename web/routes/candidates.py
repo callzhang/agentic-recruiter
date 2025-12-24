@@ -126,7 +126,7 @@ async def list_candidates(
                 tab=tab_filter,
                 status=status_filter,
                 job_applied=job_applied,
-                unread_only=False if mode in ["recommend", "followup"] else True,  # True 只看未读,
+                unread_only=False if mode in ["followup"] else True,  # True 只看未读,
                 random_order=True if mode == "followup" else False # followup mode 需要随机顺序，因为上面的都是最近联系的
             )
         except Exception as e:
@@ -148,17 +148,15 @@ async def list_candidates(
     conversation_ids = [c.get("conversation_id") for c in candidates if c.get("conversation_id")]
     names = [c.get("name") for c in candidates if c.get("name")]
     # Run database query in thread pool to avoid blocking event loop
-    fields_to_remove = {"resume_vector", "full_resume", "resume_text"}
-    fields = [f for f in _readable_fields if f not in fields_to_remove]
-    stored_candidates = search_candidates_advanced(
+    found_candidates = search_candidates_advanced(
         candidate_ids= candidate_ids,
         chat_ids= chat_ids,
         conversation_ids= conversation_ids,
         names= names, # if not recommend mode, use ids to search
         job_applied=job_applied,
         limit=len(candidates) * 2,
-        strict=False,
-        fields=fields,
+        strict=False, # relax the strictness of the search
+        fields=[f for f in _readable_fields if f not in {"resume_vector", "full_resume", "resume_text"}],
     )
 
     # Render candidate cards
@@ -170,22 +168,24 @@ async def list_candidates(
         # candidate["index"] = i
         candidate["saved"] = False
         # match stored candidate by chat_id, or name + job_applied
-        stored_candidate = next((c for c in stored_candidates if \
+        matched_candidate = next((c for c in found_candidates if \
             c["name"] == candidate['name'] and candidate_matched(candidate, c, mode)), None)
 
-        if stored_candidate:
-            candidate.update(stored_candidate) # last_message will be updated by saved candidate
+        if matched_candidate:
+            found_candidates.remove(matched_candidate) # remove matched candidate from found_candidates to avoid duplicate matching
+            candidate.update(matched_candidate) # last_message will be updated by saved candidate
             candidate["saved"] = True
             # Extract score from analysis if available)
-            candidate["score"] = stored_candidate.get("analysis", {}).get("overall", None)
+            candidate["score"] = matched_candidate.get("analysis", {}).get("overall", None)
             # update greeted status if the candidate is in chat, greet, or seek stage
             candidate['greeted'] = candidate.get('greeted', False)
             # ensure notified field is properly set (default to False if not present)
             candidate['notified'] = candidate.get('notified', False)
             restored += 1
-        elif mode in ['chat', 'followup']:
-            found_candidates = [c for c in stored_candidates if c['name'] == candidate['name']]
-            logger.error(f"Candidate {candidate} \n not matched, found: {json.dumps(found_candidates, indent=2, ensure_ascii=False)}")
+        elif mode in ['chat', 'followup']: # log error if not matched in chat and followup mode (should be very rare)
+            name_matched_candidates = [c for c in found_candidates if c['name'] == candidate['name']]
+            logger.error(f"Candidate not matched: {candidate} \n ----found----> {json.dumps(name_matched_candidates, indent=2, ensure_ascii=False)}")
+
 
         # Extract resume_text and full_resume from candidate
         analysis = candidate.pop("analysis", '')
@@ -313,7 +313,7 @@ async def init_chat(
     form_data = await request.form()
     kwargs = dict(form_data)
     if mode != "recommend":
-        assert chat_id is not None, "chat_id is required for chat mode"
+        assert chat_id is not None, "chat_id is required for chat/followup/greet mode"
     # check if existing candidate has been saved before by using semantic search
     if not chat_id and resume_text:
         # use semantic search to find existing candidate
@@ -720,18 +720,19 @@ async def fetch_full_resume(
             status_code=400
         )
     
-    # check if requested
-    request = True
+    # skip if already requested
+    full_resume_text, requested = None, False
     candidate = get_candidate_by_dict({"candidate_id": candidate_id, "chat_id": chat_id}, strict=False)
     if history:=candidate.get("metadata", {}).get("history"):
         if any(h for h in history if h.get("role") == "developer" and h.get("content") == "简历请求已发送"):
-            requested = False
-    
-    # Try to get full resume only
-    page = await boss_service.service._ensure_browser_session()
-    result = await chat_actions.view_full_resume_action(page, chat_id, request)
-    full_resume_text = result.get("text")
-    requested = result.get("requested")
+            requested = True
+            full_resume_text = candidate.get("full_resume")
+    if not full_resume_text and not requested:
+        # Try to get full resume only
+        page = await boss_service.service._ensure_browser_session()
+        result = await chat_actions.view_full_resume_action(page, chat_id, request)
+        full_resume_text = result.get("text")
+        requested = result.get("requested")
     
     if full_resume_text and len(full_resume_text) > 100:
         upsert_candidate(
@@ -875,10 +876,9 @@ def candidate_matched(candidate: Dict[str, Any], stored_candidate: Dict[str, Any
     # check by last_message if provided
     last_message, last_message2 = candidate.get("last_message", ''), stored_candidate.get("last_message", '')
     updated_at = date_parser.parse(stored_candidate.get("updated_at"))
-    if updated_at.tzinfo is not None:
-        updated_at = updated_at.replace(tzinfo=None)
+    if updated_at.tzinfo is not None: updated_at = updated_at.replace(tzinfo=None)
     if chat_id is None and chat_id2 and updated_at < (datetime.now() - timedelta(days=3)):
-        logger.info(f"there should be no chat_id in recommend mode, current candidate:\n{candidate.get('name')}<->{stored_candidate.get('name')}: chat_id: {chat_id2}")
+        logger.info(f"there should be no chat_id in recommend mode(no chat_id provided), current candidate:\n{candidate.get('name')}<->{stored_candidate.get('name')}: chat_id: {chat_id2}")
         return False
     elif mode == "recommend" and last_message and last_message2:
         from difflib import SequenceMatcher

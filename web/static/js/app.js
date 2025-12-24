@@ -36,14 +36,65 @@ function showToast(message, type = 'info') {
     
     const container = document.getElementById('toast-container');
     if (container) {
+        // Expire all *previous* toasts in 3 seconds to prevent stacking/flashing
+        expireAllToasts(3000);
+
         container.appendChild(toast);
         
-        setTimeout(() => {
-            toast.classList.add('animate-fade-out');
-            setTimeout(() => toast.remove(), 300);
-        }, 8000);
+        // Timeout 180s (3 minutes) for the new toast
+        const timeoutId = setTimeout(() => {
+            removeToast(toast);
+        }, 180000); 
+
+        // Allow manual removal to clear timeout
+        toast.dataset.timeoutId = timeoutId;
     }
 }
+
+function removeToast(toast) {
+    if (!toast || !toast.parentNode) return;
+    
+    // Clear timeout if it exists
+    if (toast.dataset.timeoutId) {
+        clearTimeout(parseInt(toast.dataset.timeoutId));
+    }
+
+    toast.classList.add('animate-fade-out');
+    setTimeout(() => toast.remove(), 300);
+}
+
+// Expire all toasts with a custom timeout (default 3000ms)
+// Used to gently clear toasts when a new one comes or when operations finish
+function expireAllToasts(timeoutMs = 3000) {
+    const container = document.getElementById('toast-container');
+    if (container) {
+        const toasts = container.querySelectorAll('div');
+        toasts.forEach(t => {
+            // If already fading out, ignore
+            if (t.classList.contains('animate-fade-out')) return;
+
+            // Clear existing long timeout
+            if (t.dataset.timeoutId) {
+                clearTimeout(parseInt(t.dataset.timeoutId));
+            }
+            
+            // Set new short timeout
+            const newId = setTimeout(() => {
+                removeToast(t);
+            }, timeoutMs);
+            t.dataset.timeoutId = newId;
+        });
+    }
+}
+
+// Clear all toasts immediately (compatibility)
+function clearAllToasts() {
+    expireAllToasts(0);
+}
+
+// Gently dismiss toasts when HTMX request finishes or errors (3s delay)
+document.body.addEventListener('htmx:afterRequest', () => expireAllToasts(3000));
+document.body.addEventListener('htmx:responseError', () => expireAllToasts(3000));
 
 // Expose showToast globally
 window.showToast = showToast;
@@ -357,9 +408,9 @@ document.body.addEventListener('htmx:responseError', function(evt) {
     if (loadingIndicator) {
         loadingIndicator.classList.remove('htmx-request');
     }
-    console.error('HTMX response error:', evt.detail);
+    // console.error('HTMX response error:', evt.detail);
     const errorMsg = evt.detail?.error || evt.detail?.message || '请求失败';
-    showToast(errorMsg, 'error');
+    // showToast(errorMsg, 'error');
 });
 
 

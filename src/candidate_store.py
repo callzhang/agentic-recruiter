@@ -352,9 +352,9 @@ def search_candidates_advanced(
         # Use bracket notation to filter JSON field: analysis["overall"] >= min_score
         identifiers.append(f'analysis["overall"] >= {min_score}')
 
-    filter_expr = f" {'and' if strict else 'or'} ".join([c for c in identifiers if c])
+    filter_expr = f" {'AND' if strict else 'OR'} ".join([c for c in identifiers if c])
     if conditions:
-        filter_expr = f" {filter_expr} and {'and'.join(conditions)}" if filter_expr else ' and '.join(conditions)
+        filter_expr = f" {filter_expr} AND {'AND'.join(conditions)}" if filter_expr else ' AND '.join(conditions)
 
     sortable_fields = {
         "updated_at",
@@ -377,9 +377,7 @@ def search_candidates_advanced(
     try:
         # Cap the limit to stay within Milvus's max query result window of 16384
         # The function multiplies limit by 3, so we cap the effective limit
-        effective_limit = limit * 3 if limit else None
-        if effective_limit and effective_limit > 16384:
-            effective_limit = 16384
+        effective_limit = limit * 3 % 16384 if limit else None
         
         if semantic_query:
             results = search_candidates_by_resume(
