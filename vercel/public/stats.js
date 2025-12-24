@@ -63,6 +63,7 @@ function renderDailyChart(container) {
     const labels = dailyData.map(d => formatDate(d.date));
     const newData = dailyData.map(d => d.new || 0);
     const seekData = dailyData.map(d => d.seek || 0);
+    const processedData = dailyData.map(d => d.processed || 0);
     
     // Create Chart.js bar chart
     const chart = new Chart(canvas, {
@@ -75,6 +76,14 @@ function renderDailyChart(container) {
                     data: newData,
                     backgroundColor: 'rgba(59, 130, 246, 0.6)', // blue-500 with opacity
                     borderColor: 'rgba(59, 130, 246, 1)',
+                    borderWidth: 1,
+                    borderRadius: 4,
+                },
+                {
+                    label: '已联系',
+                    data: processedData,
+                    backgroundColor: 'rgba(34, 197, 94, 0.6)', // green-500
+                    borderColor: 'rgba(34, 197, 94, 1)',
                     borderWidth: 1,
                     borderRadius: 4,
                 },
@@ -627,16 +636,16 @@ function renderJobStats(data) {
                         <p class="text-3xl font-extrabold text-indigo-600">${ss.quality_score}</p>
                     </div>
                 </div>
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
+                <div class="grid grid-cols-1 md:grid-cols-5 gap-4">
+                    <div class="md:col-span-3">
                         <h4 class="text-sm font-semibold text-gray-700 mb-2">近7日新增/SEEK</h4>
                         <div class="daily-chart-container p-4 bg-gray-50 rounded-lg" data-daily='${JSON.stringify(dailyData)}' style="min-height: 250px;">
                             <!-- Chart.js canvas will be inserted here -->
                         </div>
                     </div>
-                    <div>
+                    <div class="md:col-span-2">
                         <h4 class="text-sm font-semibold text-gray-700 mb-2">阶段转化率</h4>
-                        <div class="conversion-pie-chart-container p-4 bg-gray-50 rounded-lg" data-conversions='${JSON.stringify(conversionsData)}' style="min-height: 250px;">
+                        <div class="conversion-pie-chart-container p-4 bg-transparent rounded-lg" data-conversions='${JSON.stringify(conversionsData)}' style="min-height: 250px;">
                             <!-- Chart.js canvas will be inserted here -->
                         </div>
                     </div>

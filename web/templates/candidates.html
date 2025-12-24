@@ -807,8 +807,7 @@ async function processCandidateCard(card) {
     console.log(`正在处理候选人: ${name}`);
     
     // Get detailPane reference
-    const detailPane = document.getElementById('detail-pane');
-    if (!detailPane) {
+    if (!document.getElementById('detail-pane')) {
         throw new Error('Detail pane not found');
     }
     
@@ -828,35 +827,17 @@ async function processCandidateCard(card) {
         
         const onProcessingError = (event) => {
             if (cleanup) cleanup();
-            reject(new Error(event.detail?.error || 'Processing failed'));
+            reject(new Error(event.detail?.error || event.detail?.message || 'Processing failed'));
         };
         
         // Set up swap event listeners
         const onSwap = () => {
             clearTimeout(swapTimeout);
-            // Processing timeout starts after swap completes
+            // limit 180s for candidate processing
             processingTimeout = setTimeout(() => {
                 if (cleanup) cleanup();
                 reject(new Error('Processing timeout (180s)'));
             }, 180000);
-        };
-        
-        const onResponseError = (evt) => {
-            if (cleanup) cleanup();
-            evt.stopPropagation();
-            reject(new Error(evt.detail?.error || evt.detail?.message || 'HTMX request failed'));
-        };
-        
-        const onSendError = (evt) => {
-            if (cleanup) cleanup();
-            evt.stopPropagation();
-            reject(new Error(evt.detail?.error || evt.detail?.message || evt.detail?.failed || 'HTMX send failed'));
-        };
-        
-        const onSwapError = (evt) => {
-            if (cleanup) cleanup();
-            evt.stopPropagation();
-            reject(new Error(evt.detail?.error || evt.detail?.message || 'HTMX swap failed'));
         };
         
         // Swap timeout
@@ -870,18 +851,18 @@ async function processCandidateCard(card) {
             clearTimeout(processingTimeout);
             document.removeEventListener('candidate:processing-complete', onProcessingComplete);
             document.removeEventListener('candidate:processing-error', onProcessingError);
-            detailPane.removeEventListener('htmx:afterSwap', onSwap);
-            detailPane.removeEventListener('htmx:responseError', onResponseError);
-            detailPane.removeEventListener('htmx:sendError', onSendError);
-            detailPane.removeEventListener('htmx:swapError', onSwapError);
+            document.removeEventListener('htmx:afterSwap', onSwap);
+            document.removeEventListener('htmx:responseError', onProcessingError);
+            document.removeEventListener('htmx:sendError', onProcessingError);
+            document.removeEventListener('htmx:swapError', onProcessingError);
         };
         
         document.addEventListener('candidate:processing-complete', onProcessingComplete, { once: true });
         document.addEventListener('candidate:processing-error', onProcessingError, { once: true });
-        detailPane.addEventListener('htmx:afterSwap', onSwap, { once: true });
-        detailPane.addEventListener('htmx:responseError', onResponseError, { once: true });
-        detailPane.addEventListener('htmx:sendError', onSendError, { once: true });
-        detailPane.addEventListener('htmx:swapError', onSwapError, { once: true });
+        document.addEventListener('htmx:afterSwap', onSwap, { once: true });
+        document.addEventListener('htmx:responseError', onProcessingError, { once: true });
+        document.addEventListener('htmx:sendError', onProcessingError, { once: true });
+        document.addEventListener('htmx:swapError', onProcessingError, { once: true });
     });
     
 

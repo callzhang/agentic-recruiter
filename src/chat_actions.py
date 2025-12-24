@@ -240,7 +240,7 @@ async def discard_candidate_action(page: Page, chat_id: str, timeout: int = 3000
     raise RuntimeError("PASS失败: 未删除对话")
     
 
-@retry(stop=stop_after_attempt(2), wait=wait_fixed(1))
+# @retry(stop=stop_after_attempt(2), wait=wait_fixed(1))
 async def list_conversations_action(
     page: Page, 
     limit: int = 999, 
@@ -262,9 +262,17 @@ async def list_conversations_action(
         List[Dict[str, Any]]: A list of candidate items.
     '''
     await _prepare_chat_page(page, tab, status, job_applied)
+    # check if candidate list is available
+    if await page.locator('div.no-data').count() > 0:
+        logger.info("没有候选人")
+        return []
     # Scroll the candidate list container to the end
     candidate_list = page.locator('div.b-scroll-stable')
-    await candidate_list.evaluate('element => element.scrollTop = element.scrollHeight')
+    if await candidate_list.count() > 0:
+        await candidate_list.evaluate('element => element.scrollTop = element.scrollHeight')
+    else:
+        logger.warning("未找到候选人列表容器")
+        return []
     items = page.locator(CHAT_ITEM_SELECTORS)
     count = await items.count()
     messages: List[Dict[str, Any]] = []
@@ -302,7 +310,7 @@ async def list_conversations_action(
     return messages
 
 
-@retry(stop=stop_after_attempt(2), wait=wait_fixed(1))
+# @retry(stop=stop_after_attempt(2), wait=wait_fixed(1))
 async def get_chat_history_action(page: Page, chat_id: str, timeout: int = 200) -> List[Dict[str, Any]]:
     await _prepare_chat_page(page)
     await _go_to_chat_dialog(page, chat_id)
@@ -463,7 +471,8 @@ async def accept_full_resume_action(page: Page, chat_id: str, timeout_ms: int = 
     """Accept candidate's resume. Returns True on success, raises ValueError if accept button not found."""
     await _prepare_chat_page(page)
     await _go_to_chat_dialog(page, chat_id)
-    accept_button_selector = 'div.notice-list >> a.btn:has-text("同意"), div.message-card-buttons >> span.card.btn:has-text("同意")'
+    accept_button_selector = 'div.notice-list >> a.btn:has-text("同意")'
+    # accept_button_selector = 'div.notice-list >> a.btn:has-text("同意"), div.message-card-buttons >> span.card-btn:has-text("同意")'
     accept_button = page.locator(accept_button_selector)
     if await accept_button.count() == 0:
         return False

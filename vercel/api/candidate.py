@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Vercel serverless function for candidate detail page.
 Displays candidate information in readonly mode.
+Updated: 2025-12-24 - Added feedback buttons support
 """
 
 import os
@@ -324,7 +325,8 @@ class handler(BaseHTTPRequestHandler):
             
             # Render template
             context = (query.get('context', [''])[0] or '').strip().lower()
-            allow_feedback = context != 'optimize'
+            # Allow feedback in all contexts, especially 'optimize' where it is critical
+            allow_feedback = True
             html_content = render_candidate_detail(candidate, allow_optimization_feedback=allow_feedback)
             _send_html(self, 200, html_content)
             

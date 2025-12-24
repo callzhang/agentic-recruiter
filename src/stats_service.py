@@ -124,7 +124,7 @@ def build_daily_series(candidates: List[Dict[str, Any]], days: int = 7) -> List[
     today = datetime.now().date()
     start = today - timedelta(days=days - 1)
 
-    bucket = defaultdict(lambda: {"new": 0, "seek": 0})
+    bucket = defaultdict(lambda: {"new": 0, "seek": 0, "processed": 0})
     for cand in candidates:
         dt = _parse_dt(cand.get("updated_at"))
         if not dt:
@@ -133,13 +133,19 @@ def build_daily_series(candidates: List[Dict[str, Any]], days: int = 7) -> List[
         if day < start:
             continue
         bucket[day]["new"] += 1
-        if normalize_stage(cand.get("stage")) == STAGE_SEEK:
+
+        stage_norm = normalize_stage(cand.get("stage"))
+        if stage_norm == STAGE_SEEK:
             bucket[day]["seek"] += 1
+        # Check if processed: strictly contacted metadata
+        contacted = cand.get("metadata", {}).get("contacted")
+        if contacted:
+            bucket[day]["processed"] += 1
 
     series = []
     for i in range(days):
         d = start + timedelta(days=i)
-        data = bucket.get(d, {"new": 0, "seek": 0})
+        data = bucket.get(d, {"new": 0, "seek": 0, "processed": 0})
         series.append({"date": d.isoformat(), **data})
     return series
 
@@ -277,7 +283,7 @@ def fetch_job_candidates(job_name: str, days: int | None = None) -> List[Dict[st
     return search_candidates_advanced(
         job_applied=job_name,
         limit=None,
-        fields=["candidate_id", "job_applied", "stage", "analysis", "updated_at"],
+        fields=["candidate_id", "job_applied", "stage", "analysis", "updated_at", "metadata"],
         updated_from=updated_from,
         sort_by="updated_at",
         sort_direction="desc",

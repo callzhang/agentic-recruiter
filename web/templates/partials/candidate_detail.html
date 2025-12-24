@@ -23,6 +23,8 @@
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
                 </svg>
             </button>
+            
+            <!-- Feedback Buttons removed from here -->
         </div>
         <div class="flex space-x-2">
             {% if candidate.stage %}
@@ -84,6 +86,37 @@
     <!-- Hidden context for HTMX requests - using JSON to preserve types -->
     <div id="candidate-context" class="hidden" hx-vals='{{ candidate | tojson | safe }}'></div>
     
+    <!-- Rejection Feedback Modal -->
+    <div id="rejection-feedback-modal"
+         class="fixed inset-0 z-50 hidden items-center justify-center bg-black bg-opacity-50 p-4"
+         role="dialog"
+         aria-modal="true">
+        <div class="bg-white rounded-lg shadow-2xl w-full max-w-lg">
+            <div class="flex items-center justify-between px-5 py-4 border-b">
+                <h3 class="text-lg font-semibold text-gray-800">候选人放弃/不匹配原因</h3>
+                <button onclick="closeRejectModal()" class="text-gray-500 hover:text-gray-800">✕</button>
+            </div>
+            <div class="p-5 space-y-4">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">原因说明 *</label>
+                    <textarea id="rejection-reason"
+                              rows="4"
+                              class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                              placeholder="例如：薪资预期过高；地理位置不合适；已入职其他公司..."></textarea>
+                </div>
+            </div>
+            <div class="flex justify-end gap-2 px-5 py-4 border-t bg-gray-50">
+                <button onclick="closeRejectModal()"
+                        class="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition">
+                    取消
+                </button>
+                <button onclick="submitRejectReason()"
+                        class="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition">
+                    确认并提交
+                </button>
+            </div>
+        </div>
+    </div>
     
     <!-- 1. Resume Section -->
     <div id="resume-section" class="bg-white rounded-lg border shadow-sm">
@@ -286,16 +319,9 @@
             {% set placeholder_message = ns.placeholder %}
             {% include 'partials/message_result.html' with context %}
         </div>
-        <div class="flex p-2 gap-2">
-            <button onclick="greetAndSendMessage()"
-                    class="px-4 py-1 bg-green-600 text-white text-sm rounded hover:bg-green-800">
-                📤 打招呼+发送消息
-            </button>
-            <button onclick="passCandidate()"
-                    class="px-4 py-1 bg-gray-600 text-white text-sm rounded hover:bg-gray-800">
-                ❌ PASS
-            </button>
         </div>
+        <!-- Buttons removed from here -->
+    </div>
     </div>
     {% endif %}
 
@@ -367,6 +393,51 @@
         </div>
     </div>
     {% endif %}
+    {% endif %}
+    
+    <!-- Candidate Processing Section (moved to bottom) -->
+    {% if view_mode != 'readonly' or allow_optimization_feedback %}
+    <div id="processing-section" class="bg-white rounded-lg border shadow-sm mt-4">
+        <div class="p-2 border-b bg-gray-100">
+             <h3 class="font-bold text-gray-800">候选人处理</h3>
+        </div>
+        <div class="p-4 flex flex-wrap gap-3 items-center">
+             <!-- Action Buttons -->
+             {% if view_mode != 'readonly' %}
+             <button onclick="greetAndSendMessage()"
+                     class="px-4 py-2 bg-green-600 text-white font-medium rounded hover:bg-green-700 shadow-sm transition flex items-center gap-2">
+                 <span>📤</span> 打招呼+发送消息
+             </button>
+             
+             <button onclick="passCandidate()"
+                     class="px-4 py-2 bg-red-600 text-white font-medium rounded hover:bg-red-700 shadow-sm transition flex items-center gap-2">
+                 <span>❌</span> PASS
+             </button>
+             
+             <div class="w-px h-8 bg-gray-300 mx-2"></div>
+             {% endif %}
+             
+             <!-- Feedback Buttons -->
+             <button onclick="markContacted()"
+                    class="px-4 py-2 bg-blue-600 text-white font-medium rounded hover:bg-blue-700 shadow-sm transition flex items-center gap-2"
+                    title="标记为已联系">
+                <span>📞</span> 已联系
+            </button>
+            
+            <button onclick="openRejectModal()"
+                    class="px-4 py-2 bg-gray-600 text-white font-medium rounded hover:bg-gray-700 shadow-sm transition flex items-center gap-2"
+                    title="候选人放弃/不匹配">
+                <span>🚫</span> 候选人放弃
+            </button>
+            
+            {% if allow_optimization_feedback %}
+            <button onclick="openOptimizationFeedbackModal()"
+                    class="px-4 py-2 bg-orange-500 text-white font-medium rounded hover:bg-orange-600 shadow-sm transition flex items-center gap-2">
+                <span>✍️</span> 评分不准
+            </button>
+            {% endif %}
+        </div>
+    </div>
     {% endif %}
 
     {% if candidate.updated_at %}
@@ -454,17 +525,12 @@ async function process_candidate() {
             newStage = 'PASS';
         }
     } catch (error) {
-        console.error('Error processing candidate:', error);
         error_message = error.message || String(error);
         showToast(`处理候选人时出错: ${error_message}`, 'error');
         document.dispatchEvent(new CustomEvent('candidate:processing-error', { detail: { error: error_message } }));
     } finally {
         // update the candidate data in the cloud
         await updateCandidateData({ viewed: true, score: currentScore, stage: newStage });
-        if (!window.cycleReplyState?.running) {
-            // enable the candidate cards
-            document.dispatchEvent(new CustomEvent('candidates:enable-cards'));
-        }
         // dispatch the candidate:processing-complete event to the candidate cards
         document.dispatchEvent(new CustomEvent('candidate:processing-complete'));
     }
@@ -1209,6 +1275,7 @@ async function submitOptimizationFeedback() {
     const conversationId = getCandidateData('conversation_id');
     const candidateName = getCandidateData('name') || '';
     const jobApplied = getCandidateData('job_applied') || '';
+    const currentMetadata = getCandidateData('metadata') || {};
 
     const jobId = window.__resolved_optimization_job_id || (await resolveOptimizationJobIdAndRender());
     if (!jobId) {
@@ -1264,10 +1331,84 @@ async function submitOptimizationFeedback() {
             return;
         }
         showToast('已加入优化清单', 'success');
+        
+        // Also mark as contacted since feedback was given
+        await updateCandidateData({ 
+            metadata: { 
+                ...currentMetadata, 
+                contacted: true 
+            } 
+        });
+        
         closeOptimizationFeedbackModal();
     } catch (e) {
         console.error(e);
         showToast('保存失败（网络/服务异常）', 'error');
+    }
+}
+
+// ===========================================
+// Feedback Action Functions
+// ===========================================
+
+async function markContacted() {
+    const currentMetadata = getCandidateData('metadata') || {};
+    try {
+        await updateCandidateData({ 
+            metadata: { 
+                ...currentMetadata, 
+                contacted: true 
+            } 
+        });
+        showToast('已标记为已联系', 'success');
+    } catch (e) {
+        console.error('Failed to mark contacted:', e);
+        showToast('操作失败', 'error');
+    }
+}
+
+function openRejectModal() {
+    const modal = document.getElementById('rejection-feedback-modal');
+    if (modal) {
+        // Clear previous input
+        const textarea = document.getElementById('rejection-reason');
+        if (textarea) textarea.value = '';
+        
+        modal.classList.remove('hidden');
+        modal.classList.add('flex');
+    }
+}
+
+function closeRejectModal() {
+    const modal = document.getElementById('rejection-feedback-modal');
+    if (modal) {
+        modal.classList.add('hidden');
+        modal.classList.remove('flex');
+    }
+}
+
+async function submitRejectReason() {
+    const reason = document.getElementById('rejection-reason')?.value?.trim();
+    if (!reason) {
+        showToast('请填写放弃原因', 'error');
+        return;
+    }
+    
+    const currentMetadata = getCandidateData('metadata') || {};
+    
+    try {
+        await updateCandidateData({ 
+            metadata: { 
+                ...currentMetadata, 
+                contacted: true,
+                candidate_reject_reason: reason
+            } 
+        });
+        showToast('已记录放弃原因', 'success');
+        closeRejectModal();
+    } catch (e) {
+        console.error('Failed to submit reject reason:', e);
+        showToast('提交失败', 'error');
     }
 }
 

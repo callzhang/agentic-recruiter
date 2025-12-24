@@ -269,7 +269,7 @@ def build_daily_series(candidates: List[Dict[str, Any]], days: int = 7) -> List[
     today = datetime.now().date()
     start = today - timedelta(days=days - 1)
 
-    bucket = defaultdict(lambda: {"new": 0, "seek": 0})
+    bucket = defaultdict(lambda: {"new": 0, "seek": 0, "processed": 0})
     for cand in candidates:
         dt = _parse_dt(cand.get("updated_at"))
         if not dt:
@@ -280,11 +280,15 @@ def build_daily_series(candidates: List[Dict[str, Any]], days: int = 7) -> List[
         bucket[day]["new"] += 1
         if normalize_stage(cand.get("stage")) == STAGE_SEEK:
             bucket[day]["seek"] += 1
+        # Check if processed: strictly contacted metadata
+        contacted = cand.get("metadata", {}).get("contacted")
+        if contacted:
+            bucket[day]["processed"] += 1
 
     series = []
     for i in range(days):
         d = start + timedelta(days=i)
-        data = bucket.get(d, {"new": 0, "seek": 0})
+        data = bucket.get(d, {"new": 0, "seek": 0, "processed": 0})
         series.append({"date": d.isoformat(), **data})
     return series
 
@@ -429,6 +433,11 @@ def search_candidates_advanced(
                 except:
                     pass  # Keep as string if parsing fails
             cleaned_results.append(cleaned_result)
+        
+        # Sort in memory to ensure consistency (Milvus query order_by might not be reliable)
+        reverse = sort_direction.lower() != "asc"
+        cleaned_results.sort(key=lambda c: c.get(sort_by_normalized) or "", reverse=reverse)
+        
         return cleaned_results
     return []
 
@@ -496,7 +505,7 @@ def fetch_job_candidates(job_name: str, days: Optional[int] = None) -> List[Dict
         updated_from = start_dt.isoformat()
     return search_candidates_advanced(
         job_applied=job_name,
-        fields=["candidate_id", "job_applied", "stage", "analysis", "updated_at"],
+        fields=["candidate_id", "job_applied", "stage", "analysis", "updated_at", "metadata"],
         updated_from=updated_from,
         sort_by="updated_at",
         sort_direction="desc",

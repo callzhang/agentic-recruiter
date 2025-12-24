@@ -143,20 +143,16 @@ async def list_candidates(
             </div>''')
     
     # Batch query candidates from cloud store
-    candidate_ids = [c.get("candidate_id") for c in candidates if c.get("candidate_id")]
-    chat_ids = [c.get("chat_id") for c in candidates if c.get("chat_id")]
-    conversation_ids = [c.get("conversation_id") for c in candidates if c.get("conversation_id")]
-    names = [c.get("name") for c in candidates if c.get("name")]
-    # Run database query in thread pool to avoid blocking event loop
+    fields = [f for f in _readable_fields if f not in {"resume_vector", "full_resume", "resume_text"}]
     found_candidates = search_candidates_advanced(
-        candidate_ids= candidate_ids,
-        chat_ids= chat_ids,
-        conversation_ids= conversation_ids,
-        names= names, # if not recommend mode, use ids to search
+        candidate_ids= [c.get("candidate_id") for c in candidates if c.get("candidate_id")],
+        chat_ids= [c.get("chat_id") for c in candidates if c.get("chat_id")],
+        conversation_ids= [c.get("conversation_id") for c in candidates if c.get("conversation_id")],
+        names= [c.get("name") for c in candidates if c.get("name")], # if not recommend mode, use ids to search
         job_applied=job_applied,
         limit=len(candidates) * 2,
         strict=False, # relax the strictness of the search
-        fields=[f for f in _readable_fields if f not in {"resume_vector", "full_resume", "resume_text"}],
+        fields=fields,
     )
 
     # Render candidate cards
@@ -170,9 +166,15 @@ async def list_candidates(
         # match stored candidate by chat_id, or name + job_applied
         matched_candidate = next((c for c in found_candidates if \
             c["name"] == candidate['name'] and candidate_matched(candidate, c, mode)), None)
+        # fallback to find individual candidate 
+        if not matched_candidate:
+            matched_candidate = get_candidate_by_dict(dict(**candidate, fields=fields))
+            matched = candidate_matched(candidate, matched_candidate, mode)
+            if not matched:
+                matched_candidate = None
 
         if matched_candidate:
-            found_candidates.remove(matched_candidate) # remove matched candidate from found_candidates to avoid duplicate matching
+            if matched_candidate in found_candidates: found_candidates.remove(matched_candidate) # remove matched candidate from found_candidates to avoid duplicate matching
             candidate.update(matched_candidate) # last_message will be updated by saved candidate
             candidate["saved"] = True
             # Extract score from analysis if available)
@@ -182,10 +184,7 @@ async def list_candidates(
             # ensure notified field is properly set (default to False if not present)
             candidate['notified'] = candidate.get('notified', False)
             restored += 1
-        elif mode in ['chat', 'followup']: # log error if not matched in chat and followup mode (should be very rare)
-            name_matched_candidates = [c for c in found_candidates if c['name'] == candidate['name']]
-            logger.error(f"Candidate not matched: {candidate} \n ----found----> {json.dumps(name_matched_candidates, indent=2, ensure_ascii=False)}")
-
+            
 
         # Extract resume_text and full_resume from candidate
         analysis = candidate.pop("analysis", '')
@@ -218,18 +217,16 @@ async def list_candidates(
 async def get_candidate_detail(request: Request):
     """Get candidate detail view."""
     candidate = json.loads(request.query_params.get('candidate', '{}'))
-    chat_id = candidate.get('chat_id')
     # Try to find existing candidate (database query, no browser lock needed)
-    stored_candidate = get_candidate_by_dict(candidate, strict=False)
+    stored_candidate = get_candidate_by_dict(candidate, strict=True)
     matched = candidate_matched(candidate, stored_candidate, candidate.get('mode'))
     if matched:
         candidate.update(stored_candidate)
-    
     # Prepare template context (pop values before rendering to avoid issues)
-    analysis = candidate.pop("analysis", {}) if stored_candidate else {}
-    generated_message = candidate.pop("generated_message", '') if stored_candidate else ''
-    resume_text = candidate.pop("resume_text", '') if stored_candidate else ''
-    full_resume = candidate.pop("full_resume", '') if stored_candidate else ''
+    analysis = candidate.pop("analysis", {})
+    generated_message = candidate.pop("generated_message", '')
+    resume_text = candidate.pop("resume_text", '')
+    full_resume = candidate.pop("full_resume", '')
     
     # Render template content in thread pool to avoid blocking event loop
     template = templates.get_template("partials/candidate_detail.html")
