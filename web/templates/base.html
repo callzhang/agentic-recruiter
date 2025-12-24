@@ -110,14 +110,7 @@
     <!-- Toast notification container -->
     <div id="toast-container" class="fixed top-4 right-4 z-50 flex flex-col"></div>
     
-    <!-- Global loading indicator -->
-    <div id="global-loading" class="htmx-indicator fixed top-20 right-4 z-50 bg-blue-600 text-white px-6 py-3 rounded-lg shadow-lg flex items-center space-x-3">
-        <svg class="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-        </svg>
-        <!-- <span class="font-medium">.</span> -->
-    </div>
+    <!-- Global loading indicator removed (using showToast with spinner instead) -->
     
     <!-- Version Update Modal -->
     <div x-data="{ 
@@ -172,7 +165,8 @@
                         稍后提醒
                     </button>
                     <button @click="modal && modal.update()" 
-                            class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-medium">
+                            class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-medium"
+                            x-text="modal && modal.stage === 'instruction' ? '关闭' : '查看更新'">
                         查看更新
                     </button>
                 </div>
@@ -366,6 +360,7 @@
                     // Show modal
                     if (window.Alpine && Alpine.store('versionUpdateModal')) {
                         const modal = Alpine.store('versionUpdateModal');
+                        modal.stage = 'initial';
                         
                         // Set title and message based on merge status
                         if (data.merge_success === false) {

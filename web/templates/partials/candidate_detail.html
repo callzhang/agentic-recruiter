@@ -592,7 +592,7 @@ async function sendDingNotification(analysis, candidateName, jobApplied) {
 }
 
 async function fetchOnlineResume() {
-    showToast('抓取在线简历...', 'info');
+    showToast('抓取在线简历...', 'loading');
     const values = getCandidateData();
     await htmxAjaxPromise('POST', '/candidates/fetch-online-resume', {
         target: '#resume-online-container',
@@ -609,7 +609,7 @@ async function fetchFullResume() {
     if (mode === 'recommend') {
         return;
     }
-    showToast('抓取完整简历...', 'info');
+    showToast('抓取完整简历...', 'loading');
 
     await htmxAjaxPromise('POST', '/candidates/fetch-full-resume', {
         target: '#resume-full-container',
@@ -630,7 +630,7 @@ function getMessageResultState() {
 }
 
 async function generateMessage(force = false) {
-    showToast('生成消息...', 'info');
+    showToast('生成消息...', 'loading');
     const values = getCandidateData();
     const mode = values.mode;
     // if force is true or mode is followup, use followup action
@@ -672,6 +672,7 @@ async function greetAndSendMessage() {
     }
 
     // send message
+    showToast('正在发送消息...', 'loading');
     await htmxAjaxPromise('POST', '/candidates/send', {
         target: '#message-content',
         swap: 'none',
@@ -703,9 +704,9 @@ async function startAnalysis() {
     const has_online_resume = !resume_text.includes('⏳') && resume_text.length > 0;
     
     if (has_full_resume) {
-        showToast('正在分析完整简历...', 'info');
+        showToast('正在分析完整简历...', 'loading');
     } else if(has_online_resume) {
-        showToast('正在分析在线简历...', 'info');
+        showToast('正在分析在线简历...', 'loading');
     } else {
         throw new Error('没有可分析的简历,请先请求简历');
     }
@@ -762,7 +763,9 @@ async function requestContact() {
         return;
     }
     
+    
     // Call new endpoint with both chat_id and candidate_id
+    showToast('正在请求联系方式...', 'loading');
     const response = await fetch('/candidates/request-contact', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -904,6 +907,9 @@ async function passCandidate(reason = '') {
     const candidate_id = values.candidate_id;
     const index = values.index;
     const mode = values.mode;
+    
+    showToast('正在标记为 PASS...', 'loading');
+    
     const response = await fetch(url, {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -964,8 +970,8 @@ async function shouldReply() {
     // For recommend mode, only rely on greeted flag
     if (mode === 'recommend') {
         return !greeted; // if not greeted, we need to reply
-    }else if (mode === 'followup' && diffMinutes > 60*24*1) {
-        return true; // if updated_at is more than 1 day ago, we need to reply
+    }else if (mode === 'followup' && diffMinutes > 60*24*3) {
+        return true; // if updated_at is more than 3 days ago, we need to reply
     }
     // for other modes, check if we should reply based on chat history
     const response = await fetch('/candidates/should-reply', {
@@ -976,8 +982,7 @@ async function shouldReply() {
             mode: mode
         })
     });
-    const data = await window.handleApiResponse(response);
-    const should_reply = data.should_reply === true;
+    const should_reply = await window.handleApiResponse(response);
     return should_reply;
 }
 

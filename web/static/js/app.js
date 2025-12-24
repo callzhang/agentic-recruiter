@@ -8,7 +8,7 @@
  * Toast notification helper
  * Displays temporary notification messages in the top-right corner
  */
-function showToast(message, type = 'info') {
+function showToast(message, type = 'info', duration = 180_000) {
     // Also output to console based on type
     switch (type) {
         case 'error':
@@ -18,6 +18,7 @@ function showToast(message, type = 'info') {
             console.warn(message);
             break;
         case 'success':
+            break;
         case 'info':
         default:
             console.log(message);
@@ -31,24 +32,49 @@ function showToast(message, type = 'info') {
         error: 'bg-red-600',
         warning: 'bg-yellow-600'
     };
-    toast.className = `${colors[type] || colors.info} text-white px-6 py-3 rounded-lg shadow-lg mb-2 animate-fade-in`;
-    toast.textContent = message;
+    
+    // Toast styling with flexbox layout
+    toast.className = `${colors[type] || colors.info} text-white px-4 py-3 rounded-lg shadow-lg mb-2 animate-fade-in flex items-center justify-between pointer-events-auto`;
+    toast.dataset.type = type;
+    
+    // Content container (icon + text)
+    const content = document.createElement('div');
+    content.className = 'flex items-center gap-3';
+    const msgSpan = document.createElement('span');
+    msgSpan.textContent = message;
+    content.appendChild(msgSpan);
+    toast.appendChild(content);
+
+    // Close button
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'text-white hover:text-gray-200 focus:outline-none ml-4 p-1';
+    closeBtn.innerHTML = `
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+    `;
+    closeBtn.onclick = (e) => {
+        e.stopPropagation();
+        removeToast(toast);
+    };
+    toast.appendChild(closeBtn);
     
     const container = document.getElementById('toast-container');
     if (container) {
-        // Expire all *previous* toasts in 3 seconds to prevent stacking/flashing
-        expireAllToasts(3000);
+        // Expire all *previous* non-loading toasts
+        expireAllToasts();
 
         container.appendChild(toast);
         
-        // Timeout 180s (3 minutes) for the new toast
+        // Timeout if duration > 0
+        if (duration <= 0) {
+            duration = 180_000;
+        }
         const timeoutId = setTimeout(() => {
             removeToast(toast);
-        }, 180000); 
-
-        // Allow manual removal to clear timeout
+        }, duration); 
         toast.dataset.timeoutId = timeoutId;
     }
+    
+    return toast;
 }
 
 function removeToast(toast) {
@@ -63,12 +89,13 @@ function removeToast(toast) {
     setTimeout(() => toast.remove(), 300);
 }
 
+
 // Expire all toasts with a custom timeout (default 3000ms)
 // Used to gently clear toasts when a new one comes or when operations finish
 function expireAllToasts(timeoutMs = 3000) {
     const container = document.getElementById('toast-container');
     if (container) {
-        const toasts = container.querySelectorAll('div');
+        const toasts = container.querySelectorAll(':scope > div');
         toasts.forEach(t => {
             // If already fading out, ignore
             if (t.classList.contains('animate-fade-out')) return;
@@ -85,11 +112,6 @@ function expireAllToasts(timeoutMs = 3000) {
             t.dataset.timeoutId = newId;
         });
     }
-}
-
-// Clear all toasts immediately (compatibility)
-function clearAllToasts() {
-    expireAllToasts(0);
 }
 
 // Gently dismiss toasts when HTMX request finishes or errors (3s delay)
@@ -223,36 +245,6 @@ window.showConfirm = showConfirm;
 /**
  * Show loading indicator
  */
-function showLoading(message = '处理中...') {
-    const indicator = document.getElementById('global-loading');
-    if (indicator) {
-        const textEl = indicator.querySelector('span');
-        if (textEl) {
-            textEl.textContent = message;
-        } else {
-            const span = document.createElement('span');
-            span.className = 'font-medium';
-            span.textContent = message;
-            indicator.appendChild(span);
-        }
-        indicator.classList.add('htmx-request');
-        indicator.style.display = 'flex';
-    }
-}
-
-/**
- * Hide loading indicator
- */
-function hideLoading() {
-    const indicator = document.getElementById('global-loading');
-    if (indicator) {
-        indicator.classList.remove('htmx-request');
-    }
-}
-
-// Expose loading functions globally
-window.showLoading = showLoading;
-window.hideLoading = hideLoading;
 
 document.addEventListener('alpine:init', () => {
     // Global application state
@@ -313,6 +305,7 @@ document.addEventListener('alpine:init', () => {
         remoteCommit: null,
         currentBranch: null,
         repoUrl: null,
+        stage: 'initial',
         
         dismiss() {
             // Store dismissed version in localStorage
@@ -323,14 +316,14 @@ document.addEventListener('alpine:init', () => {
         },
         
         update() {
-            // Open repository URL in new tab
-            if (this.repoUrl) {
-                window.open(this.repoUrl, '_blank');
+            if (this.stage === 'instruction') {
+                this.dismiss();
             } else {
-                // Fallback: show message
-                showToast('请手动运行 git pull 更新代码', 'info');
+                // Show manual update instructions in modal
+                this.stage = 'instruction';
+                this.title = '手动更新说明';
+                this.message = '由于系统限制，请手动更新代码：\n\n1. 关闭此窗口\n2. 在终端运行: ./start.command (Mac) 或 start.ps1 (Win)\n3. 等待服务重启完成';
             }
-            this.dismiss();
         }
     });
     
@@ -338,79 +331,17 @@ document.addEventListener('alpine:init', () => {
     Alpine.store('app').loadFromStorage();
 });
 
-// Note: candidateTabs() and updateCandidateURL() moved to candidates.html
-
 // ============================================================================
 // Global HTMX Loading & Error Handling
 // ============================================================================
 
-// Show loading indicator before any HTMX request
-// Track active fetch requests for loading indicator
-let activeFetchRequests = 0;
-
-// Intercept fetch to show loading indicator
-const originalFetch = window.fetch;
-window.fetch = function(...args) {
-    const loadingIndicator = document.getElementById('global-loading');
-    if (loadingIndicator) {
-        activeFetchRequests++;
-        loadingIndicator.classList.add('htmx-request');
-        loadingIndicator.style.display = 'flex';
-    }
-    
-    return originalFetch.apply(this, args)
-        .then(response => {
-            activeFetchRequests--;
-            if (activeFetchRequests <= 0) {
-                activeFetchRequests = 0;
-                if (loadingIndicator) {
-                    loadingIndicator.classList.remove('htmx-request');
-                }
-            }
-            return response;
-        })
-        .catch(error => {
-            activeFetchRequests--;
-            if (activeFetchRequests <= 0) {
-                activeFetchRequests = 0;
-                loadingIndicator.classList.remove('htmx-request');
-            }
-            throw error;
-        });
-};
-
-// HTMX request handlers (for HTMX-specific requests)
-document.body.addEventListener('htmx:beforeRequest', function(event) {
-    const loadingIndicator = document.getElementById('global-loading');
-    if (loadingIndicator) {
-        loadingIndicator.classList.add('htmx-request');
-        loadingIndicator.style.display = 'flex';
-    }
-});
-
-// Hide loading indicator after any HTMX request completes
-document.body.addEventListener('htmx:afterRequest', function(event) {
-    const loadingIndicator = document.getElementById('global-loading');
-    if (loadingIndicator && activeFetchRequests === 0) {
-        loadingIndicator.classList.remove('htmx-request');
-    }
-});
-
-// Global HTMX error handler to catch swap errors
-// Only handle errors that weren't already handled by local listeners (e.g., in process All Candidates)
 document.body.addEventListener('htmx:responseError', function(evt) {
-    // Skip if event propagation was stopped (already handled by local listenesr)
     if (evt.cancelBubble) {
         return;
     }
     
-    const loadingIndicator = document.getElementById('global-loading');
-    if (loadingIndicator) {
-        loadingIndicator.classList.remove('htmx-request');
-    }
-    // console.error('HTMX response error:', evt.detail);
     const errorMsg = evt.detail?.error || evt.detail?.message || '请求失败';
-    // showToast(errorMsg, 'error');
+    showToast(errorMsg, 'error');
 });
 
 
@@ -420,7 +351,31 @@ document.body.addEventListener('htmx:sendError', function(evt) {
     console.error('HTMX send error:', evt.detail);
     // Only show toast if not already handled by htmxAjaxPromise
     if (!evt.detail.handled) {
-        showToast('网络请求失败，请重试', 'error');
+        showToast(`${evt.detail.error || evt.detail.message || '请求失败'}，请重试`, 'error');
+    }
+});
+
+// Show loading toast before request
+document.body.addEventListener('htmx:beforeRequest', function(evt) {
+    // Find the latest toast
+    const container = document.getElementById('toast-container');
+    if (container && container.lastElementChild) {
+        const toast = container.lastElementChild;
+        toast.dataset.type = 'loading'; // Mark as loading for auto-cleanup
+        
+        // Add spinner if not already present
+        const content = toast.querySelector('.flex.items-center.gap-3');
+        if (content && !content.querySelector('svg.animate-spin')) {
+            const spinner = document.createElement('div');
+            spinner.innerHTML = `
+                <svg class="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+            `;
+            // Insert spinner before the text
+            content.prepend(spinner.firstElementChild);
+        }
     }
 });
 
@@ -624,9 +579,6 @@ const CycleReplyHelpers = {
             showToast(`处理: 切换到 ${mode}`, 'info');
             candidateTabs.switchTab(mode);
             await this.sleep(350);
-        } else {
-            // If already on this tab, preserve the existing candidate list
-            showToast(`处理: 当前模式 ${mode}`, 'info');
         }
         
         const loadResult = await this.ensureCandidatesLoaded(mode, candidateTabs);
@@ -718,7 +670,7 @@ async function startProcessCandidate() {
             // Handle errors
             if (result.success === false) {
                 cycleReplyState.errorStreak += 1;
-                showToast(`处理模式 ${mode} 出错 (${cycleReplyState.errorStreak}/10): ${result.errorMessage}`, 'error');
+                console.error(`处理模式 ${mode} 出错 (${cycleReplyState.errorStreak}/10): ${result.errorMessage}`);
                 if (cycleReplyState.errorStreak >= 10) {
                     showToast('连续错误超过 10 次，处理已停止', 'error');
                     break;
