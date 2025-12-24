@@ -85,6 +85,7 @@ function removeToast(toast) {
         clearTimeout(parseInt(toast.dataset.timeoutId));
     }
 
+    toast.classList.remove('animate-fade-in');
     toast.classList.add('animate-fade-out');
     setTimeout(() => toast.remove(), 300);
 }
@@ -92,7 +93,7 @@ function removeToast(toast) {
 
 // Expire all toasts with a custom timeout (default 3000ms)
 // Used to gently clear toasts when a new one comes or when operations finish
-function expireAllToasts(timeoutMs = 3000) {
+function expireAllToasts(timeoutMs = 1000) {
     const container = document.getElementById('toast-container');
     if (container) {
         const toasts = container.querySelectorAll(':scope > div');
