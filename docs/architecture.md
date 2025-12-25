@@ -476,7 +476,7 @@ settings.get_zilliz_config()
 - **API 文档**: [docs/api.md](api.md)
 - **技术细节**: [docs/architecture.md](architecture.md)（本文档）
 - **自动化工作流**: [docs/workflows.md](workflows.md)
-- **变更日志**: [`changelog.md`](../changelog.md)
+- **变更日志**: [`CHANGELOG.md`](../CHANGELOG.md)
 
 ## Vercel 部署架构
 

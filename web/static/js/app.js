@@ -310,17 +310,6 @@ document.addEventListener('alpine:init', () => {
                 localStorage.setItem('dismissedVersion', this.remoteCommit);
             }
             this.show = false;
-        },
-        
-        update() {
-            if (this.stage === 'instruction') {
-                this.dismiss();
-            } else {
-                // Show manual update instructions in modal
-                this.stage = 'instruction';
-                this.title = '手动更新说明';
-                this.message = '由于系统限制，请手动更新代码：\n\n1. 关闭此窗口\n2. 在终端运行: ./start.command (Mac) 或 start.ps1 (Win)\n3. 等待服务重启完成';
-            }
         }
     });
     

@@ -215,7 +215,7 @@ python start_service.py
 
 - **更新日志**
   - 显示系统最近的版本更新信息
-  - 从 `changelog.md` 自动读取最新版本信息
+  - 从 `CHANGELOG.md` 自动读取最新版本信息
 
 **使用建议：**
 - 关注首页的"进展分"，分数过低可能意味着岗位画像不准或活跃度不够
@@ -1029,7 +1029,7 @@ ruff check .
 - [系统架构](docs/architecture.md) - 架构概览和技术细节
 - [技术规范](docs/technical.md) - 技术规范和开发指南
 - [API 文档](docs/api.md) - REST API 完整参考
-- [变更日志](changelog.md) - 版本历史
+- [变更日志](CHANGELOG.md) - 版本历史
 
 ---
 

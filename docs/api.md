@@ -764,7 +764,7 @@ response = requests.get(
 
 - [系统架构](architecture.md) - 架构和实现细节
 - [自动化工作流](workflows.md) - 工作流和故障排查
-- [变更日志](../changelog.md) - API 版本历史
+- [变更日志](../CHANGELOG.md) - API 版本历史
 
 ## 支持和反馈
 

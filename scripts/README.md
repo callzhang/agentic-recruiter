@@ -271,7 +271,7 @@ pip install -r requirements.txt
 - Check script help: `python scripts/script_name.py --help`
 - Review debug output files for detailed error information
 - Check `docs/` directory for additional documentation
-- See `changelog.md` for recent changes and known issues
+- See `CHANGELOG.md` for recent changes and known issues
 
 ---
 

@@ -156,15 +156,21 @@
                     <p class="text-gray-700 leading-relaxed mb-2 whitespace-pre-line" x-text="modal.message || ''"></p>
                 </div>
                 <div class="flex justify-end">
-                    <button @click="modal && modal.dismiss()" 
-                            class="px-6 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition font-medium mr-3">
-                        稍后提醒
-                    </button>
-                    <button @click="modal && modal.update()" 
-                            class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-medium"
-                            x-text="modal && modal.stage === 'instruction' ? '关闭' : '查看更新'">
-                        查看更新
-                    </button>
+                    <!-- Success: Only show OK button -->
+                    <template x-if="modal && modal.stage === 'success'">
+                        <button @click="modal && modal.dismiss()" 
+                                class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-medium">
+                            确定
+                        </button>
+                    </template>
+                    
+                    <!-- Failure or Available: Show single dismiss button -->
+                    <template x-if="modal && modal.stage !== 'success'">
+                        <button @click="modal && modal.dismiss()" 
+                                class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-medium">
+                            关闭
+                        </button>
+                    </template>
                 </div>
             </div>
         </div>
@@ -357,6 +363,7 @@
                         
                         // Set title and message based on merge status
                         if (data.merge_success === true) {
+                            modal.stage = 'success';
                             modal.title = '✅ 代码已自动更新';
                             modal.message = `服务器已自动更新并重启。${commitList}`;
                         } else if (data.merge_success === false) {
