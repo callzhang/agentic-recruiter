@@ -153,11 +153,7 @@
                     <h3 class="text-xl font-bold text-gray-800" x-text="modal.title || ''"></h3>
                 </div>
                 <div class="mb-6">
-                    <p class="text-gray-700 leading-relaxed mb-2" x-text="modal.message || ''"></p>
-                    <div class="text-sm text-gray-600 space-y-1" x-show="modal && (modal.currentCommit || modal.remoteCommit)">
-                        <p x-show="modal && modal.currentCommit">当前版本: <code class="bg-gray-100 px-2 py-1 rounded" x-text="modal.currentCommit || ''"></code></p>
-                        <p x-show="modal && modal.remoteCommit">远程版本: <code class="bg-gray-100 px-2 py-1 rounded" x-text="modal.remoteCommit || ''"></code></p>
-                    </div>
+                    <p class="text-gray-700 leading-relaxed mb-2 whitespace-pre-line" x-text="modal.message || ''"></p>
                 </div>
                 <div class="flex justify-end">
                     <button @click="modal && modal.dismiss()" 
@@ -339,16 +335,7 @@
                 
                 const data = await response.json();
                 
-                // If merge was successful, show success message (don't show modal, just log)
-                if (data.merge_success === true) {
-                    console.log('✅ Code updated successfully:', data.message);
-                    // Clear dismissed version so user sees the success
-                    if (data.remote_commit) {
-                        localStorage.removeItem('dismissedVersion');
-                    }
-                    return; // Don't show modal for successful auto-updates
-                }
-                
+
                 // If merge failed or update available, show modal
                 if (data.has_update && data.remote_commit) {
                     // Check if this version was already dismissed
@@ -362,19 +349,24 @@
                         const modal = Alpine.store('versionUpdateModal');
                         modal.stage = 'initial';
                         
-                        // Set title and message based on merge status
-                        if (data.merge_success === false) {
-                            modal.title = '⚠️ 自动更新失败';
-                            modal.message = data.message || `检测到新版本但自动合并失败。\n\n错误: ${data.merge_error || '未知错误'}\n\n请手动运行 start.command 更新代码。`;
-                        } else {
-                            modal.title = '新版本可用';
-                            modal.message = data.message || '检测到新的 Git 版本可用，建议更新以获取最新功能。';
+                        // Format commit messages
+                        let commitList = '';
+                        if (data.commit_messages && data.commit_messages.length > 0) {
+                            commitList = '\n\n更新内容：\n' + data.commit_messages.map(msg => `• ${msg}`).join('\n');
                         }
                         
-                        modal.currentCommit = data.current_commit;
-                        modal.remoteCommit = data.remote_commit;
-                        modal.currentBranch = data.current_branch;
-                        modal.repoUrl = data.repo_url;
+                        // Set title and message based on merge status
+                        if (data.merge_success === true) {
+                            modal.title = '✅ 代码已自动更新';
+                            modal.message = `服务器已自动更新并重启。${commitList}`;
+                        } else if (data.merge_success === false) {
+                            modal.title = '⚠️ 自动更新失败';
+                            modal.message = `检测到新版本但自动合并失败。\n\n错误: ${data.merge_error || '未知错误'}\n\n请手动运行 start.command 更新代码。${commitList}`;
+                        } else {
+                            modal.title = '新版本可用';
+                            modal.message = `检测到新的 Git 版本可用，建议更新以获取最新功能。${commitList}`;
+                        }
+                        
                         modal.show = true;
                     }
                 }

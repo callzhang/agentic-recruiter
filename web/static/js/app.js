@@ -302,10 +302,6 @@ document.addEventListener('alpine:init', () => {
         show: false,
         title: '新版本可用',
         message: '',
-        currentCommit: null,
-        remoteCommit: null,
-        currentBranch: null,
-        repoUrl: null,
         stage: 'initial',
         
         dismiss() {

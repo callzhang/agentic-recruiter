@@ -233,6 +233,22 @@ def check_git_update_available(repo_path: Optional[Path] = None, auto_merge: boo
                 # If rev-list fails, assume update available if commits differ
                 has_update = True
         
+        # Get commit messages between current and remote
+        commit_messages = []
+        if has_update and current_commit and remote_commit:
+            try:
+                result = subprocess.run(
+                    ["git", "log", f"{current_commit}..origin/{current_branch}", "--pretty=format:%s", "--no-merges"],
+                    cwd=repo_path,
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    commit_messages = [msg.strip() for msg in result.stdout.strip().split('\n') if msg.strip()]
+            except Exception as e:
+                logger.debug(f"Failed to get commit messages: {e}")
+        
         # Get repository URL
         repo_url = get_git_remote_url(repo_path=repo_path, convert_ssh_to_https=True)
         
@@ -253,57 +269,43 @@ def check_git_update_available(repo_path: Optional[Path] = None, auto_merge: boo
                 )
                 has_uncommitted = bool(status_result.stdout.strip())
                 
+                # Discard any uncommitted changes
                 if has_uncommitted:
-                    merge_error = "存在未提交的更改，无法自动合并。请手动运行 start.command 更新。"
-                    message = merge_error
-                else:
-                    # Try to merge
-                    merge_result = subprocess.run(
-                        ["git", "merge", f"origin/{current_branch}", "--no-edit"],
+                    logger.info("Discarding uncommitted changes before merge")
+                    reset_result = subprocess.run(
+                        ["git", "reset", "--hard", "HEAD"],
                         cwd=repo_path,
                         capture_output=True,
                         text=True,
-                        timeout=30
+                        timeout=10
                     )
+                    if reset_result.returncode != 0:
+                        logger.warning(f"Failed to reset: {reset_result.stderr.strip()}")
+                
+                # Try to merge
+                merge_result = subprocess.run(
+                    ["git", "merge", f"origin/{current_branch}", "--no-edit"],
+                    cwd=repo_path,
+                    capture_output=True,
+                    text=True,
+                    timeout=30
+                )
+                
+                if merge_result.returncode == 0:
+                    merge_success = True
+                    # Get new commit after merge
+                    new_commit = get_git_commit(short=True, repo_path=repo_path)
                     
-                    if merge_result.returncode == 0:
-                        merge_success = True
-                        # Get new commit after merge
-                        new_commit = get_git_commit(short=True, repo_path=repo_path)
-                        message = f"✅ 代码已自动更新: {current_commit} → {new_commit}"
-                        
-                        # Send notification
-                        try:
-                            from .assistant_actions import send_dingtalk_notification
-                            send_dingtalk_notification(
-                                title="🔄 服务器自动更新成功",
-                                message=f"本地服务器代码已自动更新\n\n**更新前:** {current_commit}\n**更新后:** {new_commit}\n**分支:** {current_branch}",
-                                job_id=None
-                            )
-                        except Exception as notif_err:
-                            logger.warning(f"Failed to send update notification: {notif_err}")
-                    else:
-                        merge_success = False
-                        merge_error = merge_result.stderr.strip() or "合并失败，请手动运行 start.command 更新。"
-                        message = f"⚠️ 自动合并失败: {merge_error}"
-                        
-                        # Send warning notification
-                        try:
-                            from .assistant_actions import send_dingtalk_notification
-                            send_dingtalk_notification(
-                                title="⚠️ 代码更新需要手动处理",
-                                message=f"检测到新版本但自动合并失败\n\n**当前版本:** {current_commit}\n**远程版本:** {remote_commit}\n**错误:** {merge_error}\n\n请手动运行 `start.command` 更新代码。",
-                                job_id=None
-                            )
-                        except Exception as notif_err:
-                            logger.warning(f"Failed to send warning notification: {notif_err}")
+                    # Frontend will show modal with commit messages
+                    logger.info(f"Auto-update successful: {current_commit} → {new_commit}")
+                else:
+                    merge_success = False
+                    merge_error = merge_result.stderr.strip() or "合并失败，请手动运行 start.command 更新。"
             except Exception as merge_exc:
                 merge_success = False
                 merge_error = str(merge_exc)
-                message = f"⚠️ 合并过程出错: {merge_error}。请手动运行 start.command 更新。"
                 logger.error(f"Merge attempt failed: {merge_exc}")
-        elif has_update:
-            message = f"新版本可用 (远程: {remote_commit})"
+
         
         return {
             "has_update": has_update,
@@ -313,7 +315,7 @@ def check_git_update_available(repo_path: Optional[Path] = None, auto_merge: boo
             "repo_url": repo_url,
             "merge_success": merge_success,
             "merge_error": merge_error,
-            "message": message
+            "commit_messages": commit_messages
         }
     except Exception as e:
         logger.warning(f"Version check failed: {e}")

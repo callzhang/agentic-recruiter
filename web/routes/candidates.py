@@ -434,7 +434,10 @@ async def generate_message(
     last_message = None
     # Get chat history from browser to decide whether we have new user messages to respond to.
     if mode == "recommend":
-        new_user_messages = [{"content": "请问你有什么问题可以让我进一步解答吗？", "role": "user"}]
+        new_user_messages = [
+            {"content": "你好，我们这个岗位正在招聘，想跟你沟通一下", "role": "assistant"},
+            {"content": "我在看机会，你这个岗位介绍一下", "role": "user"},
+        ]
         chat_history = new_user_messages
     else:
         if not chat_id:
