@@ -983,9 +983,9 @@ async function shouldReply() {
 
     function extractNewUserMessagesAndLastAssistant(history) {
         const newUserMessages = [];
-        let lastAssistantAny = null;
+        let lastAssistantMessage = null;
         let lastGeneratedAction = '';
-        if (!Array.isArray(history) || history.length === 0) return { newUserMessages, lastAssistantAny, lastGeneratedAction };
+        if (!Array.isArray(history) || history.length === 0) return { newUserMessages, lastAssistantMessage, lastGeneratedAction };
 
         for (let i = history.length - 1; i >= 0; i--) {
             const msg = history[i] || {};
@@ -999,7 +999,7 @@ async function shouldReply() {
                     const action = (payload && payload.action) || msg.action || '';
                     if (action) lastGeneratedAction = String(action).toUpperCase();
                 }
-                if (!lastAssistantAny) lastAssistantAny = msg;
+                if (!lastAssistantMessage) lastAssistantMessage = msg;
                 if (isIgnorableAssistantMessage(content)) continue;
                 break;
             }
@@ -1007,7 +1007,7 @@ async function shouldReply() {
                 newUserMessages.unshift(msg);
             }
         }
-        return { newUserMessages, lastAssistantAny, lastGeneratedAction };
+        return { newUserMessages, lastAssistantMessage, lastGeneratedAction };
     }
     // If greeted and updated_at is less than 10 minutes ago, don't reply
     const updatedAt = new Date(values.updated_at);
@@ -1042,7 +1042,7 @@ async function shouldReply() {
     if (newUserMessages.length > 0) return true;
     // if Boss marks this conversation as unread, assume it needs a reply.
     if (viewed === false) return true;
-    
+
     // Followup: if no new user messages, allow followup after a time window unless last action says WAIT/PASS.
     if (mode === 'followup') {
         const lastAssistantTs = parseTimestamp(lastAssistantMessage?.timestamp) || (values.updated_at ? new Date(values.updated_at) : null);

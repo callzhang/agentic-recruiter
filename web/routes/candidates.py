@@ -502,7 +502,7 @@ async def should_reply(
     # if the candidate is already passed, don't reply
     if stored_candidate.get("stage") == STAGE_PASS: return False
     # if the last action is WAIT or PASS, don't reply
-    last_action = last_assistant_message.get("action", "").upper()
+    last_action = last_assistant_message.get("action", "").upper() if last_assistant_message else None
     if last_action in {"WAIT", "PASS"}: return False
     # Followup mode: optionally allow followup after a time window, unless we previously decided to WAIT/PASS.
     if mode == "followup":
