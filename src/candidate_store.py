@@ -1,10 +1,9 @@
 """Zilliz/Milvus-backed QA and candidate interaction store integration."""
 from difflib import SequenceMatcher
 from functools import lru_cache
-import json
-import re
-import uuid
-from datetime import datetime
+import json, re, uuid
+from datetime import datetime, timedelta
+from dateutil import parser as date_parser
 from typing import Any, Dict, List, Optional
 from pymilvus import MilvusClient, DataType, FieldSchema
 from pymilvus.exceptions import MilvusException
@@ -50,69 +49,6 @@ _all_fields = [f.name for f in get_collection_schema()]
 # List of all field names except "resume_vector"
 _readable_fields = [f.name for f in get_collection_schema() if f.dtype != DataType.FLOAT_VECTOR]
 
-
-# ------------------------------------------------------------------
-# Resume Text Normalization for Matching
-# ------------------------------------------------------------------
-
-def normalize_resume_for_matching(text: str) -> str:
-    """Normalize resume text for similarity comparison.
-    
-    Removes metadata sections that vary between captures (like statistics,
-    other candidates, privacy notices) and normalizes whitespace to focus
-    on the core resume content.
-    
-    Args:
-        text: Raw resume text
-        
-    Returns:
-        Normalized resume text with only core content
-    """
-    if not text:
-        return ""
-    
-    # Clean literal line-break escape sequences that appear in scraped text
-    text = text.replace(r"\r\n", " ")
-    
-    # Remove 牛人分析器 section (statistics that vary)
-    text = re.sub(r'牛人分析器.*?查看全部\d+项分析', '', text, flags=re.DOTALL)
-    # Remove privacy notice section
-    text = re.sub(r'为妥善保护.*?传播、存储。', '', text, flags=re.DOTALL)
-    # Remove 其他名…牛人 section (other candidates recommendations; variants exist)
-    text = re.sub(r'其他名.*?牛人.*?经历概览', '经历概览', text, flags=re.DOTALL)
-    # Remove 经历概览 section (summary at the end)
-    text = re.sub(r'经历概览.*', '', text, flags=re.DOTALL)
-    # Normalize line breaks (both \r\n and \n to space)
-    text = re.sub(r'[\r\n]+', ' ', text)
-    # Normalize multiple spaces to single space
-    text = re.sub(r'\s+', ' ', text)
-    return text.strip()
-
-
-def calculate_resume_similarity(text1: str, text2: str) -> float:
-    """Calculate similarity between two resume texts.
-    
-    Uses normalized core resume content for comparison, which removes
-    metadata sections that vary between captures but keeps the actual
-    resume content (experience, skills, education, etc.).
-    
-    Args:
-        text1: First resume text
-        text2: Second resume text
-        
-    Returns:
-        Similarity ratio between 0.0 and 1.0
-    """
-    if not text1 or not text2:
-        return 0.0
-    
-    norm1 = normalize_resume_for_matching(text1)
-    norm2 = normalize_resume_for_matching(text2)
-    
-    if not norm1 or not norm2:
-        return 0.0
-    
-    return SequenceMatcher(None, norm1, norm2).ratio()
 
 # ------------------------------------------------------------------
 # MilvusClient Connection
@@ -243,17 +179,15 @@ def get_candidate_by_dict(kwargs: Dict[str, Any], strict: bool = True) -> Option
         fields=fields,
         strict=strict,
     )
-    stored_candidate = results[0] if results else {}
+    # use candidate_matched to find the stored candidate
+    matched_candidates = [c for c in results if candidate_matched(kwargs, c, kwargs.get("mode"))]
+    if len(matched_candidates) > 1:
+        logger.warning(f"multiple candidates matched:{kwargs}: {matched_candidates}")
+    stored_candidate = matched_candidates[0] if matched_candidates else None
+
     # if no resume_text, return stored_candidate
     if not resume_text:
         return stored_candidate
-    # if resume_text is provided, calculate resume similarity
-    if stored_candidate:
-        # Use improved resume similarity that normalizes content
-        similarity = calculate_resume_similarity(resume_text, stored_candidate.get("resume_text", ''))
-        if similarity < 0.9:
-            logger.warning(f"resume similarity mismatch: {similarity:.4f} for {kwargs.get('name')} and {stored_candidate.get('name')}")
-            stored_candidate = {}
     # try again using resume similarity search
     if not stored_candidate:
         results = search_candidates_by_resume(
@@ -537,6 +471,104 @@ def search_candidates_by_resume(
 def get_candidate_count() -> int:
     """Get the number of candidates in the collection."""
     return _client.get_collection_stats(collection_name=_collection_name)['row_count']
+
+# ------------------------------------------------------------
+# Utils Functions for candidate matching
+# ------------------------------------------------------------
+def candidate_matched(candidate: Dict[str, Any], stored_candidate: Dict[str, Any], mode: str) -> bool:
+    """Check if candidate is matched with stored candidate."""
+    if not stored_candidate:
+        return False
+    if candidate.get('name') and candidate.get('name') != stored_candidate.get('name'):
+        return False
+    # check chat_id if provided
+    chat_id, chat_id2 = candidate.get("chat_id"), stored_candidate.get("chat_id")
+    if chat_id and chat_id2:
+        if chat_id == chat_id2:
+            return True
+        else:
+            return False
+    # check by last_message if provided
+    last_message, last_message2 = candidate.get("last_message", ''), stored_candidate.get("last_message", '')
+    updated_at = date_parser.parse(stored_candidate.get("updated_at"))
+    if updated_at.tzinfo is not None: updated_at = updated_at.replace(tzinfo=None)
+    # resume text similarity check
+    resume1, resume2 = candidate.get('resume_text'), stored_candidate.get('resume_text')
+    if chat_id is None and chat_id2 and updated_at < (datetime.now() - timedelta(days=3)):
+        logger.info(f"there should be no chat_id in recommend mode(no chat_id provided), current candidate:\n{candidate.get('name')}<->{stored_candidate.get('name')}: chat_id: {chat_id2}")
+        return False
+    elif mode == "recommend" and last_message and last_message2:
+        from difflib import SequenceMatcher
+        similarity = SequenceMatcher(lambda x: x in ['\n', '\r', '\t', ' '], last_message, last_message2).ratio()
+        if similarity < 0.8:
+            logger.debug(f"last_message similarity ({candidate['name']}): {similarity*100:.2f}% < 90%\n{last_message}\n != \n{last_message2}")
+            return False
+    elif resume1 and resume2:
+        similarity = calculate_resume_similarity(resume1, resume2)
+        if similarity < 0.9:
+            logger.debug(f"resume similarity mismatch: {similarity:.4f} for {candidate.get('name')} and {stored_candidate.get('name')}")
+            return False
+    return True
+
+
+def normalize_resume_for_matching(text: str) -> str:
+    """Normalize resume text for similarity comparison.
+    
+    Removes metadata sections that vary between captures (like statistics,
+    other candidates, privacy notices) and normalizes whitespace to focus
+    on the core resume content.
+    
+    Args:
+        text: Raw resume text
+        
+    Returns:
+        Normalized resume text with only core content
+    """
+    if not text:
+        return ""
+    
+    # Clean literal line-break escape sequences that appear in scraped text
+    text = text.replace(r"\r\n", " ")
+    
+    # Remove 牛人分析器 section (statistics that vary)
+    text = re.sub(r'牛人分析器.*?查看全部\d+项分析', '', text, flags=re.DOTALL)
+    # Remove privacy notice section
+    text = re.sub(r'为妥善保护.*?传播、存储。', '', text, flags=re.DOTALL)
+    # Remove 其他名…牛人 section (other candidates recommendations; variants exist)
+    text = re.sub(r'其他名.*?牛人.*?经历概览', '经历概览', text, flags=re.DOTALL)
+    # Remove 经历概览 section (summary at the end)
+    text = re.sub(r'经历概览.*', '', text, flags=re.DOTALL)
+    # Normalize line breaks (both \r\n and \n to space)
+    text = re.sub(r'[\r\n]+', ' ', text)
+    # Normalize multiple spaces to single space
+    text = re.sub(r'\s+', ' ', text)
+    return text.strip()
+
+
+def calculate_resume_similarity(text1: str, text2: str) -> float:
+    """Calculate similarity between two resume texts.
+    
+    Uses normalized core resume content for comparison, which removes
+    metadata sections that vary between captures but keeps the actual
+    resume content (experience, skills, education, etc.).
+    
+    Args:
+        text1: First resume text
+        text2: Second resume text
+        
+    Returns:
+        Similarity ratio between 0.0 and 1.0
+    """
+    if not text1 or not text2:
+        return 0.0
+    
+    norm1 = normalize_resume_for_matching(text1)
+    norm2 = normalize_resume_for_matching(text2)
+    
+    if not norm1 or not norm2:
+        return 0.0
+    
+    return SequenceMatcher(None, norm1, norm2).ratio()
 
 __all__ = [
     "get_collection_schema",

@@ -115,18 +115,89 @@ function expireAllToasts(timeoutMs = 1000) {
     }
 }
 
+// Expose showToast globally
+window.showToast = showToast;
+
+// ============================================================================
+// Override global fetch() to auto-expire toasts
+// ============================================================================
+const originalFetch = window.fetch;
+window.fetch = async function(...args) {
+    try {
+        const response = await originalFetch(...args);
+        // Expire toasts after successful fetch (even if response has error status)
+        expireAllToasts(1000);
+        return response;
+    } catch (error) {
+        // Expire toasts on network error
+        expireAllToasts(1000);
+        throw error;
+    }
+};
+
+
+// ============================================================================
+// Global HTMX Loading & Error Handling
+// ============================================================================
 // Gently dismiss toasts when HTMX request finishes or errors (3s delay)
 document.body.addEventListener('htmx:afterRequest', () => expireAllToasts(3000));
 document.body.addEventListener('htmx:responseError', () => expireAllToasts(3000));
+document.body.addEventListener('htmx:responseError', function(evt) {
+    if (evt.cancelBubble) return;
+    const errorMsg = evt.detail?.error || evt.detail?.message || '请求失败';
+    showToast(errorMsg, 'error');
+});
 
-// Expose showToast globally
-window.showToast = showToast;
+
+// Catch general HTMX errors
+document.body.addEventListener('htmx:sendError', function(evt) {
+    console.error('HTMX send error:', evt.detail);
+    // Only show toast if not already handled by htmxAjaxPromise
+    if (!evt.detail.handled) {
+        showToast(`${evt.detail.error || evt.detail.message || '请求失败'}，请重试`, 'error');
+    }
+});
+
+// Show loading toast before request
+document.body.addEventListener('htmx:beforeRequest', function(evt) {
+    // Find the latest toast
+    const container = document.getElementById('toast-container');
+    if (container && container.lastElementChild) {
+        const toast = container.lastElementChild;
+        toast.dataset.type = 'loading'; // Mark as loading for auto-cleanup
+        
+        // Add spinner if not already present
+        const content = toast.querySelector('.flex.items-center.gap-3');
+        if (content && !content.querySelector('svg.animate-spin')) {
+            const spinner = document.createElement('div');
+            spinner.innerHTML = `
+                <svg class="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+            `;
+            // Insert spinner before the text
+            content.prepend(spinner.firstElementChild);
+        }
+    }
+});
+
+// Handle custom HX-Trigger events for toast notifications
+document.body.addEventListener('showToast', function(evt) {
+    if (evt.detail && evt.detail.message) {
+        showToast(evt.detail.message, evt.detail.type || 'info');
+    }
+});
 
 /**
  * Browser notification helper using Chrome's Web Notifications API
  * Shows system-level notifications to alert HR when messages are sent
+ * @param {string} title - Notification title
+ * @param {string} body - Notification body text
+ * @param {string} icon - Optional icon URL
+ * @param {string} url - Optional URL to open on click
  */
-async function showBrowserNotification(title, body, icon = null) {
+async function showBrowserNotification(title, body, icon = null, url = null) {
     // Request permission if not already granted
     if (Notification.permission === 'default') {
         await Notification.requestPermission();
@@ -149,9 +220,13 @@ async function showBrowserNotification(title, body, icon = null) {
         // Don't auto-close - let user dismiss manually or click to close
         // Removed setTimeout auto-close to make notification sticky
         
-        // Handle click to focus window and close notification
+        // Handle click to open URL or focus window
         notification.onclick = () => {
-            window.focus();
+            if (url) {
+                window.open(url, '_blank');
+            } else {
+                window.focus();
+            }
             notification.close();
         };
         
@@ -315,61 +390,6 @@ document.addEventListener('alpine:init', () => {
     
     // Load state on init
     Alpine.store('app').loadFromStorage();
-});
-
-// ============================================================================
-// Global HTMX Loading & Error Handling
-// ============================================================================
-
-document.body.addEventListener('htmx:responseError', function(evt) {
-    if (evt.cancelBubble) {
-        return;
-    }
-    
-    const errorMsg = evt.detail?.error || evt.detail?.message || '请求失败';
-    showToast(errorMsg, 'error');
-});
-
-
-
-// Catch general HTMX errors
-document.body.addEventListener('htmx:sendError', function(evt) {
-    console.error('HTMX send error:', evt.detail);
-    // Only show toast if not already handled by htmxAjaxPromise
-    if (!evt.detail.handled) {
-        showToast(`${evt.detail.error || evt.detail.message || '请求失败'}，请重试`, 'error');
-    }
-});
-
-// Show loading toast before request
-document.body.addEventListener('htmx:beforeRequest', function(evt) {
-    // Find the latest toast
-    const container = document.getElementById('toast-container');
-    if (container && container.lastElementChild) {
-        const toast = container.lastElementChild;
-        toast.dataset.type = 'loading'; // Mark as loading for auto-cleanup
-        
-        // Add spinner if not already present
-        const content = toast.querySelector('.flex.items-center.gap-3');
-        if (content && !content.querySelector('svg.animate-spin')) {
-            const spinner = document.createElement('div');
-            spinner.innerHTML = `
-                <svg class="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                </svg>
-            `;
-            // Insert spinner before the text
-            content.prepend(spinner.firstElementChild);
-        }
-    }
-});
-
-// Handle custom HX-Trigger events for toast notifications
-document.body.addEventListener('showToast', function(evt) {
-    if (evt.detail && evt.detail.message) {
-        showToast(evt.detail.message, evt.detail.type || 'info');
-    }
 });
 
 // ============================================================================

@@ -527,12 +527,12 @@ async def view_full_resume_action(page: Page, chat_id: str, request: bool = True
     await _prepare_chat_page(page)
     await _go_to_chat_dialog(page, chat_id)
     available = await check_full_resume_available(page, chat_id)
-    if not available and request:
-        requested = await request_full_resume_action(page, chat_id)
-        return {
-            "text": None,
-            "requested": requested,
-        }
+    if not available:
+        if request:
+            requested = await request_full_resume_action(page, chat_id)
+            return {"text": None, "requested": requested}
+        else:
+            return { "text": None, "requested": False}
 
     resume_button = page.locator(RESUME_BUTTON_SELECTOR).first
     await resume_button.click()
@@ -567,7 +567,7 @@ async def request_contact_action(page: Page, chat_id: str, timeout_ms: int = 200
     ask_phone_button = page.locator("span.operate-btn:has-text('换电话')").first
     if await ask_phone_button.count() > 0:
         t0 = time.time()
-        while 'disabled' not in await ask_phone_button.get_attribute("class"):
+        while 'disabled' not in await ask_phone_button.get_attribute("class", timeout=timeout_ms):
             await ask_phone_button.click(timeout=timeout_ms)
             try:
                 await ask_phone_button.locator("xpath=parent::div").locator("span.boss-btn-primary:has-text('确定')").click(timeout=timeout_ms)
@@ -587,7 +587,7 @@ async def request_contact_action(page: Page, chat_id: str, timeout_ms: int = 200
     ask_wechat_button = page.locator("span.operate-btn:has-text('换微信')").first
     if await ask_wechat_button.count() > 0:
         t0 = time.time()
-        while 'disabled' not in await ask_wechat_button.get_attribute("class"):
+        while 'disabled' not in await ask_wechat_button.get_attribute("class", timeout=timeout_ms):
             await ask_wechat_button.click(timeout=timeout_ms)
             try:
                 await ask_wechat_button.locator("xpath=parent::div").locator("span.boss-btn-primary:has-text('确定')").click(timeout=timeout_ms)

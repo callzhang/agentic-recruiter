@@ -510,6 +510,9 @@ async function process_candidate() {
                         sendDingNotification(analysis, name, job_applied);
                     }
                 }
+                if (isFullAnalysis && ['SEEK', 'CONTACT'].includes(newStage)) {
+                    await requestContact();
+                }
             }
             // Step 4d: generate message if needed
             if (needReply) {
@@ -592,7 +595,7 @@ async function sendDingNotification(analysis, candidateName, jobApplied) {
 }
 
 async function fetchOnlineResume() {
-    showToast('抓取在线简历...', 'loading');
+    showToast('抓取在线简历...', 'info');
     const values = getCandidateData();
     await htmxAjaxPromise('POST', '/candidates/fetch-online-resume', {
         target: '#resume-online-container',
@@ -609,7 +612,7 @@ async function fetchFullResume() {
     if (mode === 'recommend') {
         return;
     }
-    showToast('抓取完整简历...', 'loading');
+    showToast('抓取完整简历...', 'info');
 
     await htmxAjaxPromise('POST', '/candidates/fetch-full-resume', {
         target: '#resume-full-container',
@@ -630,7 +633,7 @@ function getMessageResultState() {
 }
 
 async function generateMessage(force = false) {
-    showToast('生成消息...', 'loading');
+    showToast('生成消息...', 'info');
     const values = getCandidateData();
     const mode = values.mode;
     // if force is true or mode is followup, use followup action
@@ -672,17 +675,26 @@ async function greetAndSendMessage() {
     }
 
     // send message
-    showToast('正在发送消息...', 'loading');
+    showToast('正在发送消息...', 'info');
     await htmxAjaxPromise('POST', '/candidates/send', {
         target: '#message-content',
         swap: 'none',
         values: values
     });
 
+
     // Show browser notification after successful message send
     const candidateName = getCandidateData('name') || '候选人';
+    const candidateId = getCandidateData('candidate_id');
     const notificationTitle = `已向 ${candidateName} 发送消息`;
-    await showBrowserNotification(notificationTitle, message);
+    
+    // Build Vercel candidate URL
+    let candidateUrl = null;
+    if (window.__public_url && candidateId) {
+        candidateUrl = `${window.__public_url}/candidates/${candidateId}`;
+    }
+    
+    await showBrowserNotification(notificationTitle, message, null, candidateUrl);
     
     // Update to CHAT stage
     const currentStage = getCandidateData('stage');
@@ -704,9 +716,9 @@ async function startAnalysis() {
     const has_online_resume = !resume_text.includes('⏳') && resume_text.length > 0;
     
     if (has_full_resume) {
-        showToast('正在分析完整简历...', 'loading');
+        showToast('正在分析完整简历...', 'info');
     } else if(has_online_resume) {
-        showToast('正在分析在线简历...', 'loading');
+        showToast('正在分析在线简历...', 'info');
     } else {
         throw new Error('没有可分析的简历,请先请求简历');
     }
@@ -765,14 +777,11 @@ async function requestContact() {
     
     
     // Call new endpoint with both chat_id and candidate_id
-    showToast('正在请求联系方式...', 'loading');
+    showToast('正在请求联系方式...', 'info');
     const response = await fetch('/candidates/request-contact', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ 
-            chat_id: chat_id,
-            candidate_id: candidate_id 
-        })
+        body: JSON.stringify(values)
     });
     const data = await window.handleApiResponse(response);
     
@@ -908,7 +917,7 @@ async function passCandidate(reason = '') {
     const index = values.index;
     const mode = values.mode;
     
-    showToast('正在标记为 PASS...', 'loading');
+    showToast('正在标记为 PASS...', 'info');
     
     const response = await fetch(url, {
         method: 'POST',

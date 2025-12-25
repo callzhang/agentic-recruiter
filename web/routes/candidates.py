@@ -10,14 +10,11 @@ import asyncio
 from datetime import datetime, timedelta
 import json
 from typing import Any, Dict, Optional
-import difflib
-from dateutil import parser as date_parser
-
 from fastapi import APIRouter, BackgroundTasks, Form, Query, Request, Response, Body, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from tenacity import retry, stop_after_attempt, wait_exponential
-from src.candidate_store import search_candidates_advanced, get_candidate_by_dict, upsert_candidate, _readable_fields, calculate_resume_similarity
+from src.candidate_store import search_candidates_advanced, get_candidate_by_dict, upsert_candidate, _readable_fields, calculate_resume_similarity, candidate_matched
 from src.jobs_store import get_all_jobs, get_job_by_id as get_job_by_id_from_store
 from src.global_logger import logger
 from src import chat_actions, assistant_actions, assistant_utils, recommendation_actions
@@ -169,9 +166,6 @@ async def list_candidates(
         # fallback to find individual candidate 
         if not matched_candidate:
             matched_candidate = get_candidate_by_dict(dict(**candidate, fields=fields))
-            matched = candidate_matched(candidate, matched_candidate, mode)
-            if not matched:
-                matched_candidate = None
 
         if matched_candidate:
             if matched_candidate in found_candidates: found_candidates.remove(matched_candidate) # remove matched candidate from found_candidates to avoid duplicate matching
@@ -218,9 +212,8 @@ async def get_candidate_detail(request: Request):
     """Get candidate detail view."""
     candidate = json.loads(request.query_params.get('candidate', '{}'))
     # Try to find existing candidate (database query, no browser lock needed)
-    stored_candidate = get_candidate_by_dict(candidate, strict=True)
-    matched = candidate_matched(candidate, stored_candidate, candidate.get('mode'))
-    if matched:
+    stored_candidate = get_candidate_by_dict(candidate, strict=False) # we should not use strict=True here, chat_id may change, or not available from recommend mode
+    if stored_candidate:
         candidate.update(stored_candidate)
     # Prepare template context (pop values before rendering to avoid issues)
     analysis = candidate.pop("analysis", {})
@@ -720,6 +713,8 @@ async def fetch_full_resume(
     chat_id = form_data.get("chat_id")
     mode = form_data.get("mode")
     job_id = form_data.get("job_id")
+    form_data = await request.form()
+    kwargs = dict(form_data)
     # Only for chat/greet/followup modes, not recommend
     if mode == "recommend":
         return HTMLResponse(
@@ -729,17 +724,17 @@ async def fetch_full_resume(
     
     # skip if already requested
     full_resume_text, requested = None, False
-    candidate = get_candidate_by_dict({"candidate_id": candidate_id, "chat_id": chat_id}, strict=False)
+    candidate = get_candidate_by_dict(kwargs, strict=False)
     if history:=candidate.get("metadata", {}).get("history"):
         if any(h for h in history if h.get("role") == "developer" and h.get("content") == "简历请求已发送"):
             requested = True
             full_resume_text = candidate.get("full_resume")
-    if not full_resume_text and not requested:
+    if not full_resume_text:
         # Try to get full resume only
         page = await boss_service.service._ensure_browser_session()
-        result = await chat_actions.view_full_resume_action(page, chat_id, request)
+        result = await chat_actions.view_full_resume_action(page, chat_id, request=not requested)
         full_resume_text = result.get("text")
-        requested = result.get("requested")
+        requested = result.get("requested") or requested
     
     if full_resume_text and len(full_resume_text) > 100:
         upsert_candidate(
@@ -783,12 +778,12 @@ async def pass_candidate(
 
 @router.post("/request-contact")
 async def request_contact(
-    chat_id: str = Body(...),
-    candidate_id: Optional[str] = Body(None),
+    request: Request,
 ):
     """Request contact information (phone and WeChat) from a candidate and store in metadata."""
     page = await boss_service.service._ensure_browser_session()
-    candidate = get_candidate_by_dict({"candidate_id": candidate_id, "chat_id": chat_id}, strict=False)
+    kwargs = await request.json()
+    candidate = get_candidate_by_dict(kwargs, strict=False)
     if history:=candidate.get("metadata", {}).get("history"):
         if any(h for h in history if h.get("role") == "developer" and h.get("content") == "请求交换联系方式已发送"):
             phone_number = history.get("phone_number")
@@ -801,7 +796,7 @@ async def request_contact(
                 "clicked_wechat": False,
             })
     # Call request_contact_action to get contact info
-    contact_result = await chat_actions.request_contact_action(page, chat_id)
+    contact_result = await chat_actions.request_contact_action(page, kwargs.get("chat_id"))
     
     # Extract phone_number and wechat_number
     phone_number = contact_result.get("phone_number")
@@ -814,7 +809,7 @@ async def request_contact(
     if candidate:
         upsert_candidate(
             candidate_id=candidate.get("candidate_id"),
-            chat_id=chat_id,
+            chat_id=kwargs.get("chat_id"),
             metadata={
                 "phone_number": phone_number,
                 "wechat_number": wechat_number,
@@ -864,33 +859,3 @@ async def get_thread_history(
         "messages": messages_data.get("messages", []),
         "conversation_id": conversation_id
     })
-
-
-# Utils Functions
-def candidate_matched(candidate: Dict[str, Any], stored_candidate: Dict[str, Any], mode: str) -> bool:
-    """Check if candidate is matched with stored candidate."""
-    if not stored_candidate:
-        return False
-    if candidate['name'] != stored_candidate['name']:
-        return False
-    # check chat_id if provided
-    chat_id, chat_id2 = candidate.get("chat_id"), stored_candidate.get("chat_id")
-    if chat_id and chat_id2:
-        if chat_id == chat_id2:
-            return True
-        else:
-            return False
-    # check by last_message if provided
-    last_message, last_message2 = candidate.get("last_message", ''), stored_candidate.get("last_message", '')
-    updated_at = date_parser.parse(stored_candidate.get("updated_at"))
-    if updated_at.tzinfo is not None: updated_at = updated_at.replace(tzinfo=None)
-    if chat_id is None and chat_id2 and updated_at < (datetime.now() - timedelta(days=3)):
-        logger.info(f"there should be no chat_id in recommend mode(no chat_id provided), current candidate:\n{candidate.get('name')}<->{stored_candidate.get('name')}: chat_id: {chat_id2}")
-        return False
-    elif mode == "recommend" and last_message and last_message2:
-        from difflib import SequenceMatcher
-        similarity = SequenceMatcher(lambda x: x in ['\n', '\r', '\t', ' '], last_message, last_message2).ratio()
-        if similarity < 0.8:
-            logger.debug(f"last_message similarity ({candidate['name']}): {similarity*100:.2f}% < 90%\n{last_message}\n != \n{last_message2}")
-            return False
-    return True
