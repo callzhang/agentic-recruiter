@@ -132,7 +132,7 @@ async def _go_to_chat_dialog(page: Page, chat_id: str, wait_timeout: int = 5) ->
     if not target:
         raise RuntimeError(f"未找到指定对话项 (chat_id: {chat_id})")
     # check if the target is already selected
-    await target.scroll_into_view_if_needed(timeout=1000)
+    # await target.scroll_into_view_if_needed(timeout=1000) # the list will change if we scroll
     classes = await target.get_attribute("class") or ""
     # prepare for the click - get old_text before clicking
     if "selected" not in classes:
