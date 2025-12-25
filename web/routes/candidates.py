@@ -784,19 +784,15 @@ async def request_contact(
     page = await boss_service.service._ensure_browser_session()
     kwargs = await request.json()
     candidate = get_candidate_by_dict(kwargs, strict=False)
-    if history:=candidate.get("metadata", {}).get("history"):
+    metadata = candidate.get("metadata", {})
+    phone_number = metadata.get("phone_number")
+    wechat_number = metadata.get("wechat_number")
+    requested = False
+    if history:=metadata.get("history"):
         if any(h for h in history if h.get("role") == "developer" and h.get("content") == "请求交换联系方式已发送"):
-            phone_number = history.get("phone_number")
-            wechat_number = history.get("wechat_number")
-            return JSONResponse({
-                "success": True,
-                "phone_number": phone_number,
-                "wechat_number": wechat_number,
-                "clicked_phone": False,
-                "clicked_wechat": False,
-            })
+            requested = True
     # Call request_contact_action to get contact info
-    contact_result = await chat_actions.request_contact_action(page, kwargs.get("chat_id"))
+    contact_result = await chat_actions.request_contact_action(page, kwargs.get("chat_id"), request=not requested)
     
     # Extract phone_number and wechat_number
     phone_number = contact_result.get("phone_number")

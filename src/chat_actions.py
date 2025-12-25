@@ -278,7 +278,8 @@ async def list_conversations_action(
     messages: List[Dict[str, Any]] = []
     index_list = list(range(count))
     if random_order:
-        random.shuffle(index_list)
+        start_idx = random.randint(0, max(0, count - limit))
+        index_list = index_list[start_idx:start_idx + limit]
     for i in index_list:
         try:
             item = items.nth(i)
@@ -557,7 +558,7 @@ async def view_full_resume_action(page: Page, chat_id: str, request: bool = True
 
 
 @retry(stop=stop_after_attempt(2), wait=wait_fixed(1))
-async def request_contact_action(page: Page, chat_id: str, timeout_ms: int = 2000) -> bool:
+async def request_contact_action(page: Page, chat_id: str, request: bool = True, timeout_ms: int = 2000) -> bool:
     """Ask candidate for contact information in chat page. Returns True on success, raises ValueError on failure."""
     await _prepare_chat_page(page)
     await _go_to_chat_dialog(page, chat_id)
@@ -565,7 +566,7 @@ async def request_contact_action(page: Page, chat_id: str, timeout_ms: int = 200
     wechat_number = None
     clicked_phone, clicked_wechat = False, False
     ask_phone_button = page.locator("span.operate-btn:has-text('换电话')").first
-    if await ask_phone_button.count() > 0:
+    if request and await ask_phone_button.count() > 0:
         t0 = time.time()
         while 'disabled' not in await ask_phone_button.get_attribute("class", timeout=timeout_ms):
             await ask_phone_button.click(timeout=timeout_ms)
@@ -585,7 +586,7 @@ async def request_contact_action(page: Page, chat_id: str, timeout_ms: int = 200
 
 
     ask_wechat_button = page.locator("span.operate-btn:has-text('换微信')").first
-    if await ask_wechat_button.count() > 0:
+    if request and await ask_wechat_button.count() > 0:
         t0 = time.time()
         while 'disabled' not in await ask_wechat_button.get_attribute("class", timeout=timeout_ms):
             await ask_wechat_button.click(timeout=timeout_ms)

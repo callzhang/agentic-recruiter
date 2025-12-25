@@ -120,10 +120,12 @@ window.showToast = showToast;
 
 // ============================================================================
 // Override global fetch() to auto-expire toasts
+// Global HTMX Loading & Error Handling
 // ============================================================================
 const originalFetch = window.fetch;
 window.fetch = async function(...args) {
     try {
+        appendSpinnerToToast();
         const response = await originalFetch(...args);
         // Expire toasts after successful fetch (even if response has error status)
         expireAllToasts(1000);
@@ -135,10 +137,6 @@ window.fetch = async function(...args) {
     }
 };
 
-
-// ============================================================================
-// Global HTMX Loading & Error Handling
-// ============================================================================
 // Gently dismiss toasts when HTMX request finishes or errors (3s delay)
 document.body.addEventListener('htmx:afterRequest', () => expireAllToasts(3000));
 document.body.addEventListener('htmx:responseError', () => expireAllToasts(3000));
@@ -160,7 +158,17 @@ document.body.addEventListener('htmx:sendError', function(evt) {
 
 // Show loading toast before request
 document.body.addEventListener('htmx:beforeRequest', function(evt) {
-    // Find the latest toast
+    appendSpinnerToToast();
+});
+
+// Handle custom HX-Trigger events for toast notifications
+document.body.addEventListener('showToast', function(evt) {
+    if (evt.detail && evt.detail.message) {
+        showToast(evt.detail.message, evt.detail.type || 'info');
+    }
+});
+
+async function appendSpinnerToToast() {
     const container = document.getElementById('toast-container');
     if (container && container.lastElementChild) {
         const toast = container.lastElementChild;
@@ -180,23 +188,11 @@ document.body.addEventListener('htmx:beforeRequest', function(evt) {
             content.prepend(spinner.firstElementChild);
         }
     }
-});
+}
 
-// Handle custom HX-Trigger events for toast notifications
-document.body.addEventListener('showToast', function(evt) {
-    if (evt.detail && evt.detail.message) {
-        showToast(evt.detail.message, evt.detail.type || 'info');
-    }
-});
-
-/**
- * Browser notification helper using Chrome's Web Notifications API
- * Shows system-level notifications to alert HR when messages are sent
- * @param {string} title - Notification title
- * @param {string} body - Notification body text
- * @param {string} icon - Optional icon URL
- * @param {string} url - Optional URL to open on click
- */
+// ============================================================================
+// Browser Notification Helper
+// ============================================================================
 async function showBrowserNotification(title, body, icon = null, url = null) {
     // Request permission if not already granted
     if (Notification.permission === 'default') {
