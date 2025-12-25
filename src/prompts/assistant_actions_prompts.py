@@ -247,10 +247,10 @@ class ChatActionSchema(BaseModel):
     """Schema for chat/followup generation (internal action + user-facing message)."""
 
     action: Literal["PASS", "CHAT", "CONTACT", "WAIT"] = Field(
-        description="下一步动作：PASS=不推进且不发消息；CHAT=继续沟通；CONTACT=征询联系方式；WAIT=暂不发送，等待候选人/HR动作"
+        description="下一步动作：PASS=不推进且不发消息；CHAT=继续沟通；CONTACT=获取联系方式并推进面试；WAIT=暂不发送，等待候选人回复"
     )
     message: str = Field(
-        description="给候选人的消息文本（仅 action=CHAT/CONTACT 时允许非空；<=160字；不约时间/不谈薪资细节/不索要材料/不口头索要、提供联系方式）"
+        description="给候选人的消息文本（action=CHAT/CONTACT 必须包含文本；<=160字；不约时间/不谈薪资细节/不索要材料/不口头索要、提供联系方式）"
     )
     reason: str = Field(description="内部记录：20-80字，说明为什么选择该 action；不要包含敏感信息/不要索要材料")
 

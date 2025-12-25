@@ -554,8 +554,8 @@ async function handleChatAction(gen, analysis) {
             break;
         case 'CONTACT':
             if (!notified) await sendDingNotification(analysis, name, job_applied);
-            await greetAndSendMessage();
             await requestContact();
+            await greetAndSendMessage();
             break;
         default:
             await greetAndSendMessage();
@@ -691,7 +691,8 @@ async function greetAndSendMessage() {
     // Build Vercel candidate URL
     let candidateUrl = null;
     if (window.__public_url && candidateId) {
-        candidateUrl = `${window.__public_url}/candidates/${candidateId}`;
+        // Vercel candidate detail route is `/candidate/<id>` (singular).
+        candidateUrl = `${window.__public_url}/candidate/${candidateId}`;
     }
     
     await showBrowserNotification(notificationTitle, message, null, candidateUrl);
@@ -795,6 +796,7 @@ async function requestContact() {
                 wechat_number: data.wechat_number,
             }
         });
+        showToast(`联系方式已获取并保存: ${data.phone_number} ${data.wechat_number}`, 'success');
         
         // Update contact info display dynamically
         updateContactInfoDisplay(data.phone_number, data.wechat_number);
@@ -958,41 +960,90 @@ async function passCandidate(reason = '') {
 
 /**
  * Check if we should reply based on chat history
- * Returns true if last message is from user, false if from assistant
+ * Prefer local decision using stored candidate.metadata.history (avoid extra backend request).
  */
 async function shouldReply() {
     const values = getCandidateData();
     const chat_id = values.chat_id;
     const mode = values.mode;
     const greeted = values.greeted;
-    const autoSend = document.getElementById('auto-send-checkbox')?.checked ?? true;
+    const viewed = values.viewed;
+    const stage = values.stage;
+
+    function parseTimestamp(ts) {
+        if (!ts) return null;
+        const d = new Date(String(ts).replace(' ', 'T'));
+        return isNaN(d.getTime()) ? null : d;
+    }
+
+    function extractNewUserMessagesAndLastAssistant(history) {
+        const newUserMessages = [];
+        let lastAssistantMessage = null;
+        let lastGeneratedAction = '';
+        if (!Array.isArray(history) || history.length === 0) return { newUserMessages, lastAssistantAny, lastGeneratedAction };
+
+        for (let i = history.length - 1; i >= 0; i--) {
+            const msg = history[i] || {};
+            const role = msg.role;
+            const content = msg.content || '';
+            if (role === 'developer') continue;
+            if (role === 'assistant') {
+                if ('方便发一份简历过来吗' in content) continue;
+                lastGeneratedAction
+                const payload = (msg.payload && typeof msg.payload === 'object') ? msg.payload : null;
+                const action = (payload && payload.action) || msg.action || '';
+                if (action) lastGeneratedAction = String(action).toUpperCase();
+                lastAssistantMessage = msg;
+                break;
+            }
+            if (role === 'user') newUserMessages.unshift(msg);
+        }
+        return { newUserMessages, lastAssistantMessage, lastGeneratedAction };
+    }
     // If greeted and updated_at is less than 10 minutes ago, don't reply
     const updatedAt = new Date(values.updated_at);
     const now = new Date();
     const diffMs = now - updatedAt;
     const diffMinutes = diffMs / (1000 * 60);
-    if (greeted && values.updated_at) {
-        if (diffMinutes < 10) {
-            return false;
-        }
+    if (greeted && values.updated_at && diffMinutes < 10) {
+        return false;
     }
     // For recommend mode, only rely on greeted flag
     if (mode === 'recommend') {
         return !greeted; // if not greeted, we need to reply
-    }else if (mode === 'followup' && diffMinutes > 60*24*3) {
-        return true; // if updated_at is more than 3 days ago, we need to reply
     }
-    // for other modes, check if we should reply based on chat history
-    const response = await fetch('/candidates/should-reply', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ 
-            chat_id: chat_id,
-            mode: mode
-        })
-    });
-    const should_reply = await window.handleApiResponse(response);
-    return should_reply;
+    // if the candidate is already passed, don't reply
+    if (stage === 'PASS') return false;
+
+    const history = values?.metadata?.history || [];
+    if (!Array.isArray(history) || history.length === 0) {
+        if (!chat_id) return false;
+        const response = await fetch('/candidates/should-reply', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ chat_id: chat_id, mode: mode })
+        });
+        const data = await window.handleApiResponse(response);
+        return data === true || (data && data.should_reply === true);
+    }
+    const { newUserMessages, lastAssistantMessage, lastGeneratedAction } = extractNewUserMessagesAndLastAssistant(history);
+
+    // Chat/greet: reply if there are user messages after the last meaningful assistant message.
+    if (newUserMessages.length > 0) return true;
+
+    // Fallback: if Boss marks this conversation as unread, assume it needs a reply.
+    if (viewed === false) return true;
+
+    // Followup: if no new user messages, allow followup after a time window unless last action says WAIT/PASS.
+    if (mode === 'followup') {
+        if (['WAIT', 'PASS'].includes(lastGeneratedAction)) return false;
+        const lastAssistantTs = parseTimestamp(lastAssistantMessage?.timestamp);
+        if (!lastAssistantTs) return false;
+        const diffDays = (now - lastAssistantTs) / (1000 * 60 * 60 * 24);
+        return diffDays >= 3; // followup after 3 days
+    }
+
+    return false;
 }
 
 

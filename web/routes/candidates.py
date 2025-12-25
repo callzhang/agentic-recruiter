@@ -15,7 +15,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from tenacity import retry, stop_after_attempt, wait_exponential
 from src.candidate_store import search_candidates_advanced, get_candidate_by_dict, upsert_candidate, _readable_fields, calculate_resume_similarity, candidate_matched
-from src.jobs_store import get_all_jobs, get_job_by_id as get_job_by_id_from_store
+from src.jobs_store import get_job_by_id 
 from src.global_logger import logger
 from src import chat_actions, assistant_actions, assistant_utils, recommendation_actions
 from src.assistant_actions import send_dingtalk_notification
@@ -26,25 +26,6 @@ router = APIRouter()
 templates = Jinja2Templates(directory="web/templates")
 from src.config import get_vercel_config
 vercel_url = get_vercel_config().get("url", "").rstrip('/')
-
-def load_jobs() -> list[dict]:
-    """Load job configurations from Zilliz Cloud."""
-    return get_all_jobs()
-
-
-def get_job_by_id(job_id: str) -> dict:
-    """Get job info by id or position name from Zilliz Cloud."""
-    job = get_job_by_id_from_store(job_id)
-    if job:
-        return job
-    # If not found by ID, try to find by position name
-    jobs = load_jobs()
-    for job in jobs:
-        if job.get("position") == job_id:
-            return job
-    # Fallback: return minimal dict
-    return {"job_id": job_id, "id": job_id, "position": job_id}
-
 
 # ============================================================================
 # Main page
@@ -79,7 +60,7 @@ async def list_candidates(
     """
     if mode == "recommend":
         # Get job to retrieve candidate_filters (database query, no browser lock needed)
-        job = get_job_by_id(job_id)
+        job = get_job_by_id(job_id) or {}
         
         # Get candidate_filters from job
         candidate_filters = job.get("candidate_filters") if job else None
@@ -235,51 +216,6 @@ async def get_candidate_detail(request: Request):
     return HTMLResponse(content=html_content)
 
 
-@router.get("/history/{candidate_id}", response_class=HTMLResponse)
-async def get_candidate_history(candidate_id: str):
-    """Get chat history for a candidate."""
-    page = await boss_service.service._ensure_browser_session()
-    history = await chat_actions.get_chat_history_action(page, candidate_id)
-    
-    if not isinstance(history, list):
-        return HTMLResponse(
-            content='<div class="text-center text-gray-500 py-6">无法获取聊天记录</div>'
-        )
-    
-    if not history:
-        return HTMLResponse(
-            content='<div class="text-center text-gray-500 py-6">暂无聊天记录</div>'
-        )
-    
-    # Render history messages
-    html = '<div class="space-y-3">'
-    for msg in history:
-        msg_type = msg.get("type", "")
-        is_candidate = msg_type == "candidate"
-        bg_color = "bg-blue-50" if is_candidate else "bg-gray-50"
-        icon = "👤" if is_candidate else "🏢"
-        
-        html += f'''
-        <div class="{bg_color} rounded-lg p-4">
-            <div class="flex items-start space-x-3">
-                <span class="text-2xl">{icon}</span>
-                <div class="flex-1">
-                    <div class="flex justify-between items-start mb-1">
-                        <span class="font-medium text-gray-900">
-                            {"候选人" if is_candidate else "HR"}
-                        </span>
-                        <span class="text-xs text-gray-500">{msg.get("timestamp", "")}</span>
-                    </div>
-                    <p class="text-gray-700 whitespace-pre-wrap">{msg.get("message", "")}</p>
-                </div>
-            </div>
-        </div>
-        '''
-    html += '</div>'
-    
-    return HTMLResponse(content=html)
-
-
 # ============================================================================
 # Candidate action endpoints
 # ============================================================================
@@ -324,6 +260,8 @@ async def init_chat(
     
     # Get job info
     job_info = get_job_by_id(job_id)
+    if not job_info:
+        raise HTTPException(status_code=400, detail=f"未找到岗位: {job_id}")
     # Init chat in thread pool to avoid blocking event loop (OpenAI API call)
     result = assistant_actions.init_chat(
         mode=mode,
@@ -429,7 +367,7 @@ async def generate_message(
     if mode == "recommend":
         new_user_messages = [
             {"content": "你好，我们这个岗位正在招聘，想跟你沟通一下", "role": "assistant"},
-            {"content": "我在看机会，你这个岗位介绍一下", "role": "user"},
+            {"content": "岗位介绍一下，我看看是否匹配", "role": "user"},
         ]
         chat_history = new_user_messages
     else:
@@ -502,41 +440,68 @@ async def generate_message(
 async def should_reply(
     chat_id: Optional[str] = Body(None),
     mode: Optional[str] = Body(None),
+    followup_after_days: int = Body(3),
 ) -> bool:
-    """Check if should generate message based on chat history.
-    If last message is an assistant message, return False, otherwise return True.
+    """Check if we should auto-generate a message based on Boss chat history.
     
     Args:
         chat_id: Chat ID to get chat history from browser
-        mode: Mode (recommend/chat/greet/followup), if recommend mode, return True
+        mode: Mode (recommend/chat/greet/followup)
+        followup_after_days: For followup mode, allow followup after this many days since last assistant message
     
     Returns:
         bool
     """
+
+
+    def extract_new_user_messages_and_last_assistant(history: list[dict[str, Any]]) -> tuple[list[dict[str, str]], Optional[dict[str, Any]]]:
+        new_user_messages = []
+        last_assistant_message = None
+
+        for msg in history[::-1]:
+            role = msg.get("role")
+            if role == "developer": continue
+            content = msg.get("content") or ""
+            if role == "assistant":
+                if "方便发一份简历过来吗" in content: continue
+                last_assistant_message = msg
+                break
+            if role == "user":
+                new_user_messages.insert(0, msg)
+        return new_user_messages, last_assistant_message
+
     # For recommend mode, always return True (no chat history available)
     if mode == "recommend":
         return True
     
-    # if chat_id is not provided, return True (default to reply)
+    # Without chat_id we cannot inspect history; avoid triggering generate-message which would error.
     if not chat_id:
-        return True
+        return False
     
     # Get chat history from browser
     page = await boss_service.service._ensure_browser_session()
     chat_history = await chat_actions.get_chat_history_action(page, chat_id)
-    
-    # Check last message role
-    message = ''
-    for msg in chat_history[::-1]:
-        role = msg.get("role")
-        if role == "assistant":
-            return False
-        elif role == "user":
-            message += msg.get("content", '')
-            if len(message) > 5:# ignore short messages from user
-                return True
-    
-    # no message found, or only developer message, return False
+    stored_candidate = get_candidate_by_dict({"chat_id": chat_id}, strict=False)
+    stored_history = stored_candidate.get("metadata", {}).get("history", [])
+    if not chat_history:
+        # If we cannot read history, be conservative: don't auto-generate (user can force regenerate).
+        return False
+    elif not stored_history:
+        upsert_candidate(chat_id=chat_id, metadata=stored_candidate.get("metadata"))
+    # get new user messages and last assistant message
+    new_user_messages, last_assistant_message = extract_new_user_messages_and_last_assistant(chat_history)
+    # if there are new user messages, we should reply
+    if new_user_messages: return True
+    # if the candidate is already passed, don't reply
+    if stored_candidate.get("stage") == STAGE_PASS: return False
+    # if the last action is WAIT or PASS, don't reply
+    last_action = last_assistant_message.get("action").upper()
+    if last_action in {"WAIT", "PASS"}: return False
+    # Followup mode: optionally allow followup after a time window, unless we previously decided to WAIT/PASS.
+    if mode == "followup":
+        last_ts = datetime.fromisoformat(last_assistant_message.get("timestamp") or '').replace("Z", "+00:00").replace(tzinfo=None)
+        if last_ts is None: return False
+        return datetime.now() - last_ts >= timedelta(days=max(0, followup_after_days))
     return False
 
 @router.post("/send", response_class=HTMLResponse)

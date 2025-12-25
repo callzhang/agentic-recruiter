@@ -2,6 +2,7 @@
 
 import types
 from typing import Any, Dict, List
+from datetime import datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -380,6 +381,85 @@ def test_candidate_lookup_endpoint(client: TestClient, monkeypatch: pytest.Monke
     response = client.get("/candidate/chat-42")
     assert response.status_code == 200
     assert response.json() == {"chat_id": "chat-42", "name": "Alice"}
+
+
+def test_candidates_should_reply_recommend_defaults_true(client: TestClient) -> None:
+    response = client.post("/candidates/should-reply", json={"mode": "recommend"})
+    assert response.status_code == 200
+    assert response.json() is True
+
+
+def test_candidates_should_reply_missing_chat_id_returns_false(client: TestClient) -> None:
+    response = client.post("/candidates/should-reply", json={"mode": "chat"})
+    assert response.status_code == 200
+    assert response.json() is False
+
+
+def test_candidates_should_reply_ignores_resume_request_message(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    history = [
+        {"role": "user", "content": "你好", "timestamp": "2025-12-20 10:00:00"},
+        {"role": "assistant", "content": "方便发一份简历过来吗？", "timestamp": "2025-12-20 10:01:00"},
+    ]
+    monkeypatch.setattr(chat_actions, "get_chat_history_action", make_async_return(history))
+
+    response = client.post("/candidates/should-reply", json={"mode": "chat", "chat_id": "chat-1"})
+    assert response.status_code == 200
+    assert response.json() is True
+
+
+def test_candidates_should_reply_keeps_short_user_messages(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    history = [
+        {"role": "assistant", "content": "你好", "timestamp": "2025-12-20 10:00:00"},
+        {"role": "user", "content": "在", "timestamp": "2025-12-20 10:01:00"},
+    ]
+    monkeypatch.setattr(chat_actions, "get_chat_history_action", make_async_return(history))
+
+    response = client.post("/candidates/should-reply", json={"mode": "chat", "chat_id": "chat-2"})
+    assert response.status_code == 200
+    assert response.json() is True
+
+
+def test_candidates_should_reply_followup_respects_time_window(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    recent_ts = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
+    old_ts = (datetime.now() - timedelta(days=4)).strftime("%Y-%m-%d %H:%M:%S")
+
+    monkeypatch.setattr("web.routes.candidates.get_candidate_by_dict", lambda *_args, **_kwargs: {})
+
+    monkeypatch.setattr(
+        chat_actions,
+        "get_chat_history_action",
+        make_async_return([{"role": "assistant", "content": "hi", "timestamp": recent_ts}]),
+    )
+    response = client.post("/candidates/should-reply", json={"mode": "followup", "chat_id": "chat-3"})
+    assert response.status_code == 200
+    assert response.json() is False
+
+    monkeypatch.setattr(
+        chat_actions,
+        "get_chat_history_action",
+        make_async_return([{"role": "assistant", "content": "hi", "timestamp": old_ts}]),
+    )
+    response = client.post("/candidates/should-reply", json={"mode": "followup", "chat_id": "chat-3"})
+    assert response.status_code == 200
+    assert response.json() is True
+
+
+def test_candidates_should_reply_followup_skips_wait_or_pass_action(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    old_ts = (datetime.now() - timedelta(days=10)).strftime("%Y-%m-%d %H:%M:%S")
+    monkeypatch.setattr(
+        chat_actions,
+        "get_chat_history_action",
+        make_async_return([{"role": "assistant", "content": "hi", "timestamp": old_ts}]),
+    )
+
+    stored_candidate = {
+        "metadata": {"history": [{"role": "assistant", "payload": {"action": "WAIT"}}]},
+    }
+    monkeypatch.setattr("web.routes.candidates.get_candidate_by_dict", lambda *_args, **_kwargs: stored_candidate)
+
+    response = client.post("/candidates/should-reply", json={"mode": "followup", "chat_id": "chat-4"})
+    assert response.status_code == 200
+    assert response.json() is False
 
 
 def test_thread_init_chat_endpoint(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
