@@ -976,29 +976,38 @@ async function shouldReply() {
         return isNaN(d.getTime()) ? null : d;
     }
 
+    function isIgnorableAssistantMessage(content) {
+        const text = (content || '').trim();
+        return text.startsWith('方便发一份简历过来吗');
+    }
+
     function extractNewUserMessagesAndLastAssistant(history) {
         const newUserMessages = [];
-        let lastAssistantMessage = null;
+        let lastAssistantAny = null;
         let lastGeneratedAction = '';
         if (!Array.isArray(history) || history.length === 0) return { newUserMessages, lastAssistantAny, lastGeneratedAction };
 
         for (let i = history.length - 1; i >= 0; i--) {
             const msg = history[i] || {};
             const role = msg.role;
-            const content = msg.content || '';
             if (role === 'developer') continue;
+
+            const content = msg.content || '';
             if (role === 'assistant') {
-                if ('方便发一份简历过来吗' in content) continue;
-                lastGeneratedAction
-                const payload = (msg.payload && typeof msg.payload === 'object') ? msg.payload : null;
-                const action = (payload && payload.action) || msg.action || '';
-                if (action) lastGeneratedAction = String(action).toUpperCase();
-                lastAssistantMessage = msg;
+                if (!lastGeneratedAction) {
+                    const payload = (msg.payload && typeof msg.payload === 'object') ? msg.payload : null;
+                    const action = (payload && payload.action) || msg.action || '';
+                    if (action) lastGeneratedAction = String(action).toUpperCase();
+                }
+                if (!lastAssistantAny) lastAssistantAny = msg;
+                if (isIgnorableAssistantMessage(content)) continue;
                 break;
             }
-            if (role === 'user') newUserMessages.unshift(msg);
+            if (role === 'user') {
+                newUserMessages.unshift(msg);
+            }
         }
-        return { newUserMessages, lastAssistantMessage, lastGeneratedAction };
+        return { newUserMessages, lastAssistantAny, lastGeneratedAction };
     }
     // If greeted and updated_at is less than 10 minutes ago, don't reply
     const updatedAt = new Date(values.updated_at);
@@ -1021,23 +1030,22 @@ async function shouldReply() {
         const response = await fetch('/candidates/should-reply', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ chat_id: chat_id, mode: mode })
+            body: JSON.stringify(values)
         });
         const data = await window.handleApiResponse(response);
         return data === true || (data && data.should_reply === true);
     }
     const { newUserMessages, lastAssistantMessage, lastGeneratedAction } = extractNewUserMessagesAndLastAssistant(history);
-
-    // Chat/greet: reply if there are user messages after the last meaningful assistant message.
+    // if the last action is WAIT or PASS, don't reply
+    if (['WAIT', 'PASS'].includes(lastGeneratedAction)) return false;
+    // if there are new user messages, we should reply
     if (newUserMessages.length > 0) return true;
-
-    // Fallback: if Boss marks this conversation as unread, assume it needs a reply.
+    // if Boss marks this conversation as unread, assume it needs a reply.
     if (viewed === false) return true;
-
+    
     // Followup: if no new user messages, allow followup after a time window unless last action says WAIT/PASS.
     if (mode === 'followup') {
-        if (['WAIT', 'PASS'].includes(lastGeneratedAction)) return false;
-        const lastAssistantTs = parseTimestamp(lastAssistantMessage?.timestamp);
+        const lastAssistantTs = parseTimestamp(lastAssistantMessage?.timestamp) || (values.updated_at ? new Date(values.updated_at) : null);
         if (!lastAssistantTs) return false;
         const diffDays = (now - lastAssistantTs) / (1000 * 60 * 60 * 24);
         return diffDays >= 3; // followup after 3 days

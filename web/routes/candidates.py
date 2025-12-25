@@ -439,6 +439,7 @@ async def generate_message(
 @router.post("/should-reply")
 async def should_reply(
     chat_id: Optional[str] = Body(None),
+    candidate_id: Optional[str] = Body(None),
     mode: Optional[str] = Body(None),
     followup_after_days: int = Body(3),
 ) -> bool:
@@ -481,13 +482,19 @@ async def should_reply(
     # Get chat history from browser
     page = await boss_service.service._ensure_browser_session()
     chat_history = await chat_actions.get_chat_history_action(page, chat_id)
-    stored_candidate = get_candidate_by_dict({"chat_id": chat_id}, strict=False)
+    stored_candidate = get_candidate_by_dict({"chat_id": chat_id, "candidate_id": candidate_id}, strict=False)
     stored_history = stored_candidate.get("metadata", {}).get("history", [])
     if not chat_history:
         # If we cannot read history, be conservative: don't auto-generate (user can force regenerate).
         return False
     elif not stored_history:
-        upsert_candidate(chat_id=chat_id, metadata=stored_candidate.get("metadata"))
+        # update candidate history if missing
+        metadata = stored_candidate.get("metadata")
+        metadata.update({"history": chat_history})
+        stored_candidate.update({"metadata": metadata})
+        upsert_candidate(**stored_candidate)
+
+    
     # get new user messages and last assistant message
     new_user_messages, last_assistant_message = extract_new_user_messages_and_last_assistant(chat_history)
     # if there are new user messages, we should reply
@@ -495,13 +502,19 @@ async def should_reply(
     # if the candidate is already passed, don't reply
     if stored_candidate.get("stage") == STAGE_PASS: return False
     # if the last action is WAIT or PASS, don't reply
-    last_action = last_assistant_message.get("action").upper()
+    last_action = last_assistant_message.get("action", "").upper()
     if last_action in {"WAIT", "PASS"}: return False
     # Followup mode: optionally allow followup after a time window, unless we previously decided to WAIT/PASS.
     if mode == "followup":
-        last_ts = datetime.fromisoformat(last_assistant_message.get("timestamp") or '').replace("Z", "+00:00").replace(tzinfo=None)
-        if last_ts is None: return False
-        return datetime.now() - last_ts >= timedelta(days=max(0, followup_after_days))
+        timestamp_str = last_assistant_message.get("timestamp", "")
+        if not timestamp_str:
+            return False
+        try:
+            last_ts = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00")).replace(tzinfo=None)
+        except ValueError:
+            return False
+        diff_days = (datetime.now() - last_ts).days
+        return diff_days >= followup_after_days
     return False
 
 @router.post("/send", response_class=HTMLResponse)
