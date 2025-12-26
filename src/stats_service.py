@@ -346,16 +346,26 @@ def compile_job_stats(job_name: str) -> Dict[str, Any]:
 def compile_all_jobs() -> Dict[str, Any]:
     jobs = get_all_jobs() or []
     stats: List[Dict[str, Any]] = []
+    skipped_inactive_jobs = 0
     for job in jobs:
         position = job.get("position") or job.get("job_id")
         if not position:
             continue
+        status = str(job.get("status", "active") or "active").strip().lower()
+        if status == "inactive":
+            skipped_inactive_jobs += 1
+            continue
         try:
-            stats.append(compile_job_stats(position))
+            job_stat = compile_job_stats(position)
+            job_stat["status"] = status
+            stats.append(job_stat)
         except Exception as exc:  # noqa: BLE001
             logger.warning("统计岗位 %s 失败: %s", position, exc)
     best = max(stats, key=lambda s: s["today"]["metric"], default=None)
-    return {"jobs": stats, "best": best}
+    result = {"jobs": stats, "best": best}
+    if skipped_inactive_jobs > 0:
+        result["skipped_inactive_jobs"] = skipped_inactive_jobs
+    return result
 
 
 def send_daily_dingtalk_report() -> bool:

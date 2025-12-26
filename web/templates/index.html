@@ -148,11 +148,23 @@ const chartInstances = window.chartInstances;
  * Format date string to MM-DD format
  */
 function formatDate(dateStr) {
-    const date = new Date(dateStr);
-    if (isNaN(date.getTime())) {
-        return dateStr.split('T')[0].slice(5) || dateStr.slice(-5);
+    if (!dateStr) return '';
+    try {
+        // If it's a full ISO string (YYYY-MM-DDTHH:mm:ss), split by T
+        const datePart = dateStr.includes('T') ? dateStr.split('T')[0] : dateStr;
+        
+        // Ensure we have YYYY-MM-DD format
+        if (datePart.match(/^\d{4}-\d{2}-\d{2}$/)) {
+            return datePart.slice(5);
+        }
+        
+        // Fallback for other formats
+        const date = new Date(dateStr);
+        if (isNaN(date.getTime())) return dateStr;
+        return `${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+    } catch (e) {
+        return dateStr;
     }
-    return `${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
 
 /**
@@ -594,8 +606,14 @@ function renderJobStats(data) {
     
     let jobs = data.jobs || [];
     // Skip inactive jobs on homepage stats.
-    const isInactive = (j) => String((j && j.status) || 'active').toLowerCase() === 'inactive';
-    const skippedInactiveCount = jobs.filter(isInactive).length;
+    // Skip inactive jobs on homepage stats.
+    const isInactive = (j) => String((j && j.status) || 'active').trim().toLowerCase() === 'inactive';
+    const skippedInactiveCountRaw = (
+        Number(data?.skipped_inactive_jobs) ||
+        Number(data?.skipped_inactive) ||
+        0
+    );
+    const skippedInactiveCount = skippedInactiveCountRaw > 0 ? skippedInactiveCountRaw : jobs.filter(isInactive).length;
     jobs = jobs.filter(j => !isInactive(j));
     const best = (data.best && !isInactive(data.best)) ? data.best : null;
     

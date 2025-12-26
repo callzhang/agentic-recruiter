@@ -504,6 +504,7 @@ def fetch_job_candidates(job_name: str, days: Optional[int] = None) -> List[Dict
         updated_from = start_dt.isoformat()
     return search_candidates_advanced(
         job_applied=job_name,
+        limit=None,
         fields=["candidate_id", "job_applied", "stage", "analysis", "updated_at", "metadata"],
         updated_from=updated_from,
         sort_by="updated_at",
