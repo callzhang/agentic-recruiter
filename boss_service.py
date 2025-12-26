@@ -305,8 +305,7 @@ class BossServiceAsync:
         
         """
 
-        # Update activity timestamp whenever we ensure a session (implies activity)
-        await self._keep_awake()
+
 
         while True:
             async with self.browser_lock:
@@ -320,6 +319,9 @@ class BossServiceAsync:
             await self._verify_login(page, max_wait_time=max_wait_time)
 
     async def _prepare_browser_session(self) -> Page:
+        # Update activity timestamp whenever we use the browser
+        await self._keep_awake()
+
         if not self.playwright:
             await self._startup_async()
         if not self.context or not self.browser:
