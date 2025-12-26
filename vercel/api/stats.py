@@ -195,13 +195,12 @@ def normalize_stage(stage: Optional[str]) -> str:
 
 # Statistics calculation functions (from stats_service.py)
 def _parse_dt(value: str) -> Optional[datetime]:
-    """Parse ISO timestamp stored in Milvus records."""
+    """Parse timestamp stored in Milvus records using dateutil.parser for flexibility."""
     if not value:
         return None
-    if value.endswith("Z"):
-        value = value.replace("Z", "+00:00")
     try:
-        return datetime.fromisoformat(value)
+        import dateutil.parser as parser
+        return parser.parse(value)
     except Exception as e:
         # Data quality issue: some records may contain non-ISO timestamps (e.g. "guzgc80j5h").
         # We skip those records instead of crashing the whole endpoint.

@@ -8,7 +8,9 @@
 
 import asyncio
 from datetime import datetime, timedelta
+import dateutil.parser as parser
 import json
+import re
 from typing import Any, Dict, Optional
 from fastapi import APIRouter, BackgroundTasks, Form, Query, Request, Response, Body, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -420,7 +422,7 @@ async def generate_message(
         "action": action,
         "reason": reason,
     }
-    # update candidate data
+    # update candidate data - metadata merging handled automatically by upsert_candidate()
     updates: dict[str, Any] = {
         "candidate_id": candidate_id,
         "chat_id": chat_id,
@@ -494,7 +496,6 @@ async def should_reply(
         stored_candidate.update({"metadata": metadata})
         upsert_candidate(**stored_candidate)
 
-    
     # get new user messages and last assistant message
     new_user_messages, last_assistant_message = extract_new_user_messages_and_last_assistant(chat_history)
     # if there are new user messages, we should reply
@@ -507,11 +508,20 @@ async def should_reply(
     # Followup mode: optionally allow followup after a time window, unless we previously decided to WAIT/PASS.
     if mode == "followup":
         timestamp_str = last_assistant_message.get("timestamp", "")
-        if not timestamp_str:
-            return False
         try:
-            last_ts = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00")).replace(tzinfo=None)
-        except ValueError:
+            # Extract date and time using regex, removing Chinese text like '昨天', '今天', etc.
+            # Pattern: YYYY-MM-DD ... HH:MM:SS or YYYY-MM-DD ... HH:MM
+            match = re.search(r'(\d{4}-\d{2}-\d{2})\s+.*?(\d{2}:\d{2}(?::\d{2})?)', timestamp_str)
+            if match:
+                date_part = match.group(1)
+                time_part = match.group(2)
+                clean_timestamp = f"{date_part} {time_part}"
+            else:
+                # Fallback: try to parse as-is
+                clean_timestamp = timestamp_str
+            last_ts = parser.parse(clean_timestamp).replace(tzinfo=None)
+        except (ValueError, Exception) as e:
+            logger.warning(f"Failed to parse timestamp '{timestamp_str}': {e}")
             return False
         diff_days = (datetime.now() - last_ts).days
         return diff_days >= followup_after_days
@@ -762,12 +772,15 @@ async def request_contact(
     page = await boss_service.service._ensure_browser_session()
     kwargs = await request.json()
     candidate = get_candidate_by_dict(kwargs, strict=False)
+    if not candidate:
+        raise RuntimeError(f"Candidate not found for chat_id: {kwargs.get('chat_id')}")
     metadata = candidate.get("metadata", {})
     phone_number = metadata.get("phone_number")
     wechat_number = metadata.get("wechat_number")
     requested = False
     if history:=metadata.get("history"):
-        if any(h for h in history if h.get("role") == "developer" and h.get("content") == "请求交换联系方式已发送"):
+        if any(h for h in history if h.get("role") == "developer" and\
+            "请求交换联系方式已发送" in h.get("content") or "请求交换微信已发送" in h.get("content")):
             requested = True
     # Call request_contact_action to get contact info
     contact_result = await chat_actions.request_contact_action(page, kwargs.get("chat_id"), request=not requested)
@@ -779,8 +792,8 @@ async def request_contact(
     # Find the candidate by candidate_id or chat_id
     
     # Update candidate metadata with contact info
-    # metadata merging is now handled in upsert_candidate()
-    if candidate:
+    # Metadata merging is handled automatically by upsert_candidate()
+    if candidate and (phone_number or wechat_number):
         upsert_candidate(
             candidate_id=candidate.get("candidate_id"),
             chat_id=kwargs.get("chat_id"),
@@ -791,24 +804,13 @@ async def request_contact(
             stage=STAGE_CONTACT,
         )
         
-        return JSONResponse({
-            "success": True,
-            "phone_number": phone_number,
-            "wechat_number": wechat_number,
-            "clicked_phone": contact_result.get("clicked_phone", False),
-            "clicked_wechat": contact_result.get("clicked_wechat", False),
-        })
-    else:
-        # Candidate not found, but still return the contact info
-        logger.warning(f"Candidate not found for chat_id: {chat_id}, candidate_id: {candidate_id}")
-        return JSONResponse({
-            "success": False,
-            "error": "Candidate not found",
-            "phone_number": phone_number,
-            "wechat_number": wechat_number,
-            "clicked_phone": contact_result.get("clicked_phone", False),
-            "clicked_wechat": contact_result.get("clicked_wechat", False),
-        })
+    return JSONResponse({
+        "success": bool(phone_number or wechat_number),
+        "phone_number": phone_number,
+        "wechat_number": wechat_number,
+        "clicked_phone": contact_result.get("clicked_phone", False),
+        "clicked_wechat": contact_result.get("clicked_wechat", False),
+    })
 
 
 # Record Reuse Endpoints

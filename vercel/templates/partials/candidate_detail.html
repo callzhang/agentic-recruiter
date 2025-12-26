@@ -859,7 +859,7 @@ async function requestContact() {
     console.log('Contact requested:', data);
     
     // Update candidate data with contact info in metadata
-    // metadata merging is now handled in backend upsert_candidate()
+    // Metadata merging is handled automatically by backend upsert_candidate()
     if (data && (data.phone_number || data.wechat_number)) {
         await updateCandidateData({
             stage: 'CONTACT',

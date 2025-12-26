@@ -2,6 +2,7 @@
 
 import re
 from datetime import date
+import dateutil.parser as parser
 from typing import Any, Dict, List, Optional
 import time
 from playwright.async_api import Locator, Page
@@ -268,19 +269,16 @@ async def list_conversations_action(
         return []
     # Scroll the candidate list container to the end
     candidate_list = page.locator('div.b-scroll-stable')
-    if await candidate_list.count() > 0:
-        await candidate_list.evaluate('element => element.scrollTop = element.scrollHeight')
-    else:
+    if await candidate_list.count() == 0:
         logger.warning("未找到候选人列表容器")
         return []
     items = page.locator(CHAT_ITEM_SELECTORS)
     count = await items.count()
-    messages: List[Dict[str, Any]] = []
-    index_list = list(range(count))
     if random_order:
-        start_idx = random.randint(0, max(0, count - limit))
-        index_list = index_list[start_idx:start_idx + limit]
-    for i in index_list:
+        n = random.randint(1, count)
+        await candidate_list.evaluate(f'element => element.scrollTop = element.scrollHeight*{n}/{count}')
+    messages: List[Dict[str, Any]] = []
+    for i in range(count):
         try:
             item = items.nth(i)
             data_id = await item.get_attribute("data-id", timeout=100)
@@ -335,8 +333,6 @@ async def get_chat_history_action(page: Page, chat_id: str, timeout: int = 200) 
                 today_str = last_timestamp.split(" ")[0] if last_timestamp else date.today().strftime("%Y-%m-%d")
                 timestamp_raw = f"{today_str} {timestamp_raw}"
             try:
-                import dateutil.parser as parser
-
                 dt = parser.parse(timestamp_raw)
                 timestamp = dt.strftime("%Y-%m-%d %H:%M:%S")
             except Exception:

@@ -766,7 +766,6 @@ async function requestContact() {
     const chat_id = values.chat_id;
     const candidate_id = values.candidate_id;
     const mode = values.mode;
-    
     // Skip contact request for recommend mode (no chat_id available)
     if (mode === 'recommend' || !chat_id) {
         return;
@@ -775,10 +774,19 @@ async function requestContact() {
     if (values.metadata?.phone_number || values.metadata?.wechat_number) {
         return;
     }
-    
+    // hisotory = values.metadata?.history || [];
+    // for (let i = history.length - 1; i >= 0; i--) {
+    //     const msg = history[i] || {};
+    //     const role = msg.role;
+    //     if (role === 'developer') continue;
+    //     const content = msg.content || '';
+    //     if (content.includes('请求交换联系方式已发送') || content.includes('请求交换微信已发送')) {
+    //         return;
+    //     }
+    // }
     
     // Call new endpoint with both chat_id and candidate_id
-    showToast('正在请求联系方式...', 'info');
+    showToast('正在获取联系方式...', 'info');
     const response = await fetch('/candidates/request-contact', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -787,7 +795,7 @@ async function requestContact() {
     const data = await window.handleApiResponse(response);
     
     // Update candidate data with contact info in metadata
-    // metadata merging is now handled in backend upsert_candidate()
+    // Metadata merging is handled automatically by backend upsert_candidate()
     if (data && (data.phone_number || data.wechat_number)) {
         await updateCandidateData({
             stage: 'CONTACT',
@@ -1408,7 +1416,6 @@ async function submitOptimizationFeedback() {
         // Also mark as contacted since feedback was given
         await updateCandidateData({ 
             metadata: { 
-                ...currentMetadata, 
                 contacted: true 
             } 
         });
@@ -1425,11 +1432,9 @@ async function submitOptimizationFeedback() {
 // ===========================================
 
 async function markContacted() {
-    const currentMetadata = getCandidateData('metadata') || {};
     try {
         await updateCandidateData({ 
             metadata: { 
-                ...currentMetadata, 
                 contacted: true 
             } 
         });
@@ -1467,12 +1472,9 @@ async function submitRejectReason() {
         return;
     }
     
-    const currentMetadata = getCandidateData('metadata') || {};
-    
     try {
         await updateCandidateData({ 
             metadata: { 
-                ...currentMetadata, 
                 contacted: true,
                 candidate_reject_reason: reason
             } 

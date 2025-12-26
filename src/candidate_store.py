@@ -175,7 +175,7 @@ def get_candidate_by_dict(kwargs: Dict[str, Any], strict: bool = True) -> Option
         conversation_ids=[conversation_id] if conversation_id else None,
         names=[name] if not has_id else None,
         job_applied=job_applied,
-        limit=1,
+        limit=5,
         fields=fields,
         strict=strict,
     )
@@ -185,11 +185,11 @@ def get_candidate_by_dict(kwargs: Dict[str, Any], strict: bool = True) -> Option
         logger.warning(f"multiple candidates matched:{kwargs}: {matched_candidates}")
     stored_candidate = matched_candidates[0] if matched_candidates else None
 
-    # if no resume_text, return stored_candidate
-    if not resume_text:
+    # if stored_candidate found, return stored_candidate
+    if stored_candidate:
         return stored_candidate
     # try again using resume similarity search
-    if not stored_candidate:
+    elif resume_text:
         results = search_candidates_by_resume(
             resume_text=resume_text, 
             filter_expr=f'name == "{name}" and job_applied == "{job_applied}"' if name and job_applied else None, 
@@ -372,22 +372,21 @@ def upsert_candidate(**candidate) -> Optional[str]:
     Returns:
         str: candidate_id if successful, None otherwise
     """
-    # prevent kwargs only has `candidate_id` field
-    if not candidate or (len(candidate) == 1 and 'candidate_id' in candidate):
-        logger.warning(f"upsert: candidate_id provided but no updates: {candidate}")
-        return candidate.get("candidate_id")
-    
     # Get candidate_id from kwargs if provided
     candidate_id = candidate.get("candidate_id")
-    stored_candidate = None
+    # prevent kwargs only has `candidate_id` field
+    if not candidate or (len(candidate) == 1 and candidate_id):
+        logger.warning(f"upsert: candidate_id provided but no updates: {candidate}")
+        return candidate_id
     
-    # Only check for existing candidate if candidate_id is not provided
-    if not candidate_id:
-        stored_candidate = get_candidate_by_dict(candidate)
+    
+    # Merge metadata for updates (when metadata is being updated)
+    if 'metadata' in candidate and candidate_id:
+        stored_candidate = get_candidate_by_dict({'candidate_id': candidate_id})
         if stored_candidate:
-            candidate['candidate_id'] = stored_candidate.get('candidate_id')
-            if existing_metadata := stored_candidate.get("metadata", {}):
-                candidate["metadata"] = existing_metadata
+            existing_metadata = stored_candidate.get("metadata", {})
+            new_metadata = {k: v for k, v in candidate.get("metadata", {}).items() if v or v == 0}
+            candidate["metadata"] = {**existing_metadata, **new_metadata}
     
     # fixing fields types and filtering only valid fields
     candidate['updated_at'] = datetime.now().isoformat()
@@ -459,10 +458,10 @@ def search_candidates_by_resume(
         )
         
         # Filter by similarity threshold
-        # candidates.sort(key=lambda x: x['distance'], reverse=True)
         results_str = '\n'.join([f'{r["entity"]["candidate_id"]}({r["entity"]["name"]}): {r["distance"]}' for r in results[0]])
         logger.debug(f"search_candidates_by_resume: results: \n{results_str}")
         candidates = [r['entity'] for r in results[0] if  r['distance'] > similarity_threshold]
+        candidates.sort(key=lambda x: x['distance'], reverse=True)
         return candidates
     except Exception as exc:
         logger.exception("Failed to search candidates: %s", exc)
