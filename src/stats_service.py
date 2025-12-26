@@ -58,10 +58,9 @@ class ScoreAnalysis:
 def _score_quality(scores: List[int]) -> ScoreAnalysis:
     """计算肖像得分，用于评估岗位画像质量。
     
-    肖像得分由三个维度组成：
-    1. 分布均匀度（40%）：评估3-8分段的分布是否均匀
-    2. 高分占比（30%）：评估高分（≥7分）占比是否合理（不超过25%）
-    3. 中心分数（30%）：评估平均分是否接近理想值6分
+    肖像得分（v2优化版）：
+    仅评估 3-8 分段的分布均匀度。
+    目标是让候选人评分尽可能均匀分布在 3-8 分之间，避免分数过于集中。
     
     Args:
         scores: 候选人评分列表（1-10分）
@@ -79,31 +78,34 @@ def _score_quality(scores: List[int]) -> ScoreAnalysis:
     avg = float(arr.mean())
     dist_dict = {int(k): int(v) for k, v in zip(*np.unique(arr, return_counts=True))}
 
+    # 计算 3-8 分的分布均匀度
     focus = arr[(arr >= 3) & (arr <= 8)]
     if focus.size:
-        counts = np.bincount(focus, minlength=11)[3:9]
-        max_dev = (counts.max() - counts.min()) / max(1, counts.sum())
-        uniform_score = max(0.0, 1 - max_dev * 1.5)
+        # 统计 3-8 各分数的数量 (bin 3 to 8)
+        # minlength=9 保证有 index 0-8，取 [3:9] 对应 3,4,5,6,7,8
+        counts = np.bincount(focus, minlength=9)[3:9]
+        # 计算最大偏差占比：(最大桶 - 最小桶) / 总样本数
+        max_dev = (counts.max() - counts.min()) / max(1, focus.size)
+        # 均匀度得分：偏差越小分越高
+        # 系数 1.2 意味着如果偏差达到 83% (1/1.2)，得分为 0
+        uniform_score = max(0.0, 1 - max_dev * 1.2)
     else:
-        uniform_score = 0.1
+        uniform_score = 0.0
 
     high_share = float((arr >= HIGH_SCORE_THRESHOLD).mean())
 
-    # 高分占比超过25%开始惩罚
-    high_penalty = max(0.0, (high_share - 0.25) / 0.75)
-    center_score = max(0.0, 1 - abs(avg - 6) / 6)
-
-    # 综合计算肖像得分：三个维度的加权平均
-    # 分布均匀度40% + (1-高分惩罚)30% + 中心分数30%
-    quality = (uniform_score * 0.4) + ((1 - high_penalty) * 0.3) + (center_score * 0.3)
+    # 综合计算肖像得分：100% 取决于分布均匀度
+    quality = uniform_score
+    
     # 将得分映射到1-10分范围，保留1位小数
     quality_score = round(max(1.0, min(10.0, quality * 10)), 1)
 
     # 根据计算结果生成评语
     comment = (
-        "分布集中在高分段，需优化画像" if high_penalty > 0.1  # 高分占比过高
-        else "分布均衡，画像质量良好" if uniform_score > 0.6  # 分布均匀
-        else "分布略偏，可再细化画像"  # 其他情况
+        "分布非常均匀，画像质量极佳" if uniform_score > 0.8
+        else "分布较为均匀，画像质量良好" if uniform_score > 0.6
+        else "分布略有偏差，建议微调" if uniform_score > 0.4
+        else "分布不均，评分过于集中"
     )
 
     return ScoreAnalysis(
@@ -299,7 +301,7 @@ def compile_job_stats(job_name: str) -> Dict[str, Any]:
         (cand.get("analysis") or {}).get("overall")
         for cand in candidates
         if (cand.get("analysis") or {}).get("overall") is not None
-    ][:100]
+    ]
     score_summary = _score_quality(recent_scores)
 
     daily = build_daily_series(candidates, days=7)
@@ -318,7 +320,7 @@ def compile_job_stats(job_name: str) -> Dict[str, Any]:
     )
     # 进展分：近7天进展到SEEK和CONTACT阶段的候选人数
     recent_7days_seek = sum(1 for c in recent_7days_candidates if normalize_stage(c.get("stage")) == STAGE_SEEK)
-    recent_7days_contacted = sum(1 for c in recent_7days_candidates if normalize_stage(c.get("stage")) == STAGE_CONTACT)
+    recent_7days_contacted = sum(1 for c in recent_7days_candidates if c.get("metadata", {}).get("contacted"))
     
     # 进展分 = (近7日候选人数量 + SEEK人数 + CONTACT人数 x 10) × 肖像得分 / 10
     recent_7days_metric = (len(recent_7days_candidates) + recent_7days_seek + recent_7days_contacted * 10) * score_summary.quality_score / 10

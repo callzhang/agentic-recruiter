@@ -90,18 +90,18 @@ function renderDailyChart(container) {
                     borderRadius: 4,
                 },
                 {
-                    label: '已联系',
-                    data: processedData,
-                    backgroundColor: 'rgba(34, 197, 94, 0.6)', // green-500
-                    borderColor: 'rgba(34, 197, 94, 1)',
-                    borderWidth: 1,
-                    borderRadius: 4,
-                },
-                {
                     label: 'SEEK',
                     data: seekData,
                     backgroundColor: 'rgba(99, 102, 241, 0.6)', // indigo-500 with opacity
                     borderColor: 'rgba(99, 102, 241, 1)',
+                    borderWidth: 1,
+                    borderRadius: 4,
+                },
+                {
+                    label: '已联系',
+                    data: processedData,
+                    backgroundColor: 'rgba(34, 197, 94, 0.6)', // green-500
+                    borderColor: 'rgba(34, 197, 94, 1)',
                     borderWidth: 1,
                     borderRadius: 4,
                 }
@@ -613,7 +613,7 @@ function renderJobStats(data) {
                     <div class="text-right">
                         <p class="text-sm opacity-80">肖像得分</p>
                         <p class="text-4xl font-extrabold">${ss.quality_score}</p>
-                        <p class="text-xs opacity-70 mt-1">分布均匀度40% + 高分占比30% + 中心分数30%</p>
+                        <p class="text-xs opacity-70 mt-1">评分分布均匀度</p>
                         <p class="text-sm opacity-80 mt-2">${ss.comment}</p>
                     </div>
                 </div>
@@ -632,7 +632,7 @@ function renderJobStats(data) {
                 <div class="flex items-center justify-between mb-4">
                     <div>
                         <h3 class="text-xl font-bold text-gray-800">${job.job}</h3>
-                        <p class="text-sm text-gray-500">总候选人 ${job.total} · 高分占比 ${(ss.high_share * 100).toFixed(1)}% · 画像质量 ${ss.quality_score}/10</p>
+                        <p class="text-sm text-gray-500">总候选人 ${job.total} · 画像质量 ${ss.quality_score}/10</p>
                         <p class="text-sm text-gray-500">评语：${ss.comment}</p>
                         ${job.today ? `
                         <p class="text-sm text-gray-600 mt-2">

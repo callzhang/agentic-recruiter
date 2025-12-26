@@ -460,10 +460,10 @@ async function process_candidate() {
     let [newStage, currentScore, analysis, isFullAnalysis] = determineStage();
     try {
         // Step 0: short-circuit if already PASS
-        if (getCandidateData('stage') === 'PASS') {
-            if (currentScore <= 4) await passCandidate('分数低于 4，不匹配');
-            return;
-        }
+        // if (getCandidateData('stage') === 'PASS') {
+        //     if (currentScore <= 4) await passCandidate('分数低于 4，不匹配');
+        //     return;
+        // }
 
         // Step 1: Ensure resume is loaded
         const onlineResume = document.getElementById('resume-textarea-online');
@@ -523,6 +523,7 @@ async function process_candidate() {
         }
         // Step 5: PASS stage
         if (currentScore <= 4) {
+            if (newStage !== 'PASS') showToast(`分数低于 4，但是当前状态：${newStage}`, 'error');
             // 兜底策略，确保低分都PASS掉
             await passCandidate('分数低于 4，不匹配');
             newStage = 'PASS';
@@ -733,10 +734,11 @@ async function startAnalysis() {
         swap: 'innerHTML',
         values: values
     });
-    console.log('Analysis completed:', result.overall);
+    debugger;
     // Extract analysis from data attribute
     const analysis_container = document.querySelector('#analysis-content #analysis-result-container');
     const analysis = analysis_container ? JSON.parse(analysis_container.getAttribute('data-analysis')) : null;
+    console.log('Analysis completed:', analysis);
     await updateCandidateData({score: analysis?.overall});
     
     // Update resume type badge in tab row

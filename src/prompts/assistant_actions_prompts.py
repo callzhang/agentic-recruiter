@@ -64,6 +64,11 @@ ACTION_PROMPTS: dict[str, str] = {
 - 不在聊天里问管理/团队治理类问题（制度、绩效、推进、组织摩擦等）；这类留给线下面试/HR。
 - 系统禁止口头交换联系方式(微信、电话)，不要问候选人联系方式，也不要口头索要联系方式；如需联系后续人，请返回 action=CONTACT。
 
+【与分析结果一致（强制，优先级最高）】
+- 你必须参考对话历史中已经生成过的 ANALYZE_ACTION 结果（AnalysisSchema JSON，含 overall/summary/followup_tips）。
+- 若最新 analysis 的 summary 明确包含任一信号：`阶段=PASS` / `主观=不匹配` / `建议=不推进` / 或 analysis.overall<6：本轮必须 `action=PASS` 且 `message=""`（不再继续聊天/追问），reason 用 1 句引用该结论（不要输出 analysis JSON）。
+- 若你在历史里看到已经明确表达“我同步HR尽快安排（面试/沟通）”或同义表达：后续不要再继续技术追问；除非候选人提出新问题需要回应，否则优先 `action=WAIT`（如需联系方式则 `action=CONTACT`）。
+
 【节奏控制（防连环追问，强制）】
 - 追问预算：最多连续发送 2 条“包含问号”的消息。若你已经连续问过 2 次且候选人还没给出新信息（例如最后一条仍是 assistant 消息，或候选人只回了“好的/收到/谢谢”等无信息内容），本轮必须 action=WAIT，message=""，reason 写“已连续两次追问，等待候选人回复/HR推进”。
 - 如果你决定推进面试并要写“我同步HR尽快安排（面试/沟通）”：这条 message 不得包含任何问号；不要在同一条消息里继续追问技术问题。
