@@ -25,6 +25,7 @@ from src.global_logger import logger
 import src.chat_actions as chat_actions
 import src.recommendation_actions as recommendation_actions
 from src.stats_service import compile_all_jobs, send_daily_dingtalk_report, build_daily_candidate_counts
+from src.runtime_utils import start_caffeinate, stop_caffeinate
 
 class BossServiceAsync:
     """Async Playwright driver exposed as FastAPI service.
@@ -72,6 +73,12 @@ class BossServiceAsync:
         self.startup_complete = asyncio.Event()
         self.event_manager = None  # Placeholder for legacy debug endpoint
         self.daily_report_task: Optional[asyncio.Task] = None
+        
+        # Caffeinate handling
+        self.caffeinate_process = None
+        self.last_activity_time = 0.0
+        self.activity_monitor_task: Optional[asyncio.Task] = None
+        
         self.setup_cors()
         self.setup_routes()
         self.setup_exception_handlers()
@@ -97,6 +104,11 @@ class BossServiceAsync:
         # Kick off daily stats report loop (best effort, non-blocking)
         if not self.daily_report_task:
             self.daily_report_task = asyncio.create_task(self._daily_report_loop())
+        
+        # Start activity monitor for caffeinate
+        if not self.activity_monitor_task:
+            self.activity_monitor_task = asyncio.create_task(self._activity_monitor_loop())
+            
         logger.debug("Playwright 初始化完成。")
 
     async def start_browser(self) -> None:
@@ -163,6 +175,14 @@ class BossServiceAsync:
         self.is_logged_in = False
         if self.daily_report_task:
             self.daily_report_task.cancel()
+        
+        # Stop activity monitor and caffeinate
+        if self.activity_monitor_task:
+            self.activity_monitor_task.cancel()
+        if self.caffeinate_process:
+            stop_caffeinate(self.caffeinate_process)
+            self.caffeinate_process = None
+            
         logger.debug("Playwright 已停止。")
 
     async def _daily_report_loop(self) -> None:
@@ -188,6 +208,36 @@ class BossServiceAsync:
                 logger.info("每日战报已发送")
             except Exception as exc:  # noqa: BLE001
                 logger.warning("发送每日战报失败: %s", exc)
+
+    async def _keep_awake(self) -> None:
+        """Keep system awake during browser activity."""
+        self.last_activity_time = asyncio.get_event_loop().time()
+        
+        # If caffeinate is not running, start it
+        if not self.caffeinate_process:
+            self.caffeinate_process = await asyncio.to_thread(start_caffeinate)
+
+    async def _activity_monitor_loop(self) -> None:
+        """Monitor activity and stop caffeinate if idle."""
+        TIMEOUT_SECONDS = 300  # 5 minutes
+        
+        while True:
+            try:
+                await asyncio.sleep(60)  # Check every minute
+                
+                if not self.caffeinate_process:
+                    continue
+                    
+                current_time = asyncio.get_event_loop().time()
+                if current_time - self.last_activity_time > TIMEOUT_SECONDS:
+                    logger.info(f"浏览器空闲超过 {TIMEOUT_SECONDS}秒，停止 Caffeinate")
+                    await asyncio.to_thread(stop_caffeinate, self.caffeinate_process)
+                    self.caffeinate_process = None
+            except asyncio.CancelledError:
+                return
+            except Exception as e:
+                logger.warning(f"Activity monitor error: {e}")
+                await asyncio.sleep(60)
 
     # ------------------------------------------------------------------
     # Browser/session helpers
@@ -254,6 +304,10 @@ class BossServiceAsync:
         continue to serve status information.
         
         """
+
+        # Update activity timestamp whenever we ensure a session (implies activity)
+        await self._keep_awake()
+
         while True:
             async with self.browser_lock:
                 page = await self._prepare_browser_session()

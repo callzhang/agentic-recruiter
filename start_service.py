@@ -181,44 +181,16 @@ def _build_scheduler_payload(base_url: str, options: Dict[str, Any]) -> Dict[str
         payload['greeting_template'] = greeting_template
     return payload
 
-def start_caffeinate():
-    """Start caffeinate to prevent system sleep (macOS only)."""
-    caffeinate_process = None
-    if sys.platform == "darwin":
-        try:
-            # -d: prevent display from sleeping
-            # -i: prevent system from idle sleeping
-            # -m: prevent disk from idle sleeping
-            caffeinate_process = subprocess.Popen(
-                ["caffeinate", "-d", "-i", "-m"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
-            )
-            print("[+] 已启动 caffeinate 防止系统休眠 (macOS)")
-            return caffeinate_process
-        except Exception as e:
-            print(f"[!] 启动 caffeinate 失败: {e}")
-    return None
 
-def stop_caffeinate(caffeinate_process):
-    """Stop caffeinate process."""
-    if caffeinate_process:
-        try:
-            caffeinate_process.terminate()
-            caffeinate_process.wait(timeout=2)
-            print("[+] 已停止 caffeinate")
-        except Exception:
-            try:
-                caffeinate_process.kill()
-            except Exception:
-                pass
+
+
 
 def start_service(*, scheduler_options: Optional[Dict[str, Any]] | None = None):
     """启动服务"""
     print("[*] 启动Boss直聘后台服务...")
     scheduler_config = dict(scheduler_options or {})
     scheduler_started = False
-    caffeinate_process = None
+    scheduler_started = False
     
     # 安装依赖
     # if not install_dependencies():
@@ -227,7 +199,6 @@ def start_service(*, scheduler_options: Optional[Dict[str, Any]] | None = None):
     # 启动服务
     try:
         # Start caffeinate to prevent system sleep during service execution (macOS only)
-        caffeinate_process = start_caffeinate()
         env = os.environ.copy()
         env['BOSS_SERVICE_RUNNING'] = 'true'
         host = env.get('BOSS_SERVICE_HOST', '127.0.0.1')
@@ -464,8 +435,7 @@ def start_service(*, scheduler_options: Optional[Dict[str, Any]] | None = None):
             except Exception:
                 pass
         
-        # Stop caffeinate
-        stop_caffeinate(caffeinate_process)
+
         
         # 可选：清理Chrome进程（通常保留以便下次使用）
         cleanup_chrome = os.environ.get('CLEANUP_CHROME_ON_EXIT', 'false').lower() == 'true'
@@ -482,8 +452,7 @@ def start_service(*, scheduler_options: Optional[Dict[str, Any]] | None = None):
                 requests.post(f"{base_url}/automation/scheduler/stop", timeout=10)
             except Exception:
                 pass
-        # Stop caffeinate
-        stop_caffeinate(caffeinate_process)
+
         print("[+] 服务已停止")
     except Exception as e:
         print(f"[!] 启动服务失败: {e}")
@@ -492,8 +461,7 @@ def start_service(*, scheduler_options: Optional[Dict[str, Any]] | None = None):
                 requests.post(f"{base_url}/automation/scheduler/stop", timeout=10)
             except Exception:
                 pass
-        # Stop caffeinate on error
-        stop_caffeinate(caffeinate_process)
+
         return False
     
     return True

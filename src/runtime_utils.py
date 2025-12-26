@@ -10,7 +10,45 @@ from datetime import datetime
 
 from .global_logger import get_logger
 
+
+from .global_logger import get_logger
+
 logger = get_logger()
+
+
+def start_caffeinate():
+    """Start caffeinate to prevent system sleep (macOS only)."""
+    caffeinate_process = None
+    if sys.platform == "darwin":
+        try:
+            # -d: prevent display from sleeping
+            # -i: prevent system from idle sleeping
+            # -m: prevent disk from idle sleeping
+            caffeinate_process = subprocess.Popen(
+                ["caffeinate", "-d", "-i", "-m"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+            logger.info("[+] 已启动 caffeinate 防止系统休眠 (macOS)")
+            return caffeinate_process
+        except Exception as e:
+            logger.error(f"[!] 启动 caffeinate 失败: {e}")
+    return None
+
+
+def stop_caffeinate(caffeinate_process):
+    """Stop caffeinate process."""
+    if caffeinate_process:
+        try:
+            caffeinate_process.terminate()
+            caffeinate_process.wait(timeout=2)
+            logger.info("[+] 已停止 caffeinate")
+        except Exception:
+            try:
+                caffeinate_process.kill()
+            except Exception:
+                pass
+
 
 
 def get_repo_path() -> Path:
