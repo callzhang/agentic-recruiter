@@ -420,7 +420,7 @@ def upsert_candidate(**candidate) -> Optional[str]:
         # Generate a unique candidate_id using UUID
         candidate_id = str(uuid.uuid4())
         candidate['candidate_id'] = candidate_id
-        logger.debug(f'upsert_candidate: generated candidate_id {candidate_id} for new candidate: {candidate.get("name")}');
+        logger.debug(f'upsert_candidate: generated {candidate_id} for new candidate: {candidate.get("name")}');
         if not candidate.get("resume_vector"): # generate embedding if not provided
             candidate["resume_vector"] = [0.0] * _zilliz_config["embedding_dim"]
         _client.insert(collection_name=_collection_name, data=[candidate])

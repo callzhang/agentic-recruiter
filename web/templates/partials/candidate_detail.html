@@ -292,18 +292,12 @@
         </div>
         <div id="message-content" class="p-2">
             {% set chat_history_for_message = metadata.history if metadata and metadata.history else [] %}
-            {% set ns = namespace(message='', action='', reason='', payload=None, placeholder='') %}
+            {% set ns = namespace(message='', action='', reason='', placeholder='') %}
             {% for msg in chat_history_for_message | reverse %}
-                {% if ns.payload is none and msg.role == 'assistant' %}
-                    {% set candidate_payload = msg.payload if msg.payload is defined and msg.payload else (msg.content if msg.content is mapping else None) %}
-                    {% set ns.payload = candidate_payload %}
-                    {% if candidate_payload %}
-                        {% set ns.action = candidate_payload.action if candidate_payload.action else (msg.action if msg.action is defined else '') %}
-                        {% set ns.reason = candidate_payload.reason if candidate_payload.reason else (msg.reason if msg.reason is defined else '') %}
-                        {% set ns.message = candidate_payload.message if candidate_payload.message else (msg.content or msg.message or '') %}
-                    {% else %}
-                        {% set ns.message = msg.content or msg.message or '' %}
-                    {% endif %}
+                {% if not ns.message and msg.role == 'assistant' %}
+                    {% set ns.action = msg.action if msg.action else '' %}
+                    {% set ns.reason = msg.reason if msg.reason else '' %}
+                    {% set ns.message = msg.message if msg.message else (msg.content if msg.content else '') %}
                 {% endif %}
             {% endfor %}
             {% if generated_message not in ['', 'None', 'null', None] %}
@@ -315,7 +309,6 @@
             {% set message = ns.message %}
             {% set action = ns.action %}
             {% set reason = ns.reason %}
-            {% set payload = ns.payload %}
             {% set placeholder_message = ns.placeholder %}
             {% include 'partials/message_result.html' with context %}
         </div>
@@ -349,8 +342,7 @@
                 {% set icon = '👼' if is_candidate else '👨‍💻‍' %}
                 {% set align_class = 'justify-start' if is_candidate else 'justify-end' %}
                 {% set text_align = 'text-left' if is_candidate else 'text-right' %}
-                {% set payload = msg.payload if msg.payload is defined and msg.payload else (msg.content if msg.content is mapping else None) %}
-                {% set display_text = payload.message if payload and payload.message else (msg.content or msg.message or '') %}
+                {% set display_text = msg.message if msg.message else (msg.content or '') %}
                 <div class="flex {{ align_class }}">
                     <div class="{{ bg_color }} rounded-lg p-3 max-w-[80%]">
                         <div class="flex items-start space-x-2 {{ 'flex-row-reverse' if not is_candidate else '' }}">
@@ -373,16 +365,16 @@
                                         </span>
                                     {% endif %}
                                 </div>
-                                {% if payload and payload.action %}
+                                {% if msg.action %}
                                 <div class="mb-1">
                                     <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-indigo-100 text-indigo-700">
-                                        {{ payload.action }}
+                                        {{ msg.action }}
                                     </span>
                                 </div>
                                 {% endif %}
                                 <p class="text-gray-700 whitespace-pre-wrap text-sm">{{ display_text }}</p>
-                                {% if payload and payload.reason %}
-                                <p class="text-gray-500 whitespace-pre-wrap text-xs mt-2">{{ payload.reason }}</p>
+                                {% if msg.reason %}
+                                <p class="text-gray-500 whitespace-pre-wrap text-xs mt-2">{{ msg.reason }}</p>
                                 {% endif %}
                             </div>
                         </div>
@@ -624,7 +616,7 @@ async function fetchFullResume() {
     switchResumeTab('full');
 }
 
-function getMessageResultState() {
+function getGeneratedMessage() {
     const container = document.getElementById('message-result-container');
     const textarea = document.getElementById('message-text');
     const message = textarea?.value?.trim() || '';
@@ -634,7 +626,9 @@ function getMessageResultState() {
 }
 
 async function generateMessage(force = false) {
-    showToast('生成消息...', 'info');
+    const analysis_container = document.querySelector('#analysis-content #analysis-result-container');
+    const analysis = analysis_container ? JSON.parse(analysis_container.getAttribute('data-analysis')) : null;
+    showToast(`生成消息...${analysis?.followup_action}`, 'info');
     const values = getCandidateData();
     const mode = values.mode;
     // if force is true or mode is followup, use followup action
@@ -644,10 +638,10 @@ async function generateMessage(force = false) {
         swap: 'innerHTML',
         values: {...values, purpose: purpose, force: force}
     });
-    const state = getMessageResultState();
-    console.log('Generated message:', state);
-    await updateCandidateData({generated_message: state.message});
-    return state;
+    const message = getGeneratedMessage();
+    console.log('Generated message:', message.message||message.reason);
+    await updateCandidateData({generated_message: message.message});
+    return message;
 }
 
 async function greetAndSendMessage() {
@@ -734,7 +728,6 @@ async function startAnalysis() {
         swap: 'innerHTML',
         values: values
     });
-    debugger;
     // Extract analysis from data attribute
     const analysis_container = document.querySelector('#analysis-content #analysis-result-container');
     const analysis = analysis_container ? JSON.parse(analysis_container.getAttribute('data-analysis')) : null;
@@ -979,16 +972,19 @@ async function shouldReply() {
     const greeted = values.greeted;
     const viewed = values.viewed;
     const stage = values.stage;
+    // if Boss marks this conversation as unread, assume it needs a reply.
+    if (viewed === false) return true;
+    // For recommend mode, only rely on greeted flag
+    if (mode === 'recommend') {
+        return !greeted; // if not greeted, we need to reply
+    }
+    // if the candidate is already passed, don't reply
+    if (stage === 'PASS') return false;
 
     function parseTimestamp(ts) {
         if (!ts) return null;
         const d = new Date(String(ts).replace(' ', 'T'));
         return isNaN(d.getTime()) ? null : d;
-    }
-
-    function isIgnorableAssistantMessage(content) {
-        const text = (content || '').trim();
-        return text.startsWith('方便发一份简历过来吗');
     }
 
     function extractNewUserMessagesAndLastAssistant(history) {
@@ -1005,12 +1001,11 @@ async function shouldReply() {
             const content = msg.content || '';
             if (role === 'assistant') {
                 if (!lastGeneratedAction) {
-                    const payload = (msg.payload && typeof msg.payload === 'object') ? msg.payload : null;
-                    const action = (payload && payload.action) || msg.action || '';
+                    const action = msg.action || '';
                     if (action) lastGeneratedAction = String(action).toUpperCase();
                 }
                 if (!lastAssistantMessage) lastAssistantMessage = msg;
-                if (isIgnorableAssistantMessage(content)) continue;
+                if (content.includes('方便发一份简历过来吗')) continue;
                 break;
             }
             if (role === 'user') {
@@ -1027,41 +1022,25 @@ async function shouldReply() {
     if (greeted && values.updated_at && diffMinutes < 10) {
         return false;
     }
-    // For recommend mode, only rely on greeted flag
-    if (mode === 'recommend') {
-        return !greeted; // if not greeted, we need to reply
-    }
-    // if the candidate is already passed, don't reply
-    if (stage === 'PASS') return false;
-
-    const history = values?.metadata?.history || [];
-    if (!Array.isArray(history) || history.length === 0) {
-        if (!chat_id) return false;
-        const response = await fetch('/candidates/should-reply', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify(values)
-        });
-        const data = await window.handleApiResponse(response);
-        return data === true || (data && data.should_reply === true);
-    }
-    const { newUserMessages, lastAssistantMessage, lastGeneratedAction } = extractNewUserMessagesAndLastAssistant(history);
-    // if the last action is WAIT or PASS, don't reply
-    if (['WAIT', 'PASS'].includes(lastGeneratedAction)) return false;
-    // if there are new user messages, we should reply
-    if (newUserMessages.length > 0) return true;
-    // if Boss marks this conversation as unread, assume it needs a reply.
-    if (viewed === false) return true;
-
     // Followup: if no new user messages, allow followup after a time window unless last action says WAIT/PASS.
     if (mode === 'followup') {
-        const lastAssistantTs = parseTimestamp(lastAssistantMessage?.timestamp) || (values.updated_at ? new Date(values.updated_at) : null);
-        if (!lastAssistantTs) return false;
-        const diffDays = (now - lastAssistantTs) / (1000 * 60 * 60 * 24);
+        const diffDays = diffMinutes / (60 * 24);
         return diffDays >= 3; // followup after 3 days
     }
-
-    return false;
+    // if updated less than 5 minutes, repy on local metadata
+    if (diffMinutes < 5) {
+        const { newUserMessages, lastAssistantMessage, lastGeneratedAction } = extractNewUserMessagesAndLastAssistant(history);
+        if (newUserMessages.length > 0) return true;
+        if (lastGeneratedAction === 'WAIT') return false;
+    }
+    // fallback to backend (check user's new message)
+    const response = await fetch('/candidates/should-reply', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(values)
+    });
+    const should_reply = await window.handleApiResponse(response);
+    return should_reply;
 }
 
 

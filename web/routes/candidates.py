@@ -254,7 +254,7 @@ async def init_chat(
         return candidate
     
     if mode == "recommend":
-        history = [{'role': 'user', 'content': last_message}]
+        history = [{'role': 'developer', 'content': f"候选人: {name}, 申请岗位: {job_applied}, 基本信息: {last_message}"}]
     else:
         assert chat_id is not None, "chat_id is required for chat mode"
         page = await boss_service.service._ensure_browser_session()
@@ -356,58 +356,30 @@ async def generate_message(
     candidate_id: str = Form(...),
     chat_id: Optional[str] = Form(None),
     conversation_id: str = Form(...),
-    purpose: str = Form(...),
     force: bool = Form(False),
     index: Optional[int] = Form(None),
 ):
     """Generate message for candidate. Requires conversation_id to be initialized first."""
-    # { "type": "candidate/recruiter", "timestamp": "2025-11-10 10:00:00", "message": "你好，我叫张三", "status": "未读" }
-    page = await boss_service.service._ensure_browser_session()
-    stored_candidate = get_candidate_by_dict({"candidate_id": candidate_id, "chat_id": chat_id}, strict=False) or {}
-    last_message = None
-    # Get chat history from browser to decide whether we have new user messages to respond to.
-    if mode == "recommend":
+    should_generate, new_user_messages, assistant_message, chat_history = await _should_generate_message(candidate_id, chat_id, mode, force)
+    # add "[沉默]" to the input message to prevent random errors with empty input
+    if mode == 'followup' and not new_user_messages:
+        new_user_messages = "[沉默]"
+    elif mode == 'recommend':
         new_user_messages = [
-            {"content": "你好，我们这个岗位正在招聘，想跟你沟通一下", "role": "assistant"},
-            {"content": "岗位介绍一下，我看看是否匹配", "role": "user"},
+            {"content": "你好，我们这个岗位正在招聘，想跟你沟通一下", "role":"assistant"}, 
+            {"content": "我是否匹配这个岗位？", "role":"user"},
         ]
-        chat_history = new_user_messages
-    else:
-        if not chat_id:
-            raise RuntimeError("No chat_id provided for chat mode")
-        new_user_messages = []
-        chat_history = await chat_actions.get_chat_history_action(page, chat_id)
-        for msg in chat_history[::-1]:
-            role = msg.get("role")
-            content = msg.get("content") or ""
-            if role == "assistant":
-                if not content.startswith("方便发一份简历过来吗"):
-                    last_message = msg
-                    break
-            elif role == "user":
-                new_user_messages.insert(0, {"content": content, "role": role})
-    # check if should generate message
-    should_generate = False
-    if bool(new_user_messages):
-        should_generate = True
-    elif purpose == "FOLLOWUP_ACTION":
-        if last_message.get('action') in ['WAIT', 'PASS']:# skip if last message is WAIT or PASS
-            should_generate = False
-        else:
-            should_generate = True
-    elif force:
-        should_generate = True
-    if not should_generate:
+    elif not should_generate:
         return templates.TemplateResponse(
             "partials/message_result.html",
-            {"request": request, **last_message},
+            {"request": request, **assistant_message},
         )
-
+    # generate message
     generated = await asyncio.to_thread(
         assistant_actions.generate_message,
-        input_message=new_user_messages or "[沉默]",
+        input_message=new_user_messages,
         conversation_id=conversation_id,
-        purpose=purpose,
+        purpose="FOLLOWUP_ACTION" if mode == "followup" else "CHAT_ACTION",
     )
     logger.debug("Generated message: %s", generated)
     action = generated.get("action", "")
@@ -418,7 +390,6 @@ async def generate_message(
         "role": "assistant",
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "content": message_text,
-        "payload": generated,
         "action": action,
         "reason": reason,
     }
@@ -435,7 +406,7 @@ async def generate_message(
     # return message result
     return templates.TemplateResponse(
         "partials/message_result.html",
-        {"request": request, "message": message_text, "action": action, "reason": reason, "payload": generated},
+        {"request": request, "message": message_text, "action": action, "reason": reason},
     )
 
 @router.post("/should-reply")
@@ -443,89 +414,9 @@ async def should_reply(
     chat_id: Optional[str] = Body(None),
     candidate_id: Optional[str] = Body(None),
     mode: Optional[str] = Body(None),
-    followup_after_days: int = Body(3),
 ) -> bool:
-    """Check if we should auto-generate a message based on Boss chat history.
-    
-    Args:
-        chat_id: Chat ID to get chat history from browser
-        mode: Mode (recommend/chat/greet/followup)
-        followup_after_days: For followup mode, allow followup after this many days since last assistant message
-    
-    Returns:
-        bool
-    """
-
-
-    def extract_new_user_messages_and_last_assistant(history: list[dict[str, Any]]) -> tuple[list[dict[str, str]], Optional[dict[str, Any]]]:
-        new_user_messages = []
-        last_assistant_message = None
-
-        for msg in history[::-1]:
-            role = msg.get("role")
-            if role == "developer": continue
-            content = msg.get("content") or ""
-            if role == "assistant":
-                if "方便发一份简历过来吗" in content: continue
-                last_assistant_message = msg
-                break
-            if role == "user":
-                new_user_messages.insert(0, msg)
-        return new_user_messages, last_assistant_message
-
-    # For recommend mode, always return True (no chat history available)
-    if mode == "recommend":
-        return True
-    
-    # Without chat_id we cannot inspect history; avoid triggering generate-message which would error.
-    if not chat_id:
-        return False
-    
-    # Get chat history from browser
-    page = await boss_service.service._ensure_browser_session()
-    chat_history = await chat_actions.get_chat_history_action(page, chat_id)
-    stored_candidate = get_candidate_by_dict({"chat_id": chat_id, "candidate_id": candidate_id}, strict=False)
-    stored_history = stored_candidate.get("metadata", {}).get("history", [])
-    if not chat_history:
-        # If we cannot read history, be conservative: don't auto-generate (user can force regenerate).
-        return False
-    elif not stored_history:
-        # update candidate history if missing
-        metadata = stored_candidate.get("metadata")
-        metadata.update({"history": chat_history})
-        stored_candidate.update({"metadata": metadata})
-        upsert_candidate(**stored_candidate)
-
-    # get new user messages and last assistant message
-    new_user_messages, last_assistant_message = extract_new_user_messages_and_last_assistant(chat_history)
-    # if there are new user messages, we should reply
-    if new_user_messages: return True
-    # if the candidate is already passed, don't reply
-    if stored_candidate.get("stage") == STAGE_PASS: return False
-    # if the last action is WAIT or PASS, don't reply
-    last_action = last_assistant_message.get("action", "").upper() if last_assistant_message else None
-    if last_action in {"WAIT", "PASS"}: return False
-    # Followup mode: optionally allow followup after a time window, unless we previously decided to WAIT/PASS.
-    if mode == "followup":
-        timestamp_str = last_assistant_message.get("timestamp", "")
-        try:
-            # Extract date and time using regex, removing Chinese text like '昨天', '今天', etc.
-            # Pattern: YYYY-MM-DD ... HH:MM:SS or YYYY-MM-DD ... HH:MM
-            match = re.search(r'(\d{4}-\d{2}-\d{2})\s+.*?(\d{2}:\d{2}(?::\d{2})?)', timestamp_str)
-            if match:
-                date_part = match.group(1)
-                time_part = match.group(2)
-                clean_timestamp = f"{date_part} {time_part}"
-            else:
-                # Fallback: try to parse as-is
-                clean_timestamp = timestamp_str
-            last_ts = parser.parse(clean_timestamp).replace(tzinfo=None)
-        except (ValueError, Exception) as e:
-            logger.warning(f"Failed to parse timestamp '{timestamp_str}': {e}")
-            return False
-        diff_days = (datetime.now() - last_ts).days
-        return diff_days >= followup_after_days
-    return False
+    should_generate, _, _, _ = await _should_generate_message(candidate_id, chat_id, mode)
+    return should_generate
 
 @router.post("/send", response_class=HTMLResponse)
 async def send_message(
@@ -775,8 +666,6 @@ async def request_contact(
     if not candidate:
         raise RuntimeError(f"Candidate not found for chat_id: {kwargs.get('chat_id')}")
     metadata = candidate.get("metadata", {})
-    phone_number = metadata.get("phone_number")
-    wechat_number = metadata.get("wechat_number")
     requested = False
     if history:=metadata.get("history"):
         if any(h for h in history if h.get("role") == "developer" and\
@@ -835,3 +724,100 @@ async def get_thread_history(
         "messages": messages_data.get("messages", []),
         "conversation_id": conversation_id
     })
+
+
+#----------------------
+# Helper Functions
+#----------------------
+async def _get_new_user_messages_and_assistant_message(candidate) -> Optional[dict]:
+    """Get new user messages and assistant action from candidate metadata, 
+    fall back to get chat history from browser(and upsert history if empty).
+    """
+    if not candidate.get("chat_id"):
+        return [], {}, []
+    # define a helper function to process history
+    def _process_history(history):
+        assistant_message = {}
+        new_user_messages = []
+        # { "role": "assistant/user", "timestamp": "2025-11-10 10:00:00", "content": "你好，我叫张三", "status": "未读" }
+        for msg in history[::-1]:
+            role = msg.get("role")
+            content = msg.get("content")
+            if role == "assistant":
+                if not content.startswith("方便发一份简历过来吗"):
+                    assistant_message = msg
+                    break
+            elif role == "user":
+                new_user_messages.insert(0, {"content": content, "role": role})
+        return new_user_messages, assistant_message
+    # first check user messages from metadata -> this is not working to detect new user messages from browser
+    metadata_history = candidate.get('metadata', {}).get('history')
+    page = await boss_service.service._ensure_browser_session()
+    chat_history = await chat_actions.get_chat_history_action(page, candidate["chat_id"])
+    new_user_messages, assistant_message = _process_history(chat_history)
+    # update history if missing
+    if not metadata_history:
+        logger.warning(f"Candidate {candidate['candidate_id']} has no metadata history, updating...")
+        upsert_candidate(
+            candidate_id=candidate["candidate_id"],
+            metadata={
+                "history": new_user_messages
+            }
+        )
+    return new_user_messages, assistant_message, chat_history
+
+FOLLOWUP_DELTA_DAYS = 2
+MAX_FOLLOWUP_DAYS = 20
+async def _should_generate_message(candidate_id: str, chat_id: str, mode: str, force = False) -> tuple[bool, list]:
+    """Check if should generate message for candidate.
+    Args:
+        chat_id: Chat ID to get chat history from browser
+        mode: Mode (recommend/chat/greet/followup)
+        force: Force generate message
+    Returns:
+        bool, list
+    """   
+    should_generate = False
+    new_user_messages, chat_history = [], []
+    if force: should_generate = True
+    # get candidate from database
+    candidate = get_candidate_by_dict({"candidate_id": candidate_id})
+    # if candidate not saved, it's probably a new candidate, so we should generate message
+    if not candidate: return True, [], {}, []
+    # For recommend mode, always return True (no chat history available)
+    if mode == "recommend": return True, [], {}, []
+    # if the candidate is already passed, don't reply
+    if candidate.get("stage") == STAGE_PASS: return False, [], {}, []
+    # Get new user messages and assistant message from candidate metadata
+    new_user_messages, assistant_message, chat_history = await _get_new_user_messages_and_assistant_message(candidate)
+    if bool(new_user_messages):
+        should_generate = True
+    elif mode == "followup":
+        last_action = assistant_message.get("action")
+        # check if updated_at has exceeded FOLLOWUP_MAX_DAYS
+        updated_at = candidate.get("updated_at")
+        if updated_at and (datetime.now() - updated_at).days > MAX_FOLLOWUP_DAYS:
+            should_generate = True
+        # skip if last message is WAIT or PASS
+        if last_action in ['WAIT', 'PASS']:
+            should_generate = False
+        else:
+            # only generate message if last message is within followup_after_days
+            timestamp_str = assistant_message.get("timestamp", "")
+            try:
+                last_ts = parser.parse(timestamp_str).replace(tzinfo=None)
+            except (ValueError, Exception) as e:
+                # Extract date and time using regex, removing Chinese text like '昨天', '今天', etc.
+                # Pattern: YYYY-MM-DD ... HH:MM:SS or YYYY-MM-DD ... HH:MM
+                match = re.search(r'(\d{4}-\d{2}-\d{2})\s+.*?(\d{2}:\d{2}(?::\d{2})?)', timestamp_str)
+                if match:
+                    date_part = match.group(1)
+                    time_part = match.group(2)
+                    clean_timestamp = f"{date_part} {time_part}"
+                    last_ts = parser.parse(clean_timestamp).replace(tzinfo=None)
+                else:
+                    logger.warning(f"Failed to parse timestamp '{timestamp_str}': {e}")
+                    should_generate = False
+            diff_days = (datetime.now() - last_ts).days
+            should_generate = diff_days >= FOLLOWUP_DELTA_DAYS
+    return should_generate, new_user_messages, assistant_message, chat_history
