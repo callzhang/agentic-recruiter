@@ -464,7 +464,7 @@ async def request_full_resume_action(page: Page, chat_id: str, timeout: int = 30
     
 
 # @retry(stop=stop_after_attempt(2), wait=wait_fixed(1))
-async def accept_full_resume_action(page: Page, chat_id: str, timeout_ms: int = 1000) -> bool:
+async def accept_full_resume_action(page: Page, chat_id: str, timeout_ms: int = 2000) -> bool:
     """Accept candidate's resume. Returns True on success, raises ValueError if accept button not found."""
     await _prepare_chat_page(page)
     await _go_to_chat_dialog(page, chat_id)

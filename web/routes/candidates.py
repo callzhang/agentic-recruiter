@@ -768,12 +768,12 @@ async def _get_new_user_messages_and_assistant_message(candidate) -> Optional[di
     chat_history = await chat_actions.get_chat_history_action(page, candidate["chat_id"])
     new_user_messages, assistant_message, _, _ = _check_history(chat_history, skip_words=('方便发一份简历过来吗'))
     # update history if missing
-    if not metadata_history:
+    if not metadata_history or len(metadata_history) < len(chat_history):
         logger.warning(f"Candidate {candidate['candidate_id']} has no metadata history, updating...")
         upsert_candidate(
             candidate_id=candidate["candidate_id"],
             metadata={
-                "history": new_user_messages
+                "history": chat_history
             }
         )
     return new_user_messages, assistant_message, chat_history

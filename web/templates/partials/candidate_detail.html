@@ -479,7 +479,7 @@ async function process_candidate() {
         [newStage, currentScore, analysis, isFullAnalysis] = determineStage();
         let needReply = await shouldReply();
         const {mode, name, job_applied, notified} = getCandidateData();
-
+        
         // Step 4a: CHAT stage -> generate message if needed
         if (newStage === 'CHAT' && needReply) {
             const gen = await generateMessage(false);

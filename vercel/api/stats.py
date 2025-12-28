@@ -280,7 +280,8 @@ def build_daily_series(candidates: List[Dict[str, Any]], days: int = 7) -> List[
         if normalize_stage(cand.get("stage")) == STAGE_SEEK:
             bucket[day]["seek"] += 1
         # Check if processed: strictly contacted metadata
-        contacted = cand.get("metadata", {}).get("contacted")
+        metadata = cand.get("metadata") or {}
+        contacted = metadata.get("contacted")
         if contacted:
             bucket[day]["processed"] += 1
 
@@ -417,7 +418,6 @@ def search_candidates_advanced(
         filter=filter_expr,
         output_fields=fields,
         limit=limit,
-        order_by=order_clause,
     )
     # Clean Milvus results immediately to prevent bytes keys from propagating
     if results:
@@ -1203,4 +1203,11 @@ class handler(BaseHTTPRequestHandler):
 
             _send_json(self, 404, {'success': False, 'error': 'Not found'})
         except Exception as e:
-            _send_json(self, 500, {'success': False, 'error': f"{type(e).__name__}: {e}"})
+            # Print full traceback to stderr for Vercel logs
+            import traceback
+            error_msg = f"{type(e).__name__}: {str(e)}"
+            error_trace = traceback.format_exc()
+            print(f"ERROR in stats API: {error_msg}", file=sys.stderr)
+            print(error_trace, file=sys.stderr)
+            sys.stderr.flush()
+            _send_json(self, 500, {'success': False, 'error': error_msg})
