@@ -548,28 +548,21 @@ const CycleReplyHelpers = {
             throw new Error('无法找到候选人列表容器');
         }
         
-        let candidateCards = candidateList.querySelectorAll('.candidate-card');
+        // Always load candidates list (removed the skip logic)
+        // Use the activeTab from candidateTabs component, fallback to mode
+        const activeTab = candidateTabs?.activeTab || mode;
         
-        if (candidateCards.length === 0) {
-            // Use the activeTab from candidateTabs component, fallback to mode
-            const activeTab = candidateTabs?.activeTab || mode;
-            
-            // load candidates list
-            try {
-                await window.loadCandidatesList(activeTab);
-                // await this.waitUntil(
-                //     () => candidateList.querySelectorAll('.candidate-card').length > 0 || candidateList.querySelector('#empty-message'),
-                //     { timeoutMs: 5000 }
-                // );
-            } catch (error) {
-                return { success: false, error: error };
-            }
-            
-            candidateCards = candidateList.querySelectorAll('.candidate-card');
-        } else {
-            console.log(`列表已有 ${candidateCards.length} 人，跳过查询`);
+        try {
+            await window.loadCandidatesList(activeTab);
+            // await this.waitUntil(
+            //     () => candidateList.querySelectorAll('.candidate-card').length > 0 || candidateList.querySelector('#empty-message'),
+            //     { timeoutMs: 5000 }
+            // );
+        } catch (error) {
+            return { success: false, error: error };
         }
         
+        const candidateCards = candidateList.querySelectorAll('.candidate-card');
         return { success: true, candidateCards };
     },
     
@@ -634,9 +627,6 @@ async function startProcessCandidate() {
         return;
     }
     
-    // Check if "process all modes" checkbox is checked
-    const processAllModes = document.getElementById('process-all-modes-checkbox')?.checked || false;
-    
     CycleReplyHelpers.resetState();
     cycleReplyState.running = true;
     CycleReplyHelpers.setButton(true);
@@ -647,6 +637,9 @@ async function startProcessCandidate() {
     let total_failed = 0;
     let total_skipped = 0;
     try {
+        // Check if "process all modes" checkbox is checked
+        const processAllModes = document.getElementById('process-all-modes-checkbox')?.checked || false;
+        
         while (cycleReplyState.running && !cycleReplyState.stopRequested) {
             // Check if 5 minutes have passed without processing any candidate
             const idleTime = Date.now() - cycleReplyState.lastProcessedTime;
@@ -658,9 +651,7 @@ async function startProcessCandidate() {
             
             // Determine current mode
             const candidateTabs = CycleReplyHelpers.getCandidateTabs();
-            const mode = processAllModes 
-                ? CYCLE_MODES[cycleReplyState.modeIndex]
-                : (candidateTabs.activeTab || 'recommend');
+            const mode = processAllModes ? CYCLE_MODES[cycleReplyState.modeIndex] : (candidateTabs.activeTab || 'recommend');
             
             // Process mode (switch tab if needed)
             const result = await CycleReplyHelpers.processMode(mode, candidateTabs);
@@ -688,6 +679,19 @@ async function startProcessCandidate() {
             // Process candidates in current mode
             // Convert to Array immediately to avoid NodeList mutation issues when cards are removed
             let cards = Array.from(result.candidateCards || document.querySelectorAll('.candidate-card'));
+            
+            // If no candidates found, stop processing (prevents infinite loop)
+            if (cards.length === 0) {
+                console.log(`[${mode}] 无候选人可处理，停止`);
+                if (!processAllModes) {
+                    break; // Stop if processing single mode
+                }
+                // Continue to next mode if processing all modes
+                cycleReplyState.modeIndex = (cycleReplyState.modeIndex + 1) % CYCLE_MODES.length;
+                await CycleReplyHelpers.sleep(1000);
+                continue;
+            }
+            
             let processed = 0;
             let failed = 0;
             let skipped = 0;
@@ -746,7 +750,19 @@ async function startProcessCandidate() {
                 cycleReplyState.modeIndex = (cycleReplyState.modeIndex + 1) % CYCLE_MODES.length;
                 await CycleReplyHelpers.sleep(1000);
             } else {
-                break;
+                // If not processing all modes, refresh the current candidate list and continue
+                console.log(`[${mode}] 刷新候选人列表以继续处理...`);
+                // Clear the candidate list by calling loadCandidatesList again
+                const activeTab = candidateTabs.activeTab || mode;
+                try {
+                    await window.loadCandidatesList(activeTab);
+                    await CycleReplyHelpers.sleep(1000);
+                    // Loop will continue and processMode will pick up the new candidates
+                } catch (error) {
+                    console.error(`刷新候选人列表失败: ${error}`);
+                    showToast(`刷新候选人列表失败: ${error.message}`, 'error');
+                    break; // Stop if refresh fails
+                }
             }
         }
     } finally {

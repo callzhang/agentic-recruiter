@@ -591,8 +591,6 @@ async def fetch_full_resume(
     candidate_id = form_data.get("candidate_id")
     chat_id = form_data.get("chat_id")
     mode = form_data.get("mode")
-    job_id = form_data.get("job_id")
-    form_data = await request.form()
     kwargs = dict(form_data)
     # Only for chat/greet/followup modes, not recommend
     if mode == "recommend":
@@ -604,10 +602,13 @@ async def fetch_full_resume(
     # skip if already requested
     full_resume_text, requested = None, False
     candidate = get_candidate_by_dict(kwargs, strict=False)
-    if history:=candidate.get("metadata", {}).get("history"):
-        if any(h for h in history if h.get("role") == "developer" and h.get("content") == "简历请求已发送"):
-            requested = True
-            full_resume_text = candidate.get("full_resume")
+    # if history:=candidate.get("metadata", {}).get("history"):
+    page = await boss_service.service._ensure_browser_session()
+    chat_history = await chat_actions.get_chat_history_action(page, chat_id)
+    if any(h for h in chat_history if h.get("role") == "developer" and h.get("content") == "简历请求已发送"):
+        requested = True
+        full_resume_text = candidate.get("full_resume")
+    
     if not full_resume_text:
         # Try to get full resume only
         page = await boss_service.service._ensure_browser_session()
@@ -620,7 +621,10 @@ async def fetch_full_resume(
             candidate_id=candidate_id,
             full_resume=full_resume_text,
             chat_id=chat_id,
-            mode=mode
+            metadata={
+                "history": chat_history,
+                "full_resume_requested": requested,
+            }
         )
         return HTMLResponse(
             content=f'<textarea id="resume-textarea-full" readonly class="w-full h-64 p-2 bg-gray-50 border rounded-lg font-mono text-sm">{full_resume_text}</textarea>'
@@ -729,32 +733,40 @@ async def get_thread_history(
 #----------------------
 # Helper Functions
 #----------------------
+def _check_history(history, skip_words:tuple=(), detect_words:tuple=()):
+    assistant_message = {}
+    new_user_messages = []
+    skipped = False
+    detected = False
+    # { "role": "assistant/user", "timestamp": "2025-11-10 10:00:00", "content": "你好，我叫张三", "status": "未读" }
+    for msg in history[::-1]:
+        role = msg.get("role")
+        content = msg.get("content")
+        if role == "assistant":
+            skipped = any(skip in content for skip in skip_words)
+            detected = any(detect in content for detect in detect_words)
+            if not skipped:
+                assistant_message = msg
+                break
+            if not detected:
+                detected = True
+                break
+        elif role == "user":
+            new_user_messages.insert(0, {"content": content, "role": role})
+    return new_user_messages, assistant_message, skipped, detected
+
+
 async def _get_new_user_messages_and_assistant_message(candidate) -> Optional[dict]:
     """Get new user messages and assistant action from candidate metadata, 
     fall back to get chat history from browser(and upsert history if empty).
     """
     if not candidate.get("chat_id"):
         return [], {}, []
-    # define a helper function to process history
-    def _process_history(history):
-        assistant_message = {}
-        new_user_messages = []
-        # { "role": "assistant/user", "timestamp": "2025-11-10 10:00:00", "content": "你好，我叫张三", "status": "未读" }
-        for msg in history[::-1]:
-            role = msg.get("role")
-            content = msg.get("content")
-            if role == "assistant":
-                if not content.startswith("方便发一份简历过来吗"):
-                    assistant_message = msg
-                    break
-            elif role == "user":
-                new_user_messages.insert(0, {"content": content, "role": role})
-        return new_user_messages, assistant_message
     # first check user messages from metadata -> this is not working to detect new user messages from browser
     metadata_history = candidate.get('metadata', {}).get('history')
     page = await boss_service.service._ensure_browser_session()
     chat_history = await chat_actions.get_chat_history_action(page, candidate["chat_id"])
-    new_user_messages, assistant_message = _process_history(chat_history)
+    new_user_messages, assistant_message, _, _ = _check_history(chat_history, skip_words=('方便发一份简历过来吗'))
     # update history if missing
     if not metadata_history:
         logger.warning(f"Candidate {candidate['candidate_id']} has no metadata history, updating...")

@@ -628,7 +628,7 @@ function getGeneratedMessage() {
 async function generateMessage(force = false) {
     const analysis_container = document.querySelector('#analysis-content #analysis-result-container');
     const analysis = analysis_container ? JSON.parse(analysis_container.getAttribute('data-analysis')) : null;
-    showToast(`生成消息...${analysis?.followup_action}`, 'info');
+    showToast(`生成消息...${analysis?.followup_tips}`, 'info');
     const values = getCandidateData();
     const mode = values.mode;
     // if force is true or mode is followup, use followup action
