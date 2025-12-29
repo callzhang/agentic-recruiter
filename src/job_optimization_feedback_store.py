@@ -77,6 +77,7 @@ def get_collection_schema() -> list[FieldSchema]:
         FieldSchema(name="target_scores", dtype=DataType.JSON, nullable=True),
         FieldSchema(name="suggestion", dtype=DataType.VARCHAR, max_length=5000),
         FieldSchema(name="status", dtype=DataType.VARCHAR, max_length=32, nullable=True),
+        FieldSchema(name="closed_at_job_id", dtype=DataType.VARCHAR, max_length=64, nullable=True),
         FieldSchema(name="created_at", dtype=DataType.VARCHAR, max_length=64),
         FieldSchema(name="updated_at", dtype=DataType.VARCHAR, max_length=64),
     ]
@@ -169,8 +170,18 @@ def list_feedback_advanced(job_id: str, *, limit: int = 200, include_closed: boo
             limit=fetch_limit,
         )
     except Exception as exc:
-        logger.exception("Failed to list feedback: %s", exc)
-        return []
+        # Fallback: try querying without 'closed_at_job_id' in case schema is outdated
+        try:
+            legacy_fields = [f for f in _readable_fields if f != "closed_at_job_id"]
+            results = _client.query(
+                collection_name=_collection_name,
+                filter=filter_expr,
+                output_fields=legacy_fields,
+                limit=fetch_limit,
+            )
+        except Exception as exc2:
+            logger.exception("Failed to list feedback (retry also failed): %s", exc2)
+            return []
 
     cleaned = [{k: v for k, v in (r or {}).items() if v or v == 0} for r in results or []]
     cleaned.sort(
@@ -221,8 +232,18 @@ def get_feedback(item_id: str) -> Optional[dict[str, Any]]:
             limit=1,
         )
     except Exception as exc:
-        logger.exception("Failed to get feedback: %s", exc)
-        return None
+        # Fallback: try querying without 'closed_at_job_id'
+        try:
+            legacy_fields = [f for f in _readable_fields if f != "closed_at_job_id"]
+            results = _client.query(
+                collection_name=_collection_name,
+                filter=f'id == "{item_id}"',
+                output_fields=legacy_fields,
+                limit=1,
+            )
+        except Exception as exc2:
+            logger.exception("Failed to get feedback (retry also failed): %s", exc2)
+            return None
     if not results:
         return None
     rec = results[0] or {}
@@ -285,8 +306,17 @@ def upsert_feedback(
     try:
         _client.upsert(collection_name=_collection_name, data=[record], partial_update=True)
     except Exception as exc:
-        logger.exception("Failed to upsert feedback: %s", exc)
-        raise
+        # Fallback: try upserting without 'closed_at_job_id'
+        if "closed_at_job_id" in record:
+            del record["closed_at_job_id"]
+            try:
+                _client.upsert(collection_name=_collection_name, data=[record], partial_update=True)
+            except Exception as exc2:
+                logger.exception("Failed to upsert feedback (retry also failed): %s", exc2)
+                raise
+        else:
+            logger.exception("Failed to upsert feedback: %s", exc)
+            raise
 
     return record
 
@@ -303,8 +333,13 @@ def delete_feedback(item_id: str) -> bool:
         return False
 
 
-def close_feedback_items(job_id: str, item_ids: list[str]) -> int:
+def close_feedback_items(job_id: str, item_ids: list[str], closed_at_job_id: Optional[str] = None) -> int:
     """Mark feedback items as closed (best-effort).
+
+    Args:
+        job_id: Base job ID.
+        item_ids: List of feedback item IDs to close.
+        closed_at_job_id: Optional versioned job_id (e.g. foo_v3) where this was optimized.
 
     Returns number of items updated.
     """
@@ -324,14 +359,25 @@ def close_feedback_items(job_id: str, item_ids: list[str]) -> int:
         patch = {
             "id": truncate_field(item_id, 64),
             "status": "closed",
+            "closed_at_job_id": truncate_field(closed_at_job_id, 64) if closed_at_job_id else None,
             "updated_at": truncate_field(now, 64),
         }
         # Include required vector field if the backend rejects partial updates without it.
         if "feedback_vector" in (existing or {}):
             patch["feedback_vector"] = existing.get("feedback_vector") or [0.0] * _vector_dim
+        
         try:
             _client.upsert(collection_name=_collection_name, data=[patch], partial_update=True)
             updated += 1
         except Exception as exc:
-            logger.warning("Failed to close feedback item %s: %s", item_id, exc)
+            # Fallback: try closing without 'closed_at_job_id'
+            if "closed_at_job_id" in patch:
+                del patch["closed_at_job_id"]
+                try:
+                    _client.upsert(collection_name=_collection_name, data=[patch], partial_update=True)
+                    updated += 1
+                except Exception:
+                    logger.warning("Failed to close feedback item %s: %s", item_id, exc)
+            else:
+                logger.warning("Failed to close feedback item %s: %s", item_id, exc)
     return updated

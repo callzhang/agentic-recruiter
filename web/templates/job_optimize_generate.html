@@ -80,6 +80,26 @@
             </div>
         </div>
     </div>
+
+    <!-- Closed Alert Overlay -->
+    <div id="closed-alert-overlay" class="fixed inset-0 bg-gray-900 bg-opacity-75 z-[60] hidden flex items-center justify-center">
+        <div class="bg-white rounded-xl shadow-2xl p-8 max-w-md w-full text-center space-y-4">
+            <div class="mx-auto w-12 h-12 bg-yellow-100 rounded-full flex items-center justify-center">
+                 <svg class="w-8 h-8 text-yellow-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                 </svg>
+            </div>
+            <h3 class="text-xl font-bold text-gray-900">反馈已归档</h3>
+            <p class="text-gray-600" id="closed-alert-msg">
+                所选反馈已被消费，无法重复生成。
+            </p>
+            <div class="pt-4">
+                <a href="javascript:history.back()" class="w-full inline-flex justify-center rounded-lg border border-transparent shadow-sm px-4 py-2 bg-blue-600 text-base font-medium text-white hover:bg-blue-700 focus:outline-none sm:text-sm">
+                    返回上一页
+                </a>
+            </div>
+        </div>
+    </div>
 </div>
 
 <script src="/static/vendor/diff.min.js"></script>
@@ -146,12 +166,20 @@ function _formatKeywordsBlock(kw) {
 
 function _collectEditedPortraitFromPage() {
     const edited = {};
+    const keywords = { positive: [], negative: [] };
     for (const el of document.querySelectorAll('textarea[data-field-key]')) {
         const key = el.dataset.fieldKey;
-        if (key === 'keywords') {
-            edited.keywords = _parseKeywords(el.value || '');
+        const val = el.value || '';
+        if (key === 'keywords_positive') {
+            keywords.positive = val.split('\n').map(s => s.trim()).filter(Boolean);
+        } else if (key === 'keywords_negative') {
+            keywords.negative = val.split('\n').map(s => s.trim()).filter(Boolean);
+        } else if (key === 'keywords') {
+            const p = _parseKeywords(val);
+            keywords.positive = p.positive;
+            keywords.negative = p.negative;
         } else {
-            edited[key] = el.value || '';
+            edited[key] = val;
         }
     }
     return {
@@ -159,7 +187,7 @@ function _collectEditedPortraitFromPage() {
         responsibilities: edited.responsibilities || '',
         requirements: edited.requirements || '',
         target_profile: edited.target_profile || '',
-        keywords: edited.keywords || { positive: [], negative: [] },
+        keywords: keywords,
         drill_down_questions: edited.drill_down_questions || '',
     };
 }
@@ -301,28 +329,22 @@ function _renderKeywords(container, currentKeywords, newKeywords) {
     const n = norm(newKeywords);
 
     const block = document.createElement('div');
-    block.className = 'space-y-2';
+    block.className = 'space-y-4 pt-4 border-t';
     const header = document.createElement('div');
-    header.className = 'font-medium text-gray-800';
-    header.textContent = 'keywords（逐行编辑）';
+    header.className = 'font-bold text-gray-800 text-lg';
+    header.textContent = 'Keywords (加分项/减分项)';
     block.appendChild(header);
 
     _appendRationaleCallout(block, rationaleText);
 
-    const grid = document.createElement('div');
-    grid.className = 'grid grid-cols-2 gap-3';
+    const subContainer = document.createElement('div');
+    subContainer.className = 'space-y-4';
+    subContainer.__rationale = {}; // Already rendered rationale above
 
-    const left = document.createElement('textarea');
-    left.className = 'w-full min-h-[120px] px-3 py-2 border rounded-lg bg-gray-50 text-xs font-mono';
-    left.readOnly = true;
-    left.value = `positive:\n${(c.positive || []).join('\n')}\n\nnegative:\n${(c.negative || []).join('\n')}`;
+    _renderTwoColumnField(subContainer, '加分项 (Positive Keywords)', 'keywords_positive', (c.positive || []).join('\n'), (n.positive || []).join('\n'));
+    _renderTwoColumnField(subContainer, '减分项 (Negative Keywords)', 'keywords_negative', (c.negative || []).join('\n'), (n.negative || []).join('\n'));
 
-    const rightText = `positive:\n${(n.positive || []).join('\n')}\n\nnegative:\n${(n.negative || []).join('\n')}`;
-    const right = _buildDiffEditor('keywords', left.value, rightText);
-
-    grid.appendChild(left);
-    grid.appendChild(right);
-    block.appendChild(grid);
+    block.appendChild(subContainer);
     container.appendChild(block);
 }
 
@@ -381,10 +403,16 @@ async function pastePortraitJsonIntoEditors() {
         }
 
         if ('keywords' in portrait) {
-            const textarea = document.querySelector('textarea[data-field-key="keywords"]');
-            if (textarea) {
-                textarea.value = _formatKeywordsBlock(portrait.keywords || { positive: [], negative: [] });
-                textarea.dispatchEvent(new Event('input', { bubbles: true }));
+            const kw = portrait.keywords || { positive: [], negative: [] };
+            const pTa = document.querySelector('textarea[data-field-key="keywords_positive"]');
+            if (pTa) {
+                pTa.value = (kw.positive || []).join('\n');
+                pTa.dispatchEvent(new Event('input', { bubbles: true }));
+            }
+            const nTa = document.querySelector('textarea[data-field-key="keywords_negative"]');
+            if (nTa) {
+                nTa.value = (kw.negative || []).join('\n');
+                nTa.dispatchEvent(new Event('input', { bubbles: true }));
             }
         }
 
@@ -437,6 +465,15 @@ async function startGeneration() {
         });
         const payload = await resp.json();
         if (!payload?.success) {
+            // Check for closed feedback case
+            if (payload?.code === 'FEEDBACK_CLOSED' || (payload?.error && payload.error.includes('已归档'))) {
+                done = true;
+                clearInterval(timer);
+                document.getElementById('closed-alert-msg').textContent = payload.error;
+                document.getElementById('closed-alert-overlay').classList.remove('hidden');
+                document.getElementById('gen-progress-card').classList.add('hidden');
+                return;
+            }
             throw new Error(payload?.error || '生成失败');
         }
 
@@ -486,25 +523,7 @@ function renderResult(payload) {
 }
 
 async function publishGeneratedPortrait() {
-    const edited = {};
-    for (const el of document.querySelectorAll('textarea[data-field-key]')) {
-        const key = el.dataset.fieldKey;
-        if (key === 'keywords') {
-            edited.keywords = _parseKeywords(el.value || '');
-        } else {
-            edited[key] = el.value || '';
-        }
-    }
-
-    // keep required fields, position stays on server side
-    const jobPortrait = {
-        description: edited.description || '',
-        responsibilities: edited.responsibilities || '',
-        requirements: edited.requirements || '',
-        target_profile: edited.target_profile || '',
-        keywords: edited.keywords || { positive: [], negative: [] },
-        drill_down_questions: edited.drill_down_questions || '',
-    };
+    const jobPortrait = _collectEditedPortraitFromPage();
 
     try {
         const resp = await fetch('/jobs/api/optimizations/publish', {

@@ -846,6 +846,18 @@ async def api_optimization_generate(payload: GenerateOptimizationRequest):
         it = get_feedback(item_id)
         if it and it.get("job_id") == base_job_id:
             items.append(it)
+    
+    # Check if any items are already closed
+    closed_items = [it for it in items if it.get("status") == "closed"]
+    if closed_items:
+        first_closed = closed_items[0]
+        ver = first_closed.get("closed_at_job_id") or "unknown"
+        return JSONResponse(status_code=400, content={
+            "success": False, 
+            "error": f"所选反馈已归档（已用于生成版本 {ver}），无法再次生成。",
+            "code": "FEEDBACK_CLOSED"
+        })
+
     if not items:
         return JSONResponse(status_code=400, content={"success": False, "error": "请先选择要用于优化的候选人反馈"})
 
@@ -950,12 +962,13 @@ async def api_optimization_publish(payload: PublishOptimizedPortraitRequest):
     }
     update_payload = {k: v for k, v in portrait.items() if k in allowed_fields}
 
-    if not update_job_store(base_job_id, **update_payload):
+    new_versioned_id = update_job_store(base_job_id, **update_payload)
+    if not new_versioned_id:
         return JSONResponse(status_code=500, content={"success": False, "error": "发布失败（创建新版本失败）"})
 
     # Close selected optimization feedback items so they won't show up next time.
     if payload.item_ids:
-        close_feedback_items(base_job_id, payload.item_ids)
+        close_feedback_items(base_job_id, payload.item_ids, closed_at_job_id=new_versioned_id)
 
     new_current_job = get_job_by_id(base_job_id)
     return JSONResponse(content={"success": True, "data": new_current_job})

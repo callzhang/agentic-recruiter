@@ -63,6 +63,13 @@
                                     </div>
                                 </div>
                             </label>
+                            <button onclick="deleteOptimizationItem(event, '{{ it.id }}')"
+                                    title="删除此项"
+                                    class="p-1 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded transition">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                                </svg>
+                            </button>
                         </div>
                         <div class="mt-2 text-xs text-gray-600 line-clamp-3">
                             {{ it.suggestion or '' }}
@@ -225,6 +232,49 @@ async function loadCandidateDetail(candidateId) {
     } catch (e) {
         console.error(e);
         container.innerHTML = '<div class="text-center text-gray-500 py-10">加载失败</div>';
+    }
+}
+
+async function deleteOptimizationItem(event, itemId) {
+    if (event) event.stopPropagation();
+    if (!window.confirm('确定要删除这条反馈记录吗？删除后不可撤销。')) return;
+
+    try {
+        const resp = await fetch(`/jobs/api/optimizations/${encodeURIComponent(itemId)}`, {
+            method: 'DELETE',
+        });
+        const data = await resp.json();
+        if (!data?.success) {
+            showToast(data?.error || '删除失败', 'error');
+            return;
+        }
+        showToast('已删除', 'success');
+
+        // Remove from UI and cache
+        const el = document.querySelector(`[data-item-id="${itemId}"]`);
+        if (el) el.remove();
+        const idx = OPT_ITEMS.findIndex(x => x.id === itemId);
+        if (idx !== -1) OPT_ITEMS.splice(idx, 1);
+
+        // Update count
+        const countEl = document.getElementById('opt-feedback-count');
+        if (countEl) countEl.textContent = String(OPT_ITEMS.length);
+
+        // If it was active, clear editor
+        const activeId = document.getElementById('opt-active-item-id').value;
+        if (activeId === itemId) {
+            document.getElementById('opt-active-item-id').value = '';
+            document.getElementById('opt-edit-overall').value = '';
+            document.getElementById('opt-edit-skill').value = '';
+            document.getElementById('opt-edit-background').value = '';
+            document.getElementById('opt-edit-startup-fit').value = '';
+            document.getElementById('opt-edit-suggestion').value = '';
+            document.getElementById('opt-candidate-detail').innerHTML = '<div class="text-center text-gray-500 py-10">请选择左侧一个候选人</div>';
+            __opt_dirty = false;
+        }
+    } catch (e) {
+        console.error(e);
+        showToast('删除失败（网络错误）', 'error');
     }
 }
 

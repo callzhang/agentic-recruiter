@@ -25,6 +25,7 @@ from src.config import get_zilliz_config
 from src.global_logger import logger
 from src.candidate_store import get_collection_schema as get_candidate_schema
 from src.jobs_store import get_job_collection_schema
+from src.job_optimization_feedback_store import get_collection_schema as get_optimization_schema
 
 
 def get_index_config(collection_type: str, zilliz_config: dict):
@@ -56,6 +57,17 @@ def get_index_config(collection_type: str, zilliz_config: dict):
             },
             'version': {},
             'current': {},
+        }
+    elif collection_type == 'optimizations':
+        return {
+            'feedback_vector': {
+                "index_type": "AUTOINDEX",
+                "metric_type": "IP",
+                "params": {},
+            },
+            'job_id': {"index_type": "INVERTED"},
+            'candidate_id': {"index_type": "INVERTED"},
+            'updated_at': {"index_type": "INVERTED"},
         }
     else:
         return {}
@@ -251,6 +263,21 @@ def transform_record(record: dict, schema_fields: list, collection_type: str) ->
         # Initialize metadata field if not present
         if "metadata" not in new_record or new_record["metadata"] is None:
             new_record["metadata"] = {}
+    elif collection_type == 'optimizations':
+        # Ensure feedback_vector exists
+        if "feedback_vector" not in new_record or not new_record["feedback_vector"]:
+             # dim=2 as per store definition
+            new_record["feedback_vector"] = [0.0, 0.0] 
+        
+        # Ensure target_scores exists
+        if "target_scores" not in new_record or new_record["target_scores"] is None:
+            new_record["target_scores"] = {}
+            
+        if "current_analysis" not in new_record or new_record["current_analysis"] is None:
+            new_record["current_analysis"] = {}
+
+        if "status" not in new_record:
+            new_record["status"] = "open"
     
     # Ensure all required fields exist with appropriate defaults
     for field in schema_fields:
@@ -284,8 +311,8 @@ def migrate_collection(collection_type: str, new_collection_name: str = None):
     Returns:
         bool: True if successful, False otherwise
     """
-    if collection_type not in ['candidates', 'jobs']:
-        logger.error(f"Invalid collection type: {collection_type}. Must be 'candidates' or 'jobs'")
+    if collection_type not in ['candidates', 'jobs', 'optimizations']:
+        logger.error(f"Invalid collection type: {collection_type}. Must be 'candidates', 'jobs', or 'optimizations'")
         return False
     
     # Get Zilliz config
@@ -311,6 +338,12 @@ def migrate_collection(collection_type: str, new_collection_name: str = None):
         new_collection = new_collection_name or f"{old_collection}_v2"
         schema_fields = get_job_collection_schema()
         description = "Jobs collection with notification field"
+        
+    if collection_type == 'optimizations':
+        old_collection = zilliz_config.get("job_optimization_collection_name", "CN_job_optimizations")
+        new_collection = new_collection_name or f"{old_collection}_v2"
+        schema_fields = get_optimization_schema()
+        description = "Job optimization feedback collection"
     
     try:
         # Check if old collection exists
@@ -320,14 +353,8 @@ def migrate_collection(collection_type: str, new_collection_name: str = None):
         
         logger.info(f"Found source collection: {old_collection}")
         
-        # Check if new collection already exists
         if client.has_collection(new_collection):
-            logger.warning(f"Target collection {new_collection} already exists. Please drop it first if you want to re-run migration.")
-            response = input(f"Drop existing collection {new_collection} and continue? (yes/no): ")
-            if response.lower() != 'yes':
-                logger.info("Migration cancelled")
-                return False
-            logger.info(f"Dropping existing collection {new_collection}...")
+            logger.warning(f"Target collection {new_collection} already exists. Dropping it to start fresh...")
             client.drop_collection(new_collection)
         
         # Connect for Collection API
@@ -416,9 +443,14 @@ def migrate_collection(collection_type: str, new_collection_name: str = None):
         # Transform records for migration
         logger.info("Transforming records for migration...")
         migrated_data = []
-        for record in all_records:
-            transformed = transform_record(record, schema_fields, collection_type)
-            migrated_data.append(transformed)
+        for i, record in enumerate(all_records):
+            try:
+                transformed = transform_record(record, schema_fields, collection_type)
+                migrated_data.append(transformed)
+            except Exception as e:
+                logger.error(f"Failed to transform record {i}: {e}")
+
+        logger.info(f"Transformed {len(migrated_data)} records")
         
         # Insert into new collection
         logger.info(f"Inserting {len(migrated_data)} records into new collection...")
@@ -516,7 +548,7 @@ Examples:
     )
     parser.add_argument(
         'collection_type',
-        choices=['candidates', 'jobs'],
+        choices=['candidates', 'jobs', 'optimizations'],
         help='Type of collection to migrate'
     )
     parser.add_argument(

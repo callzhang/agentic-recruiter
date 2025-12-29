@@ -379,7 +379,7 @@ def insert_job(**job_data) -> bool:
             
     
     
-def update_job_status(job_id: str, status: str, metadata: Optional[Dict[str, Any]] = None) -> bool:
+def update_job_status(job_id: str, status: str, metadata: Optional[Dict[str, Any]] = None) -> Optional[str]:
     """Update job status and/or metadata without creating a new version.
     
     This function directly updates the current version's status and metadata fields.
@@ -391,7 +391,7 @@ def update_job_status(job_id: str, status: str, metadata: Optional[Dict[str, Any
         metadata: Optional metadata dict to update
         
     Returns:
-        bool: True if successful, False otherwise
+        Optional[str]: The versioned job_id if successful, None otherwise
     """
     # Extract base job_id
     base_job_id = get_base_job_id(job_id)
@@ -440,10 +440,10 @@ def update_job_status(job_id: str, status: str, metadata: Optional[Dict[str, Any
     )
     
     logger.debug("Successfully updated job status: %s -> %s", old_job_id, status)
-    return True
+    return old_job_id
 
 
-def update_job(job_id: str, **job_data) -> bool:
+def update_job(job_id: str, **job_data) -> Optional[str]:
     """Update an existing job.
     
     If only status and/or metadata are being updated, directly updates the current version.
@@ -457,7 +457,9 @@ def update_job(job_id: str, **job_data) -> bool:
         **job_data: Job data to update
         
     Returns:
-        bool: True if successful, False otherwise
+        Optional[str]: The new versioned job_id if a new version was created, 
+                      or the updated versioned job_id if only status/metadata changed,
+                      or None if failed.
     """
     
     # Extract base job_id
@@ -513,7 +515,7 @@ def update_job(job_id: str, **job_data) -> bool:
     _client.insert(collection_name=_collection_name, data=[new_version_data])
     
     logger.debug("Successfully updated job: %s (created version %d)", new_versioned_job_id, next_version)
-    return True
+    return new_versioned_job_id
             
 def get_job_versions(base_job_id: str) -> List[Dict[str, Any]]:
     """Get all versions of a job.

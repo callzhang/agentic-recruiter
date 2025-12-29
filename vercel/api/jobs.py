@@ -140,6 +140,7 @@ _OPT_READABLE_FIELDS = [
     "target_scores",
     "suggestion",
     "status",
+    "closed_at_job_id",
     "created_at",
     "updated_at",
 ]
@@ -219,7 +220,7 @@ def _upsert_feedback(record: dict[str, Any]) -> dict[str, Any]:
     return record
 
 
-def _close_feedback_items(job_id: str, item_ids: list[str]) -> int:
+def _close_feedback_items(job_id: str, item_ids: list[str], closed_at_job_id: Optional[str] = None) -> int:
     job_id = (job_id or "").strip()
     ids = [i.strip() for i in (item_ids or []) if i and i.strip()]
     if not job_id or not ids:
@@ -235,6 +236,7 @@ def _close_feedback_items(job_id: str, item_ids: list[str]) -> int:
         patch = {
             "id": _truncate_field(item_id, 64),
             "status": "closed",
+            "closed_at_job_id": _truncate_field(closed_at_job_id, 64) if closed_at_job_id else None,
             "updated_at": _truncate_field(now, 64),
         }
         if "feedback_vector" in existing:
@@ -575,7 +577,7 @@ def insert_job(**job_data) -> bool:
     client.insert(collection_name=COLLECTION_NAME, data=[insert_data])
     return True
 
-def update_job(job_id: str, **job_data) -> bool:
+def update_job(job_id: str, **job_data) -> Optional[str]:
     """Update job (creates new version)"""
     client = get_client()
     base_job_id = get_base_job_id(job_id)
@@ -650,7 +652,7 @@ def update_job(job_id: str, **job_data) -> bool:
     except Exception:
         # If this cleanup fails, get_all_jobs/get_job_by_id will still pick latest version.
         pass
-    return True
+    return new_versioned_job_id
 
 def get_job_versions(base_job_id: str) -> List[Dict[str, Any]]:
     """Get all versions of a job"""
@@ -921,6 +923,19 @@ class handler(BaseHTTPRequestHandler):
                         if get_base_job_id(it.get("job_id", "")) != job_id:
                             continue
                         feedback_items.append(it)
+                    
+                    # Check if any items are already closed
+                    closed_items = [it for it in feedback_items if it.get("status") == "closed"]
+                    if closed_items:
+                        first_closed = closed_items[0]
+                        ver = first_closed.get("closed_at_job_id") or "unknown"
+                        self._send_json_response(400, {
+                            "success": False, 
+                            "error": f"所选反馈已归档（已用于生成版本 {ver}），无法再次生成。",
+                            "code": "FEEDBACK_CLOSED"
+                        })
+                        return
+
                     if not feedback_items:
                         self._send_json_response(400, {"success": False, "error": "no valid feedback items"})
                         return
@@ -966,11 +981,11 @@ class handler(BaseHTTPRequestHandler):
                         merged["keywords"] = current_job.get("keywords") or {"positive": [], "negative": []}
 
                     try:
-                        ok = update_job(job_id, **merged)
-                        if not ok:
+                        new_versioned_id = update_job(job_id, **merged)
+                        if not new_versioned_id:
                             self._send_json_response(500, {"success": False, "error": "failed to publish job"})
                             return
-                        closed = _close_feedback_items(job_id, item_ids)
+                        closed = _close_feedback_items(job_id, item_ids, closed_at_job_id=new_versioned_id)
                         updated_job = get_job_by_id(job_id)
                         self._send_json_response(200, {"success": True, "data": {"job": updated_job, "closed": closed}})
                     except Exception as exc:
