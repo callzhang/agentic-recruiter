@@ -24,7 +24,7 @@ from src.config import get_boss_zhipin_config, get_browser_config, get_service_c
 from src.global_logger import logger
 import src.chat_actions as chat_actions
 import src.recommendation_actions as recommendation_actions
-from src.stats_service import compile_all_jobs, send_daily_dingtalk_report, build_daily_candidate_counts
+from src.stats_service import compile_all_jobs, build_daily_candidate_counts
 from src.runtime_utils import start_caffeinate, stop_caffeinate
 
 class BossServiceAsync:
@@ -72,7 +72,6 @@ class BossServiceAsync:
         self.browser_lock = asyncio.Lock()
         self.startup_complete = asyncio.Event()
         self.event_manager = None  # Placeholder for legacy debug endpoint
-        self.daily_report_task: Optional[asyncio.Task] = None
         
         # Caffeinate handling
         self.caffeinate_process = None
@@ -101,9 +100,6 @@ class BossServiceAsync:
         self.playwright = await async_playwright().start()
         await self.start_browser()
         self.startup_complete.set()
-        # Kick off daily stats report loop (best effort, non-blocking)
-        if not self.daily_report_task:
-            self.daily_report_task = asyncio.create_task(self._daily_report_loop())
         
         # Start activity monitor for caffeinate
         if not self.activity_monitor_task:
@@ -173,8 +169,6 @@ class BossServiceAsync:
         self.page = None
         self.playwright = None
         self.is_logged_in = False
-        if self.daily_report_task:
-            self.daily_report_task.cancel()
         
         # Stop activity monitor and caffeinate
         if self.activity_monitor_task:
@@ -185,29 +179,7 @@ class BossServiceAsync:
             
         logger.debug("Playwright 已停止。")
 
-    async def _daily_report_loop(self) -> None:
-        """Send daily DingTalk report using compiled stats.
 
-        Runs once per day at 09:00 local time. The heavy lifting happens in a
-        thread to avoid blocking the event loop because requests.post is sync.
-        """
-
-        while True:
-            now = datetime.now()
-            target = datetime.combine(now.date(), time(hour=9, minute=0))
-            if now >= target:
-                target += timedelta(days=1)
-            wait_seconds = (target - now).total_seconds()
-            try:
-                await asyncio.sleep(wait_seconds)
-            except asyncio.CancelledError:  # graceful shutdown
-                return
-
-            try:
-                await asyncio.to_thread(send_daily_dingtalk_report)
-                logger.info("每日战报已发送")
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("发送每日战报失败: %s", exc)
 
     async def _keep_awake(self) -> None:
         """Keep system awake during browser activity."""

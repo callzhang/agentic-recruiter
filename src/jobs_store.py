@@ -99,6 +99,8 @@ def get_base_job_id(job_id: str) -> str:
     Returns:
         Base job_id without version suffix (e.g., "ml_engineer")
     """
+    if not job_id:
+        return ""
     return re.sub(r'_v\d+$', '', job_id)
 
 
@@ -304,6 +306,9 @@ def get_job_by_id(job_id: str) -> Optional[Dict[str, Any]]:
         Current version of the job, or None if not found
     """
     
+    if not job_id:
+        return None
+        
     # Extract base job_id (remove _vN suffix if present)
     base_job_id = get_base_job_id(job_id)
     
