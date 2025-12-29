@@ -292,14 +292,15 @@ async def analyze_candidate(
     name: Optional[str] = Form(None),
 ):
     """Analyze candidate and return analysis result."""
+    
     if full_resume:
         assert len(full_resume) > 100, f"full_resume is required, but full_resume is:\n {full_resume} "
         logger.debug("Analyzing full resume")
-        input_message=f'招聘顾问您好，你帮我分析一下我是否匹配{job_applied}这个岗位？以下是我的完整简历：\n{full_resume}'
+        input_message=f'招聘顾问你好，请帮我分析一下我是否匹配{job_applied}这个岗位？以下是我的完整简历：\n{full_resume}'
     else:
         assert len(resume_text) > 100, f"online resume is required, but online resume is:\n {resume_text} "
         logger.debug("Analyzing online resume")
-        input_message=f'招聘顾问您好，你帮我分析一下我是否匹配{job_applied}这个岗位？以下是我的在线简历：\n{resume_text}'
+        input_message=f'招聘顾问你好，请帮我分析一下我是否匹配{job_applied}这个岗位？以下是我的在线简历：\n{resume_text}'
     
     # start analyze - run in thread pool to avoid blocking event loop (OpenAI API call)
     analysis_result = await asyncio.to_thread(
@@ -366,8 +367,9 @@ async def generate_message(
         new_user_messages = "[沉默]"
     elif mode == 'recommend':
         new_user_messages = [
-            {"content": "你好，我们这个岗位正在招聘，想跟你沟通一下", "role":"assistant"}, 
-            {"content": "我是否匹配这个岗位？", "role":"user"},
+            {"role": "developer", "content": "系统推荐以下候选人，请问分析是否匹配。如匹配可以主动和候选人沟通。"},
+            {"role": "assistant", "content": "你好，我们这个岗位正在招聘，想跟你沟通一下"}, 
+            {"role": "user", "content": "你好，有什么事？"},
         ]
     elif not should_generate:
         return templates.TemplateResponse(

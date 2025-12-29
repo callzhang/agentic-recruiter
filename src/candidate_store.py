@@ -459,9 +459,9 @@ def search_candidates_by_resume(
         
         # Filter by similarity threshold
         results_str = '\n'.join([f'{r["entity"]["candidate_id"]}({r["entity"]["name"]}): {r["distance"]}' for r in results[0]])
+        results[0].sort(key=lambda x: x['distance'], reverse=True)
         logger.debug(f"search_candidates_by_resume: results: \n{results_str}")
         candidates = [r['entity'] for r in results[0] if  r['distance'] > similarity_threshold]
-        candidates.sort(key=lambda x: x['distance'], reverse=True)
         return candidates
     except Exception as exc:
         logger.exception("Failed to search candidates: %s", exc)

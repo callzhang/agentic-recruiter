@@ -59,12 +59,11 @@ def init_chat(
     job_info_text = json.dumps(job_info, ensure_ascii=False)
     job_prompt = {
         'type': 'message', 
-        'role': 'developer', 
-        'content': f'你是招聘顾问，正在和候选人沟通。你的目标是根据岗位要求分析简历，\
-            通过对话的方式判断候选人是否符合岗位要求，可以提出问题让候选人回答，也可以介\
-            绍岗位要求。如果候选人的经验以及回复达到岗位要求，则可以推进到面试阶段，\
-            表达会通知HR尽快安排面试。\
-            以下是岗位描述，用于分析候选人的匹配程度:\n{job_info_text}'
+        'role': 'developer',    
+        'content': f'''你是招聘顾问，正在和候选人沟通。你的目标是根据岗位要求分析简历，
+            通过对话的方式判断候选人是否符合岗位要求，可以提出问题让候选人回答，也可以介绍岗位要求。
+            如果候选人的经验以及回复达到岗位要求，则可以推进到面试阶段，表达会通知HR尽快安排面试。
+            以下是岗位描述，用于分析候选人的匹配程度:\n{job_info_text}'''
     }
     
     # Add candidate resume to thread
