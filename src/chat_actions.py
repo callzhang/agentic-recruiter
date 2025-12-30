@@ -468,18 +468,18 @@ async def accept_full_resume_action(page: Page, chat_id: str, timeout_ms: int = 
     """Accept candidate's resume. Returns True on success, raises ValueError if accept button not found."""
     await _prepare_chat_page(page)
     await _go_to_chat_dialog(page, chat_id)
-    accept_button_selector = 'div.notice-list >> a.btn:has-text("同意")'
-    # accept_button_selector = 'div.notice-list >> a.btn:has-text("同意"), div.message-card-buttons >> span.card-btn:has-text("同意")'
-    accept_button = page.locator(accept_button_selector)
+    # accept_button_selector = 'div.notice-list >> a.btn:has-text("同意")'
+    accept_button_selector = 'div.message-card-buttons >> span.card-btn:has-text("同意"), div.notice-list >> a.btn:has-text("同意")'
+    accept_button = page.locator(accept_button_selector).first
     if await accept_button.count() == 0:
         return False
-    confirm_continue = page.locator("div.btn-sure-v2:has-text('继续交换')")
     tried = 0
     while 'disabled' not in await accept_button.get_attribute("class", timeout=timeout_ms):
         try:
             await accept_button.click(timeout=timeout_ms)
             await page.wait_for_timeout(500) 
             # 境外提醒
+            confirm_continue = page.locator("div.btn-sure-v2:has-text('继续交换')")
             if await confirm_continue.count() > 0:
                 await confirm_continue.click(timeout=timeout_ms)
                 continue

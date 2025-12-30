@@ -810,8 +810,11 @@ async def _should_generate_message(candidate_id: str, chat_id: str, mode: str, f
         last_action = assistant_message.get("action")
         # check if updated_at has exceeded FOLLOWUP_MAX_DAYS
         updated_at = candidate.get("updated_at")
-        if updated_at and (datetime.now() - updated_at).days > MAX_FOLLOWUP_DAYS:
-            should_generate = True
+        if updated_at:
+            if isinstance(updated_at, str):
+                updated_at = parser.parse(updated_at).replace(tzinfo=None)
+            if (datetime.now() - updated_at).days > MAX_FOLLOWUP_DAYS:
+                should_generate = True
         # skip if last message is WAIT or PASS
         if last_action in ['WAIT', 'PASS']:
             should_generate = False
@@ -820,6 +823,8 @@ async def _should_generate_message(candidate_id: str, chat_id: str, mode: str, f
             timestamp_str = assistant_message.get("timestamp", "")
             try:
                 last_ts = parser.parse(timestamp_str).replace(tzinfo=None)
+                diff_days = (datetime.now() - last_ts).days
+                should_generate = diff_days >= FOLLOWUP_DELTA_DAYS
             except (ValueError, Exception) as e:
                 # Extract date and time using regex, removing Chinese text like '昨天', '今天', etc.
                 # Pattern: YYYY-MM-DD ... HH:MM:SS or YYYY-MM-DD ... HH:MM
@@ -829,9 +834,9 @@ async def _should_generate_message(candidate_id: str, chat_id: str, mode: str, f
                     time_part = match.group(2)
                     clean_timestamp = f"{date_part} {time_part}"
                     last_ts = parser.parse(clean_timestamp).replace(tzinfo=None)
+                    diff_days = (datetime.now() - last_ts).days
+                    should_generate = diff_days >= FOLLOWUP_DELTA_DAYS
                 else:
                     logger.warning(f"Failed to parse timestamp '{timestamp_str}': {e}")
                     should_generate = False
-            diff_days = (datetime.now() - last_ts).days
-            should_generate = diff_days >= FOLLOWUP_DELTA_DAYS
     return should_generate, new_user_messages, assistant_message, chat_history

@@ -628,6 +628,10 @@ async function startProcessCandidate() {
     }
     
     CycleReplyHelpers.resetState();
+    
+    // Capture currently selected candidate to resume from (if any)
+    let activeCard = document.querySelector('.candidate-card.bg-blue-50');
+
     cycleReplyState.running = true;
     CycleReplyHelpers.setButton(true);
     
@@ -636,57 +640,71 @@ async function startProcessCandidate() {
     let total_processed = 0;
     let total_failed = 0;
     let total_skipped = 0;
+    // Start idle watchdog
+    const watchdogId = setInterval(() => {
+        if (!cycleReplyState.running) {
+            clearInterval(watchdogId);
+            return;
+        }
+        const idleTime = Date.now() - cycleReplyState.lastProcessedTime;
+        const IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+        if (idleTime >= IDLE_TIMEOUT_MS) {
+            showToast('5分钟没有处理任何候选人，处理已停止', 'warning');
+            stopProcessCandidate();
+            clearInterval(watchdogId);
+        }
+    }, 10000); // Check every 10 seconds
+
     try {
         // Check if "process all modes" checkbox is checked
-        const processAllModes = document.getElementById('process-all-modes-checkbox')?.checked || false;
+        let processAllModes = document.getElementById('process-all-modes-checkbox')?.checked || false;
         
         while (cycleReplyState.running && !cycleReplyState.stopRequested) {
-            // Check if 5 minutes have passed without processing any candidate
-            const idleTime = Date.now() - cycleReplyState.lastProcessedTime;
-            const IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
-            if (idleTime >= IDLE_TIMEOUT_MS) {
-                showToast('5分钟没有处理任何候选人，处理已停止', 'warning');
-                break;
-            }
             
             // Determine current mode
             const candidateTabs = CycleReplyHelpers.getCandidateTabs();
             const mode = processAllModes ? CYCLE_MODES[cycleReplyState.modeIndex] : (candidateTabs.activeTab || 'recommend');
             
             // Process mode (switch tab if needed)
-            const result = await CycleReplyHelpers.processMode(mode, candidateTabs);
-            
-            if (result.stopped) {
-                break;
-            }
-            
-            // Handle errors
-            if (result.success === false) {
-                cycleReplyState.errorStreak += 1;
-                console.error(`处理模式 ${mode} 出错 (${cycleReplyState.errorStreak}/10): ${result.errorMessage}`);
-                if (cycleReplyState.errorStreak >= 10) {
-                    showToast('连续错误超过 10 次，处理已停止', 'error');
+            let cards = Array.from(document.querySelectorAll('.candidate-card'));
+            if (cards.length === 0) {
+                const result = await CycleReplyHelpers.processMode(mode, candidateTabs);
+                if (result.stopped) {
                     break;
                 }
-                // Move to next mode if processing all modes
-                if (processAllModes) {
-                    cycleReplyState.modeIndex = (cycleReplyState.modeIndex + 1) % CYCLE_MODES.length;
-                    await CycleReplyHelpers.sleep(1000);
+                // Handle errors
+                if (result.success === false) {
+                    cycleReplyState.errorStreak += 1;
+                    console.error(`处理模式 ${mode} 出错 (${cycleReplyState.errorStreak}/10): ${result.errorMessage}`);
+                    if (cycleReplyState.errorStreak >= 10) {
+                        showToast('连续错误超过 10 次，处理已停止', 'error');
+                        break;
+                    }
+                    // Move to next mode if processing all modes
+                    if (processAllModes) {
+                        cycleReplyState.modeIndex = (cycleReplyState.modeIndex + 1) % CYCLE_MODES.length;
+                        await CycleReplyHelpers.sleep(1000);
+                    }
+                    continue;
                 }
-                continue;
+                // Process candidates in current mode
+                // Convert to Array immediately to avoid NodeList mutation issues when cards are removed
+                cards = Array.from(result.candidateCards);
             }
-            
-            // Process candidates in current mode
-            // Convert to Array immediately to avoid NodeList mutation issues when cards are removed
-            let cards = Array.from(result.candidateCards || document.querySelectorAll('.candidate-card'));
+
+            // Filter cards if we need to resume from a specific one
+            if (activeCard) {
+                const startIndex = cards.indexOf(activeCard);
+                if (startIndex !== -1) {
+                    console.log(`[${mode}] Resuming from candidate index ${startIndex} (Skipping ${startIndex} items)`);
+                    cards = cards.slice(startIndex);
+                }
+            }
             
             // If no candidates found, stop processing (prevents infinite loop)
             if (cards.length === 0) {
                 console.log(`[${mode}] 无候选人可处理，停止`);
-                if (!processAllModes) {
-                    break; // Stop if processing single mode
-                }
-                // Continue to next mode if processing all modes
+                if (!processAllModes) break; // Stop if processing single mode
                 cycleReplyState.modeIndex = (cycleReplyState.modeIndex + 1) % CYCLE_MODES.length;
                 await CycleReplyHelpers.sleep(1000);
                 continue;
@@ -699,6 +717,7 @@ async function startProcessCandidate() {
             // Process each candidate
             console.log(`[${mode}] 开始处理 ${cards.length} 个候选人`);
             for (const card of cards) {
+                activeCard = null; // Reset active card once it starts processing
                 if (!cycleReplyState.running || cycleReplyState.stopRequested) {
                     break;
                 }
@@ -746,23 +765,15 @@ async function startProcessCandidate() {
             showToast(summary, failed ? 'success' : 'warning');
             
             // Move to next mode if processing all modes
+            processAllModes = document.getElementById('process-all-modes-checkbox')?.checked || false;
             if (processAllModes) {
                 cycleReplyState.modeIndex = (cycleReplyState.modeIndex + 1) % CYCLE_MODES.length;
                 await CycleReplyHelpers.sleep(1000);
             } else {
                 // If not processing all modes, refresh the current candidate list and continue
-                console.log(`[${mode}] 刷新候选人列表以继续处理...`);
-                // Clear the candidate list by calling loadCandidatesList again
-                const activeTab = candidateTabs.activeTab || mode;
-                try {
-                    await window.loadCandidatesList(activeTab);
-                    await CycleReplyHelpers.sleep(1000);
-                    // Loop will continue and processMode will pick up the new candidates
-                } catch (error) {
-                    console.error(`刷新候选人列表失败: ${error}`);
-                    showToast(`刷新候选人列表失败: ${error.message}`, 'error');
-                    break; // Stop if refresh fails
-                }
+                console.log(`[${mode}] 准备刷新候选人列表以继续处理...`);
+                // Loop will continue and processMode (at start of loop) will pick up the new candidates by calling loadCandidatesList
+                await CycleReplyHelpers.sleep(1000);
             }
         }
     } finally {

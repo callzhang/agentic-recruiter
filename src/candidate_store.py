@@ -489,8 +489,7 @@ def candidate_matched(candidate: Dict[str, Any], stored_candidate: Dict[str, Any
             return False
     # check by last_message if provided
     last_message, last_message2 = candidate.get("last_message", ''), stored_candidate.get("last_message", '')
-    updated_at = date_parser.parse(stored_candidate.get("updated_at"))
-    if updated_at.tzinfo is not None: updated_at = updated_at.replace(tzinfo=None)
+    updated_at = date_parser.parse(stored_candidate.get("updated_at")).replace(tzinfo=None)
     # resume text similarity check
     resume1, resume2 = candidate.get('resume_text'), stored_candidate.get('resume_text')
     if chat_id is None and chat_id2 and updated_at < (datetime.now() - timedelta(days=3)):
