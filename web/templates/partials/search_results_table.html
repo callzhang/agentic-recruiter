@@ -9,13 +9,14 @@
     <div class="overflow-x-auto">
         <table class="w-full divide-y divide-gray-200 text-sm" style="table-layout: auto;">
             <colgroup>
-                <col style="min-width: 20px; width: 12%;">
-                <col style="min-width: 30px; width: 18%;">
+                <col style="min-width: 20px; width: 15%;">
+                <col style="min-width: 20px; width: 15%;">
                 <col style="min-width: 20px; width: 10%;">
                 <col style="min-width: 20px; width: 12%;">
                 <col style="min-width: 20px; width: 10%;">
                 <col style="min-width: 20px; width: 10%;">
-                <col style="min-width: 20px; width: 18%;">
+                <col style="min-width: 20px; width: 10%;">
+                <col style="min-width: 20px; width: 12%;">
             </colgroup>
             <thead class="bg-gray-50">
                 <tr>
@@ -43,7 +44,7 @@
             </thead>
             <tbody class="bg-white divide-y divide-gray-200">
                 {% for candidate in candidates %}
-                {% set updated_at_display = candidate.updated_at.replace('T', ' ')[:16] if candidate.updated_at else '未知' %}
+                {% set updated_at_display = candidate.updated_at | days_ago %}
                 <tr class="cursor-pointer hover:bg-blue-50 transition"
                     hx-get="/search/detail/{{ candidate.candidate_id }}"
                     hx-target="#candidate-detail-panel"

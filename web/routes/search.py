@@ -18,6 +18,35 @@ from web.utils.performance import profile_operation
 
 router = APIRouter()
 templates = Jinja2Templates(directory="web/templates")
+
+def _days_ago_filter(date_val):
+    if not date_val:
+        return "未知"
+    try:
+        if isinstance(date_val, str):
+            # Handle standard ISO format
+            dt = datetime.fromisoformat(date_val)
+        elif isinstance(date_val, datetime):
+            dt = date_val
+        else:
+            return "未知"
+        
+        # Ensure naive datetime for comparison
+        if dt.tzinfo:
+            dt = dt.replace(tzinfo=None)
+            
+        diff = datetime.now() - dt
+        days = diff.days
+        
+        if days < 0: return "今天"
+        if days == 0: return "今天"
+        return f"{days}天前"
+    except Exception:
+        # Fallback for parsing errors
+        return str(date_val)[:10]
+
+templates.env.filters["days_ago"] = _days_ago_filter
+
 STAGE_OPTIONS = ["PASS", "CHAT", "SEEK", "CONTACT"]
 
 
