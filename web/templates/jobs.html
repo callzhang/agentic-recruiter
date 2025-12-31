@@ -415,9 +415,20 @@ async function copyJobPortraitJsonFromForm() {
 
 async function pasteJobPortraitJsonToForm() {
     try {
-        const raw = await _readClipboardText();
+        let raw = '';
+        try {
+            if (navigator.clipboard?.readText) raw = await navigator.clipboard.readText();
+        } catch (e) {
+            // fall through
+        }
+
+        // Robust fallback: if automatic read failed or returned empty, prompt the user.
         if (!raw || raw.trim().length < 2) {
-            showToast('剪切板为空或不是 JSON', 'error');
+            raw = window.prompt('无法读取剪切板，请直接粘贴 JSON 代码：');
+        }
+
+        if (!raw || raw.trim().length < 2) {
+            if (raw !== null) showToast('内容为空或无效', 'error');
             return;
         }
 
@@ -466,6 +477,18 @@ async function pasteJobPortraitJsonToForm() {
                 } else {
                     el.value = JSON.stringify(v, null, 2);
                 }
+            }
+        }
+        
+        // Also handle notification config if present in the pasted JSON
+        if (portrait.notification) {
+            if (portrait.notification.url) {
+                const urlEl = document.getElementById('dingtalk_url');
+                if (urlEl) urlEl.value = portrait.notification.url;
+            }
+            if (portrait.notification.secret) {
+                const secretEl = document.getElementById('dingtalk_secret');
+                if (secretEl) secretEl.value = portrait.notification.secret;
             }
         }
 
@@ -586,14 +609,18 @@ function generateJobFormHTML(options) {
     const portraitCopyPasteButtons = `
         <button type="button"
                 onclick="copyJobPortraitJsonFromForm()"
-                class="px-3 py-1 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 text-sm font-medium shadow-sm">
-            📤拷贝JSON到剪切板
+                class="px-3 py-1 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 text-sm font-medium shadow-sm"
+                title="复制当前表单内容为 JSON">
+            📤 复制 JSON
         </button>
+        ${!isNew ? `
         <button type="button"
-                onclick="pasteJobPortraitJsonToForm()"
-                class="px-3 py-1 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 text-sm font-medium shadow-sm">
-            🖌粘贴JSON到页面
+                onclick="location.href='/jobs/optimize/generate?job_id=${escapeHtml(baseJobId)}'"
+                class="px-3 py-1 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium shadow-sm"
+                title="进入对比模式，对比剪切板 JSON 与当前版本差异">
+            🔍 对比导入...
         </button>
+        ` : ''}
     `;
     
     const jobIdField = isNew ? `
