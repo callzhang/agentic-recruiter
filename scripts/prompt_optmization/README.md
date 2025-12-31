@@ -25,30 +25,34 @@
 - 确保本项目连接候选人库/岗位库所需的环境变量与配置已就绪（否则脚本无法拉取岗位/候选人）
 - 回放生成需要 OpenAI：确保 `config/secrets.yaml` 的 `openai` 配置可用（或使用环境变量覆盖）
 
-### 1.2 运行命令（仓库根目录）
+### 1.2 运行命令（必须在 `scripts/prompt_optmization/` 目录）
 
 按岗位名称关键字选择（推荐）：
 
 ```bash
-python scripts/prompt_optmization/download_data_for_prompt_optimization.py --job-position 架构师
+cd scripts/prompt_optmization
+python download_data_for_prompt_optimization.py --job-position 架构师
 ```
 
 按 `job_id/base_job_id` 选择：
 
 ```bash
-python scripts/prompt_optmization/download_data_for_prompt_optimization.py --job-id <JOB_ID>
+cd scripts/prompt_optmization
+python download_data_for_prompt_optimization.py --job-id <JOB_ID>
 ```
 
 调整每批数量（默认 10，建议保持 10 便于快速迭代）：
 
 ```bash
-python scripts/prompt_optmization/download_data_for_prompt_optimization.py --job-position 架构师 --batch-size 10
+cd scripts/prompt_optmization
+python download_data_for_prompt_optimization.py --job-position 架构师 --batch-size 10
 ```
 
 指定输出根目录（可选）：
 
 ```bash
-python scripts/prompt_optmization/download_data_for_prompt_optimization.py --job-position 架构师 --prompt-opt-dir scripts/prompt_optmization
+cd scripts/prompt_optmization
+python download_data_for_prompt_optimization.py --job-position 架构师 --prompt-opt-dir .
 ```
 
 ### 1.3 你会得到什么输出
@@ -76,7 +80,8 @@ python scripts/prompt_optmization/download_data_for_prompt_optimization.py --job
 例如（先跑下载脚本拿到 `run_...` 目录后）：
 
 ```bash
-python scripts/prompt_optmization/generate_optimized.py --run-dir scripts/prompt_optmization/架构师/run_YYYYMMDD_HHMMSS --limit 10
+cd scripts/prompt_optmization
+python generate_optimized.py --run-dir 架构师/run_YYYYMMDD_HHMMSS --limit 10
 ```
 
 ### 1.3.1 先抽样验证（推荐）
@@ -85,8 +90,9 @@ python scripts/prompt_optmization/generate_optimized.py --run-dir scripts/prompt
 
 ```bash
 # 只回放第 2-3 个（按 candidates/*.json 的排序）
-python scripts/prompt_optmization/generate_optimized.py \
-  --run-dir scripts/prompt_optmization/架构师/run_YYYYMMDD_HHMMSS \
+cd scripts/prompt_optmization
+python generate_optimized.py \
+  --run-dir 架构师/run_YYYYMMDD_HHMMSS \
   --start-index 2 \
   --limit 2
 ```

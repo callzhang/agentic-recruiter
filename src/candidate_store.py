@@ -219,6 +219,7 @@ def search_candidates_advanced(
     sort_by: str = "updated_at",
     sort_direction: str = "desc",
     fields: Optional[List[str]] = None,
+    contacted: Optional[bool] = None,
     strict = True
 ) -> List[Dict[str, Any]]:
     """
@@ -285,10 +286,16 @@ def search_candidates_advanced(
     if min_score is not None:
         # Use bracket notation to filter JSON field: analysis["overall"] >= min_score
         identifiers.append(f'analysis["overall"] >= {min_score}')
+    if isinstance(contacted, bool):
+        if contacted:
+            conditions.append('metadata["contacted"] == true')
+        else:
+            # For false, we also include records where the field is missing (IS NULL)
+            conditions.append('(metadata["contacted"] == false or metadata["contacted"] IS NULL)')
 
     filter_expr = f" {'AND' if strict else 'OR'} ".join([c for c in identifiers if c])
     if conditions:
-        filter_expr = f" {filter_expr} AND {'AND'.join(conditions)}" if filter_expr else ' AND '.join(conditions)
+        filter_expr = f"{filter_expr} AND {' AND '.join(conditions)}" if filter_expr else ' AND '.join(conditions)
 
     sortable_fields = {
         "updated_at",

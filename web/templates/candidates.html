@@ -425,7 +425,17 @@ async function loadCandidatesList(activeTab) {
     
     // Get limit from input
     const limitInput = document.getElementById('limit-input');
-    const limit = limitInput?.value || '50';
+    let limit = limitInput?.value || '50';
+
+    // Limit to 40 for greet/chat/followup modes to prevent DOM element loss (geek-item-wrap)
+    // caused by long lists/dynamic loading shifting the view
+    if (['greet', 'chat', 'followup'].includes(activeTab) && parseInt(limit) > 40) {
+        limit = '40';
+        if (limitInput) {
+            limitInput.value = limit;
+        }
+        showToast('为防止定位丢失，当前模式最大加载数量已限制为40', 'info');
+    }
 
     const params = new URLSearchParams({
         mode: mode,

@@ -6,12 +6,29 @@ from pathlib import Path
 from typing import Dict, Any
 
 
-with open("config/config.yaml", "r", encoding="utf-8") as f:
-    _config_values = yaml.safe_load(f)
-        
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_DEFAULT_CONFIG_PATH = _REPO_ROOT / "config" / "config.yaml"
+_DEFAULT_SECRETS_PATH = _REPO_ROOT / "config" / "secrets.yaml"
 
-with open("config/secrets.yaml", "r", encoding="utf-8") as f:
-    _secrets_values = yaml.safe_load(f)
+
+def _load_yaml(path: Path, *, label: str) -> dict[str, Any]:
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Missing {label} at '{path}'. "
+            "Run from repo root or set BOSS_CONFIG_YAML / BOSS_SECRETS_YAML env vars."
+        )
+    with open(path, "r", encoding="utf-8") as f:
+        payload = yaml.safe_load(f) or {}
+    if not isinstance(payload, dict):
+        raise ValueError(f"Invalid YAML for {label} at '{path}': expected a mapping at root.")
+    return payload
+
+
+_config_path = Path(os.getenv("BOSS_CONFIG_YAML", str(_DEFAULT_CONFIG_PATH))).expanduser()
+_secrets_path = Path(os.getenv("BOSS_SECRETS_YAML", str(_DEFAULT_SECRETS_PATH))).expanduser()
+
+_config_values = _load_yaml(_config_path, label="config.yaml")
+_secrets_values = _load_yaml(_secrets_path, label="secrets.yaml")
 
 
 def get_boss_zhipin_config() -> Dict[str, str]:

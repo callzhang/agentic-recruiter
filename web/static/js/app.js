@@ -631,7 +631,6 @@ async function startProcessCandidate() {
     
     // Capture currently selected candidate to resume from (if any)
     let activeCard = document.querySelector('.candidate-card.bg-blue-50');
-
     cycleReplyState.running = true;
     CycleReplyHelpers.setButton(true);
     
@@ -656,10 +655,9 @@ async function startProcessCandidate() {
     }, 10000); // Check every 10 seconds
 
     try {
-        // Check if "process all modes" checkbox is checked
-        let processAllModes = document.getElementById('process-all-modes-checkbox')?.checked || false;
-        
         while (cycleReplyState.running && !cycleReplyState.stopRequested) {
+            // Check if "process all modes" checkbox is checked
+            let processAllModes = document.getElementById('process-all-modes-checkbox')?.checked || false;
             
             // Determine current mode
             const candidateTabs = CycleReplyHelpers.getCandidateTabs();
@@ -768,12 +766,17 @@ async function startProcessCandidate() {
             processAllModes = document.getElementById('process-all-modes-checkbox')?.checked || false;
             if (processAllModes) {
                 cycleReplyState.modeIndex = (cycleReplyState.modeIndex + 1) % CYCLE_MODES.length;
-                await CycleReplyHelpers.sleep(1000);
             } else {
                 // If not processing all modes, refresh the current candidate list and continue
                 console.log(`[${mode}] 准备刷新候选人列表以继续处理...`);
-                // Loop will continue and processMode (at start of loop) will pick up the new candidates by calling loadCandidatesList
-                await CycleReplyHelpers.sleep(1000);
+            }
+            await CycleReplyHelpers.sleep(1000);
+            // Clear the list so the next iteration forces a fetch
+            if (!cycleReplyState.stopRequested) {
+                const candidateList = document.getElementById('candidate-list');
+                if (candidateList) {
+                   candidateList.innerHTML = '';
+                }
             }
         }
     } finally {
@@ -781,7 +784,6 @@ async function startProcessCandidate() {
         document.dispatchEvent(new CustomEvent('candidates:enable-cards'));
         CycleReplyHelpers.resetState();
         CycleReplyHelpers.setButton(false);
-        const processAllModes = document.getElementById('process-all-modes-checkbox')?.checked || false;
         showToast(processAllModes ? '循环处理已完成' : `批量处理已完成: 成功 ${total_processed}, 失败 ${total_failed}, 跳过 ${total_skipped}`, total_failed > 0 ? 'error' : 'success');
     }
 }

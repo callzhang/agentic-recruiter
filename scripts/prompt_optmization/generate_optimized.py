@@ -52,6 +52,30 @@ except Exception:  # pragma: no cover
         return it
 
 
+_SCRIPT_DIR = Path(__file__).resolve().parent
+_REPO_ROOT = _SCRIPT_DIR.parent.parent
+
+
+def _resolve_path(p: str | Path, *, kind: str) -> Path:
+    raw = Path(p).expanduser()
+    if raw.is_absolute() and raw.exists():
+        return raw
+    if raw.exists():
+        return raw.resolve()
+
+    # Try common bases (supports running from repo root or from scripts/prompt_optmization).
+    candidates = [
+        (_SCRIPT_DIR / raw),
+        (_REPO_ROOT / raw),
+    ]
+    for c in candidates:
+        if c.exists():
+            return c.resolve()
+
+    tried = [str(raw)] + [str(c) for c in candidates]
+    raise FileNotFoundError(f"{kind} not found. Tried: {', '.join(tried)}")
+
+
 def _read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
@@ -73,7 +97,7 @@ def _normalize_history_role(item: dict[str, Any]) -> str:
     msg_type = (item.get("type") or "").strip().lower()
     if msg_type == "candidate":
         return "user"
-    if msg_type in {"recruiter", "assistant", "system"}:
+    if msg_type in {"recruiter", "assistant"}:
         return "assistant"
     return ""
 
@@ -225,7 +249,7 @@ def _gen_analysis(
     history: list[dict[str, Any]],
     history_max_messages: int,
     resume_max_chars: int,
-) -> Optional[dict[str, Any]]:
+) -> tuple[Optional[dict[str, Any]], Optional[str]]:
     instructions = _build_analyze_instructions(analyze_prompt)
     payload = "\n\n".join(
         [
@@ -240,6 +264,7 @@ def _gen_analysis(
         ]
     ).strip()
 
+    primary_error: Optional[str] = None
     try:
         resp = client.responses.create(
             model=model,
@@ -258,6 +283,7 @@ def _gen_analysis(
     except TypeError:
         obj = None
     except Exception as exc:
+        primary_error = str(exc)
         logger.warning("analysis call failed, fallback to text parse: %s", exc)
         obj = None
 
@@ -269,17 +295,18 @@ def _gen_analysis(
                 input=payload,
             )
         except Exception as exc:
+            err = str(exc)
             logger.error("analysis call failed: %s", exc)
-            return None
+            return None, (primary_error or err)
         obj = _extract_first_json_object(getattr(resp, "output_text", "") or "")
 
     if obj is None:
-        return None
+        return None, (primary_error or "failed to parse analysis JSON")
     try:
         parsed = AnalysisSchema.model_validate(obj)
     except Exception:
-        return None
-    return parsed.model_dump()
+        return None, (primary_error or "analysis schema validation failed")
+    return parsed.model_dump(), None
 
 
 def _gen_message(
@@ -292,7 +319,7 @@ def _gen_message(
     history: list[dict[str, Any]],
     history_max_messages: int,
     resume_max_chars: int,
-) -> Optional[dict[str, Any]]:
+) -> tuple[Optional[dict[str, Any]], Optional[str]]:
     instructions = (action_prompt or "").strip()
     payload = "\n\n".join(
         [
@@ -318,11 +345,11 @@ def _gen_message(
         )
     except Exception as exc:
         logger.error("message call failed: %s", exc)
-        return None
+        return None, str(exc)
     parsed = getattr(resp, "output_parsed", None)
     if not parsed:
-        return None
-    return parsed.model_dump()
+        return None, "missing parsed message"
+    return parsed.model_dump(), None
 
 
 def _simple_message_checks(text: str) -> dict[str, Any]:
@@ -396,6 +423,8 @@ def _summarize_checks(outputs: list[dict[str, Any]]) -> dict[str, Any]:
         "total": total,
         "analysis_ok": _count(lambda o: isinstance(o.get("analysis"), dict) and "overall" in (o.get("analysis") or {})),
         "message_ok": _count(lambda o: isinstance(o.get("message_obj"), dict) and (o.get("message_obj") or {}).get("action") in {"PASS", "CHAT", "CONTACT", "WAIT"}),
+        "analysis_failed": _count(lambda o: bool(o.get("analysis_error"))),
+        "message_failed": _count(lambda o: bool(o.get("message_error"))),
         "len_gt_160": _count(lambda o: (o.get("message_checks") or {}).get("len", 0) > 160),
         "qmarks_gt_1": _count(lambda o: (o.get("message_checks") or {}).get("qmarks", 0) > 1),
         "salary_like": _count(lambda o: bool((o.get("message_checks") or {}).get("salary_like"))),
@@ -435,6 +464,32 @@ def _format_issue_examples(
     return lines
 
 
+def _format_generation_failures(outputs: list[dict[str, Any]], limit: int, run_dir: Path) -> list[str]:
+    failed = [o for o in outputs if o.get("analysis_error") or o.get("message_error")]
+    if not failed:
+        return ["- 生成失败: 0"]
+
+    lines = [f"- 生成失败: {len(failed)}（示例 {min(limit, len(failed))} 条）"]
+    for o in failed[:limit]:
+        cand_file = o.get("candidate_file") or ""
+        gen_json = o.get("generated_json") or ""
+        name = o.get("name") or "unknown"
+        aerr = (o.get("analysis_error") or "").strip()
+        merr = (o.get("message_error") or "").strip()
+        rel = ""
+        try:
+            rel = str(Path(gen_json).relative_to(run_dir))
+        except Exception:
+            rel = str(gen_json)
+        parts = []
+        if aerr:
+            parts.append(f"analysis_error={aerr}")
+        if merr:
+            parts.append(f"message_error={merr}")
+        lines.append(f"  - `{Path(cand_file).name}` / `{rel}` / {name} :: " + " | ".join(parts))
+    return lines
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-dir", required=True, help="Run directory path (contains candidates/ + job_portrait_optimized.json)")
@@ -442,11 +497,11 @@ def main() -> int:
         "--prompt-source",
         default="md",
         choices=["optimized_py", "md", "module"],
-        help="Where to load ACTION_PROMPTS from (default: scripts/prompt_optmization/assistant_actions_prompts.md)",
+        help="Where to load ACTION_PROMPTS from (default: assistant_actions_prompts.md next to this script)",
     )
     parser.add_argument(
         "--assistant-prompts-md",
-        default=str(Path("scripts") / "prompt_optmization" / "assistant_actions_prompts.md"),
+        default="assistant_actions_prompts.md",
         help="Path to assistant_actions_prompts.md (used when --prompt-source=md)",
     )
     parser.add_argument("--model", default=None, help="Override OpenAI model (default: config model)")
@@ -456,7 +511,11 @@ def main() -> int:
     parser.add_argument("--start-index", type=int, default=1, help="1-based start index within sorted candidates files")
     args = parser.parse_args()
 
-    run_dir = Path(args.run_dir)
+    try:
+        run_dir = _resolve_path(args.run_dir, kind="run_dir")
+    except FileNotFoundError as exc:
+        logger.error(str(exc))
+        return 2
     candidates_dir = run_dir / "candidates"
     if not candidates_dir.exists():
         raise SystemExit(f"candidates dir not found: {candidates_dir}")
@@ -474,7 +533,8 @@ def main() -> int:
     elif args.prompt_source == "module":
         prompts = dict(MODULE_ACTION_PROMPTS)
     else:
-        prompts = _load_action_prompts_from_md(Path(args.assistant_prompts_md))
+        md_path = _resolve_path(args.assistant_prompts_md, kind="assistant_actions_prompts.md")
+        prompts = _load_action_prompts_from_md(md_path)
 
     if OpenAI is None:
         raise SystemExit("openai sdk not installed/available")
@@ -508,7 +568,7 @@ def main() -> int:
         history = data.get("history") or []
 
         analyze_prompt = prompts.get("ANALYZE_ACTION") or ""
-        analysis = _gen_analysis(
+        analysis, analysis_error = _gen_analysis(
             client,
             model=str(model),
             analyze_prompt=analyze_prompt,
@@ -521,7 +581,7 @@ def main() -> int:
 
         msg_action = _choose_message_action(history)
         msg_prompt = prompts.get(msg_action) or prompts.get("CHAT_ACTION") or ""
-        msg_obj = _gen_message(
+        msg_obj, message_error = _gen_message(
             client,
             model=str(model),
             action_prompt=msg_prompt,
@@ -549,8 +609,10 @@ def main() -> int:
             "message_action": msg_action,
             "message": message_text,
             "message_obj": msg_obj,
+            "message_error": message_error,
             "message_checks": checks,
             "analysis": analysis,
+            "analysis_error": analysis_error,
         }
         out_path = out_dir / f"{path.stem}.generated.json"
         _write_json(out_path, out_payload)
@@ -565,8 +627,10 @@ def main() -> int:
                 "message_action": msg_action,
                 "message": message_text,
                 "message_obj": msg_obj,
+                "message_error": message_error,
                 "message_checks": checks,
                 "analysis": analysis,
+                "analysis_error": analysis_error,
             }
         )
 
@@ -583,10 +647,18 @@ def main() -> int:
         f"- 处理候选人: {summary.get('total')}",
         f"- analysis 生成成功: {summary.get('analysis_ok')}/{summary.get('total')}",
         f"- message(JSON) 生成成功: {summary.get('message_ok')}/{summary.get('total')}",
+        f"- analysis 生成失败: {summary.get('analysis_failed')}/{summary.get('total')}",
+        f"- message(JSON) 生成失败: {summary.get('message_failed')}/{summary.get('total')}",
         "",
         "### 动作分布（action）",
         "",
         *([f"- {k}: {v}" for k, v in action_counts.items()] or ["- （无）"]),
+        "",
+        "### 生成失败（带引用）",
+        "",
+    ]
+    section += _format_generation_failures(outputs_for_report, limit=5, run_dir=run_dir)
+    section += [
         "",
         "### 合规/风险快照（自动检测，仅用于抽样排查）",
         "",

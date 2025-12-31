@@ -112,7 +112,6 @@ def extract_json_block(text: str) -> str | None:
     return text[start:]
 
 
-@typing_extensions.deprecated("The Assistants API is deprecated in favor of the Responses API")
 def _normalise_history(chat_history: List[Dict[str, Any]]) -> List[Dict[str, str]]:
     """Convert chat history to thread message format."""
     role_map = {"candidate": "user", "recruiter": "assistant", "system": "assistant"}

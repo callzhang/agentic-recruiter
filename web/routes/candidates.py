@@ -50,7 +50,7 @@ async def list_candidates(
     mode: str = Query("chat", description="Mode: recommend, greet, chat, or followup"),
     job_applied: str = Query(..., description="Job position filter (required)"),
     job_id: str = Query(..., description="Job ID filter (required)"),
-    limit: int = Query(50, description="Limit the number of candidates to return (default: 999)"),
+    limit: int = Query(40, description="Limit the number of candidates to return (default: 999)"),
 ):
     """Get candidate fetched from browser, compare with saved candidates in cloud store, and merge the data when matched
 
@@ -363,7 +363,7 @@ async def generate_message(
     """Generate message for candidate. Requires conversation_id to be initialized first."""
     should_generate, new_user_messages, assistant_message, chat_history = await _should_generate_message(candidate_id, chat_id, mode, force)
     # add "[沉默]" to the input message to prevent random errors with empty input
-    if mode == 'followup' and not new_user_messages:
+    if (mode == 'followup' or force) and not new_user_messages:
         new_user_messages = "[沉默]"
     elif mode == 'recommend':
         new_user_messages = [

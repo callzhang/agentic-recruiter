@@ -24,6 +24,7 @@
                         {'field': 'job_applied', 'label': '岗位'},
                         {'field': 'score', 'label': '得分'},
                         {'field': 'stage', 'label': '阶段'},
+                        {'field': 'contacted', 'label': '已联系'},
                         {'field': 'notified', 'label': '通知'},
                         {'field': 'contact', 'label': '联系方式'},
                         {'field': 'updated_at', 'label': '更新时间'}
@@ -78,6 +79,14 @@
                             </span>
                         {% else %}
                             <span class="text-gray-400">—</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-4 py-3 text-center">
+                        {% set metadata = candidate.metadata if candidate.metadata else {} %}
+                        {% if metadata.contacted %}
+                            <span class="text-lg">✅</span>
+                        {% else %}
+                            <span class="text-lg">❌</span>
                         {% endif %}
                     </td>
                     <td class="px-4 py-3 text-center">

@@ -10,7 +10,8 @@ Design goals (per iteration workflow):
   Use scripts/prompt_optmization/generate_optimized.py to replay/validate prompt changes.
 
 Run:
-  python scripts/prompt_optmization/download_data_for_prompt_optimization.py --job-position 架构师
+  cd scripts/prompt_optmization
+  python download_data_for_prompt_optimization.py --job-position 架构师
 """
 
 from __future__ import annotations
@@ -36,6 +37,8 @@ try:
 except Exception:  # pragma: no cover
     def tqdm(it, **_kwargs):  # type: ignore
         return it
+
+_SCRIPT_DIR = Path(__file__).resolve().parent
 
 
 # ---------------------------------------------------------------------------
@@ -112,12 +115,18 @@ def _analysis_compliance_stats(candidates: list["CandidateExport"]) -> dict[str,
     """Heuristic check: whether new prompt rules are visible in stored analysis."""
 
     def _has_scorecard(summary: str) -> bool:
-        # New prompt asks for "门槛=...,场景=...,基础=...,契合=...,潜力=...(+..),总分=..../100=>..../10"
+        # Current prompt requires the summary to start with "评分表：" and include a total mapping.
         s = (summary or "").replace(" ", "")
+        if "评分表" in s and "总分=" in s and "/100" in s and "=>" in s:
+            return True
+        # Backward compatibility for older formats.
         return all(x in s for x in ("门槛=", "场景=", "基础=", "契合=", "潜力=", "总分="))
 
     def _has_persona(summary: str) -> bool:
         s = (summary or "").replace(" ", "")
+        if "画像判断" in s and "主观=" in s and "阶段=" in s and "建议=" in s:
+            return True
+        # Backward compatibility.
         return all(x in s for x in ("技术深度=", "抽象能力=", "机制化=", "建议="))
 
     total = len(candidates)
@@ -451,7 +460,7 @@ def _normalize_history_role(item: dict[str, Any]) -> str:
     msg_type = (item.get("type") or "").strip().lower()
     if msg_type == "candidate":
         return "user"
-    if msg_type in {"recruiter", "assistant", "system"}:
+    if msg_type in {"recruiter", "assistant"}:
         return "assistant"
     return ""
 
@@ -1168,6 +1177,15 @@ def step5_write_report_and_generate_variants(
 
 
 def main() -> int:
+    if Path.cwd().resolve() != _SCRIPT_DIR:
+        logger.error(
+            "Wrong working directory.\n"
+            "Please run from 'scripts/prompt_optmization':\n"
+            "  cd scripts/prompt_optmization\n"
+            "  python download_data_for_prompt_optimization.py --job-position 架构师\n"
+        )
+        return 2
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--job-id", default=None, help="Select job by job_id/base_job_id")
     parser.add_argument("--job-position", default=None, help="Select job by position keyword (e.g., 架构师)")
@@ -1179,12 +1197,14 @@ def main() -> int:
     )
     parser.add_argument(
         "--prompt-opt-dir",
-        default=str(Path("scripts") / "prompt_optmization"),
-        help="Output root directory",
+        default=".",
+        help="Output root directory (default: current directory)",
     )
     args = parser.parse_args()
 
     prompt_opt_dir = Path(args.prompt_opt_dir)
+    if not prompt_opt_dir.is_absolute():
+        prompt_opt_dir = (_SCRIPT_DIR / prompt_opt_dir).resolve()
 
     # Step 4 first: always export the current prompts/schema for editing.
     step4_export_prompt_files(prompt_opt_dir)

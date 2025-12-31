@@ -96,6 +96,10 @@
                         class="w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition">
                     生成新版岗位肖像（GPT-5.2）
                 </button>
+                <button onclick="goToManualPage()"
+                        class="w-full px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition">
+                    手动粘贴 JSON 对比更新...
+                </button>
                 <p class="text-xs text-gray-500">
                     注意：生成只用于辅助撰写；最终以你确认提交的岗位肖像为准。
                 </p>
@@ -340,6 +344,10 @@ function goToGeneratePage() {
 
     const qp = encodeURIComponent(ids.join(','));
     window.location.href = `/jobs/optimize/generate?job_id=${encodeURIComponent(OPT_BASE_JOB_ID)}&item_ids=${qp}`;
+}
+
+function goToManualPage() {
+    window.location.href = `/jobs/optimize/generate?job_id=${encodeURIComponent(OPT_BASE_JOB_ID)}`;
 }
 
 function _markDirty() {

@@ -107,19 +107,83 @@ class BossServiceAsync:
             
         logger.debug("Playwright 初始化完成。")
 
+
+    async def _handle_external_url(self, url: str):
+        """Handle external URL opening request from browser.
+        
+        Opens the URL in the system's default browser.
+        """
+        if not url or url == "about:blank":
+            return
+        logger.info(f"Diverting URL to default browser: {url}")
+        # Run in thread to prevent blocking the event loop
+        try:
+            import webbrowser
+            await asyncio.to_thread(webbrowser.open, url)
+        except Exception as e:
+            logger.error(f"Failed to open external URL: {e}")
+
     async def start_browser(self) -> None:
         if not self.playwright:
             raise RuntimeError("Playwright 未初始化")
         user_data_dir = os.path.join(tempfile.gettempdir(), "bosszhipin_playwright_user_data")
         os.makedirs(user_data_dir, exist_ok=True)
         
-
         browser_config = get_browser_config()
         self.browser = await self.playwright.chromium.connect_over_cdp(
             browser_config["cdp_url"],
             timeout=15000
         )
         self.context = self.browser.contexts[0] if self.browser.contexts else await self.browser.new_context()
+        
+        # Expose Python function to JavaScript
+        await self.context.expose_function("python_open_external", lambda url: asyncio.create_task(self._handle_external_url(url)))
+        
+        # Inject script:
+        # 1. Block Cmd+N
+        # 2. Divert target="_blank" links to default browser
+        # 3. Divert window.open to default browser
+        await self.context.add_init_script("""
+            if (!window._bossBotInitInjected) {
+                window._bossBotInitInjected = true;
+                
+                // Block Cmd+N / Ctrl+N
+                document.addEventListener('keydown', function(e) {
+                    if ((e.metaKey || e.ctrlKey) && e.key === 'n') {
+                        e.preventDefault();
+                        console.log("Blocked New Window Shortcut");
+                    }
+                }, true);
+
+                // Intercept links
+                document.addEventListener('click', function(e) {
+                    var target = e.target;
+                    while (target && target.tagName !== 'A') {
+                        target = target.parentElement;
+                    }
+                    if (target && target.tagName === 'A') {
+                        // If link opens in new tab OR user is holding Cmd/Ctrl
+                        if (target.target === '_blank' || e.metaKey || e.ctrlKey) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            console.log("Diverting link to default browser: " + target.href);
+                            window.python_open_external(target.href);
+                        }
+                    }
+                }, true);
+                
+                // Override window.open
+                const originalOpen = window.open;
+                window.open = function(url, target, features) {
+                    console.log('Intercepted window.open: ' + url);
+                    if (url) {
+                        window.python_open_external(url);
+                    }
+                    return null;
+                };
+            }
+        """)
+
         self.page = await self._ensure_page()
         logger.debug("持久化浏览器会话已建立。")
         return True

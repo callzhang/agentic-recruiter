@@ -51,6 +51,7 @@ async def search_candidates(
     job_applied: Optional[str] = Query(None, description="Job position filter"),
     stage: Optional[str] = Query(None, description="Candidate stage"),
     notified: Optional[str] = Query(None, description="Notified flag (true/false)"),
+    contacted: Optional[str] = Query(None, description="Contacted flag (true/false)"),
     score_min: Optional[float] = Query(None, ge=0, le=10, description="Minimum analysis score (0-10)"),
     date_from: Optional[str] = Query(None, description="Updated at (from, YYYY-MM-DD)"),
     date_to: Optional[str] = Query(None, description="Updated at (to, YYYY-MM-DD)"),
@@ -84,6 +85,15 @@ async def search_candidates(
             notified_bool = True
         elif notified_lower in ('false', '0', 'no'):
             notified_bool = False
+            
+    # Convert contacted string to bool
+    contacted_bool = None
+    if contacted:
+        contacted_lower = contacted.strip().lower()
+        if contacted_lower in ('true', '1', 'yes'):
+            contacted_bool = True
+        elif contacted_lower in ('false', '0', 'no'):
+            contacted_bool = False
 
     # Search candidates (database query, no browser lock needed)
     # Exclude large fields to prevent gRPC message size limit errors
@@ -96,6 +106,7 @@ async def search_candidates(
         job_applied=job_applied.strip() if job_applied else None,
         stage=stage.strip() if stage else None,
         notified=notified_bool,
+        contacted=contacted_bool,
         updated_from=updated_from,
         updated_to=updated_to,
         resume_contains=resume_contains.strip() if resume_contains else None,
