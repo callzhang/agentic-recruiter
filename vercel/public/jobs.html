@@ -503,6 +503,187 @@
             }
         }
         
+        async function _readClipboardText() {
+            try {
+                if (navigator.clipboard?.readText) return await navigator.clipboard.readText();
+            } catch (e) {
+                // fall through
+            }
+            const fallback = window.prompt('浏览器限制无法直接读取剪切板，请粘贴 JSON：');
+            return fallback || '';
+        }
+
+        async function _writeClipboardText(text) {
+            try {
+                await navigator.clipboard.writeText(text);
+                return true;
+            } catch (e) {
+                window.prompt('浏览器限制无法直接写入剪切板，请手动复制：', text);
+                return false;
+            }
+        }
+
+        function _unwrapJobPortrait(obj) {
+            if (!obj || typeof obj !== 'object') return null;
+            if (obj.job_portrait && typeof obj.job_portrait === 'object') return obj.job_portrait;
+            if (obj.data && typeof obj.data === 'object' && obj.data.job_portrait && typeof obj.data.job_portrait === 'object') return obj.data.job_portrait;
+            if (obj.payload && typeof obj.payload === 'object' && obj.payload.job_portrait && typeof obj.payload.job_portrait === 'object') return obj.payload.job_portrait;
+            return obj;
+        }
+
+        function _normalizeKeywords(value) {
+            if (Array.isArray(value)) return { positive: value.map(v => String(v || '').trim()).filter(Boolean), negative: [] };
+            if (typeof value === 'string') {
+                const lines = value.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+                return { positive: lines, negative: [] };
+            }
+            if (value && typeof value === 'object') {
+                const pos = Array.isArray(value.positive) ? value.positive : (Array.isArray(value.keywords) ? value.keywords : []);
+                const neg = Array.isArray(value.negative) ? value.negative : [];
+                return {
+                    positive: pos.map(v => String(v || '').trim()).filter(Boolean),
+                    negative: neg.map(v => String(v || '').trim()).filter(Boolean),
+                };
+            }
+            return { positive: [], negative: [] };
+        }
+
+        function _getJobPortraitFromForm() {
+            const portrait = {};
+            const positionEl = document.getElementById('position');
+            const descriptionEl = document.getElementById('description');
+            const responsibilitiesEl = document.getElementById('responsibilities');
+            const requirementsEl = document.getElementById('requirements');
+            const targetProfileEl = document.getElementById('target_profile');
+            const ddqTextEl = document.getElementById('drill_down_questions_text');
+            const candidateFiltersEl = document.getElementById('candidate_filters_json');
+
+            portrait.position = positionEl?.value ?? '';
+            portrait.description = descriptionEl?.value ?? '';
+            portrait.responsibilities = responsibilitiesEl?.value ?? '';
+            portrait.requirements = requirementsEl?.value ?? '';
+            portrait.target_profile = targetProfileEl?.value ?? '';
+            portrait.drill_down_questions = ddqTextEl?.value ?? '';
+
+            const positive = window.tagEditors?.positive_keywords ? Array.from(window.tagEditors.positive_keywords.tags) : [];
+            const negative = window.tagEditors?.negative_keywords ? Array.from(window.tagEditors.negative_keywords.tags) : [];
+            portrait.keywords = { positive, negative };
+
+            if (candidateFiltersEl) {
+                const raw = (candidateFiltersEl.value || '').trim();
+                if (!raw) {
+                    portrait.candidate_filters = null;
+                } else {
+                    try {
+                        portrait.candidate_filters = JSON.parse(raw);
+                    } catch {
+                        // Keep raw string so user can roundtrip even if JSON is temporarily invalid.
+                        portrait.candidate_filters = raw;
+                    }
+                }
+            }
+            return portrait;
+        }
+
+        async function copyJobPortraitJsonFromForm() {
+            try {
+                const portrait = _getJobPortraitFromForm();
+                const text = JSON.stringify(portrait, null, 2);
+                await _writeClipboardText(text);
+                showToast('已复制岗位肖像 JSON', 'success');
+            } catch (e) {
+                console.error(e);
+                showToast('复制失败', 'error');
+            }
+        }
+
+        async function pasteJobPortraitJsonToForm() {
+            try {
+                let raw = '';
+                try {
+                    if (navigator.clipboard?.readText) raw = await navigator.clipboard.readText();
+                } catch (e) {
+                    // fall through
+                }
+
+                // Robust fallback: if automatic read failed or returned empty, prompt the user.
+                if (!raw || raw.trim().length < 2) {
+                    raw = window.prompt('无法读取剪切板，请直接粘贴 JSON 代码：');
+                }
+
+                if (!raw || raw.trim().length < 2) {
+                    if (raw !== null) showToast('内容为空或无效', 'error');
+                    return;
+                }
+
+                let obj;
+                try {
+                    obj = JSON.parse(raw);
+                } catch (e) {
+                    showToast('解析 JSON 失败', 'error');
+                    return;
+                }
+
+                const portrait = _unwrapJobPortrait(obj) || {};
+
+                const setIfPresent = (id, key) => {
+                    if (!(key in portrait)) return;
+                    const el = document.getElementById(id);
+                    if (!el) return;
+                    el.value = portrait[key] ?? '';
+                };
+
+                setIfPresent('position', 'position');
+                setIfPresent('description', 'description');
+                setIfPresent('responsibilities', 'responsibilities');
+                setIfPresent('requirements', 'requirements');
+                setIfPresent('target_profile', 'target_profile');
+                setIfPresent('drill_down_questions_text', 'drill_down_questions');
+
+                if ('keywords' in portrait) {
+                    const kw = _normalizeKeywords(portrait.keywords);
+                    // Ensure editors exist for current DOM.
+                    if (!window.tagEditors?.positive_keywords || !window.tagEditors?.negative_keywords) {
+                        initializeTagEditors();
+                    }
+                    window.tagEditors?.positive_keywords?.setTags?.(kw.positive || []);
+                    window.tagEditors?.negative_keywords?.setTags?.(kw.negative || []);
+                }
+
+                if ('candidate_filters' in portrait) {
+                    const el = document.getElementById('candidate_filters_json');
+                    if (el) {
+                        const v = portrait.candidate_filters;
+                        if (v === null || v === undefined || v === '') {
+                            el.value = '';
+                        } else if (typeof v === 'string') {
+                            el.value = v;
+                        } else {
+                            el.value = JSON.stringify(v, null, 2);
+                        }
+                    }
+                }
+                
+                // Also handle notification config if present in the pasted JSON
+                if (portrait.notification) {
+                    if (portrait.notification.url) {
+                        const urlEl = document.getElementById('dingtalk_url');
+                        if (urlEl) urlEl.value = portrait.notification.url;
+                    }
+                    if (portrait.notification.secret) {
+                        const secretEl = document.getElementById('dingtalk_secret');
+                        if (secretEl) secretEl.value = portrait.notification.secret;
+                    }
+                }
+
+                showToast('已从剪切板应用 JSON（缺少字段不会覆盖）', 'success');
+            } catch (e) {
+                console.error(e);
+                showToast('粘贴失败', 'error');
+            }
+        }
+
+        
         // Helper functions
         function getBaseJobId(jobId) {
             return jobId.replace(/_v\d+$/, '');
@@ -513,7 +694,7 @@
             div.textContent = text;
             return div.innerHTML;
         }
-        
+
         // Extract form data to job object
         function extractJobDataFromForm() {
             const form = document.getElementById('job-form');
@@ -614,6 +795,23 @@
                     v${currentVersion}${isCurrent ? ' (当前版本)' : ' (历史版本)'}
                 </span>
             ` : '';
+
+            const portraitCopyPasteButtons = `
+                <button type="button"
+                        onclick="copyJobPortraitJsonFromForm()"
+                        class="px-3 py-1 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 text-sm font-medium shadow-sm"
+                        title="复制当前表单内容为 JSON">
+                    📤 复制 JSON
+                </button>
+                ${!isNew ? `
+                <button type="button"
+                        onclick="location.href='/jobs/optimize/generate?job_id=${escapeHtml(baseJobId)}'"
+                        class="px-3 py-1 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium shadow-sm"
+                        title="进入对比模式，对比剪切板 JSON 与当前版本差异">
+                    🔍 对比导入...
+                </button>
+                ` : ''}
+            `;
             
             const jobIdField = isNew ? `
                 <input type="text" id="job_id" name="job_id" required
@@ -654,6 +852,7 @@
                                         ${versionTag}
                                     </div>
                                     <div class="flex items-center gap-2">
+                                        ${portraitCopyPasteButtons}
                                         ${versionSelector}
                                         ${useVersionButton}
                                     </div>

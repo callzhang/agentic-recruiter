@@ -12,6 +12,23 @@
         .diff-add { font-weight: 600; color: #166534; background: #dcfce7; }
         .diff-del { text-decoration: line-through; color: #6b7280; background: #f3f4f6; }
         .hidden { display: none !important; }
+        @keyframes pulse-jump {
+            0%, 100% { transform: translateY(0); box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05); }
+            15% { transform: translateY(-4px); box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06); }
+            30% { transform: translateY(0); box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05); }
+            45% { transform: translateY(-2px); box-shadow: 2px 4px -1px rgba(0, 0, 0, 0.1); }
+            60% { transform: translateY(0); box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05); }
+        }
+        .animate-jump-interval {
+            animation: pulse-jump-10s 10s ease-in-out infinite;
+        }
+        @keyframes pulse-jump-10s {
+            0%, 20% { transform: translateY(0); } /* Wait */
+            22% { transform: translateY(-5px) scale(1.02); box-shadow: 0 10px 15px -3px rgba(22, 163, 74, 0.3); }
+            24% { transform: translateY(0) scale(1); }
+            26% { transform: translateY(-3px) scale(1.01); }
+            28%, 100% { transform: translateY(0); box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05); }
+        }
     </style>
 </head>
 <body class="bg-gray-50 min-h-screen">
@@ -56,7 +73,7 @@
                 </div>
             </div>
 
-            <div id="progress-card" class="bg-white rounded-lg border shadow-sm p-6">
+            <div id="gen-progress-card" class="bg-white rounded-lg border shadow-sm p-6">
                 <div class="flex items-center justify-between">
                     <div>
                         <div class="text-lg font-semibold text-gray-800">正在生成（大约需要 30s）</div>
@@ -69,28 +86,37 @@
                 </div>
             </div>
 
-            <div id="result-card" class="bg-white rounded-lg border shadow-sm p-6 hidden">
-                <div class="flex items-center justify-between">
-                    <h2 class="text-xl font-semibold text-gray-800">对比与编辑</h2>
-                    <div class="flex items-center gap-2">
-                        <button onclick="copyGeneratedPortraitJson()"
-                                class="px-3 py-1 text-sm bg-gray-100 hover:bg-gray-200 rounded text-gray-700">
-                            拷贝岗位肖像 JSON
-                        </button>
-                        <button onclick="pastePortraitJsonIntoEditors()"
-                                class="px-3 py-1 text-sm bg-gray-100 hover:bg-gray-200 rounded text-gray-700">
-                            粘贴剪切板 JSON
-                        </button>
-                        <button onclick="publishOptimizedPortrait()"
-                                class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition font-medium">
-                            确认提交（发布新版本）
-                        </button>
+            <div id="gen-result" class="hidden space-y-4">
+                <div class="bg-white rounded-lg border shadow-sm">
+                    <div class="flex items-center justify-between border-b bg-gray-100 p-2">
+                        <h3 class="font-bold text-gray-800">总体优化建议</h3>
+                    </div>
+                    <div id="gen-overall-notes" class="p-4 text-sm text-gray-700 whitespace-pre-wrap">暂无</div>
+                </div>
+
+                <div class="bg-white rounded-lg border shadow-sm">
+                    <div class="flex items-center justify-between border-b bg-gray-100 p-2">
+                        <h3 class="font-bold text-gray-800">对比与编辑（可修改后提交）</h3>
+                        <div class="flex items-center gap-2">
+                            <button onclick="copyGeneratedPortraitJson()"
+                                    class="px-3 py-1 text-xs bg-indigo-100 text-indigo-700 border border-indigo-200 rounded hover:bg-indigo-200 transition font-medium">
+                                📄 拷贝岗位肖像文档
+                            </button>
+                            <button onclick="pastePortraitJsonIntoEditors()" id="btn-paste-json"
+                                    class="px-3 py-1 text-xs bg-green-600 text-white rounded hover:bg-green-700 transition font-medium shadow-sm">
+                                📋 粘贴剪切板 JSON 到页面
+                            </button>
+                            <button onclick="publishOptimizedPortrait()"
+                                    class="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 transition">
+                                🚀 确认提交（发布新版本）
+                            </button>
+                        </div>
+                    </div>
+                    <div class="p-4 space-y-4">
+                        <p class="text-xs text-gray-500">左侧为当前线上版本；右侧默认展示字符级 diff，点“编辑/预览”切换。</p>
+                        <div id="fields" class="mt-4 space-y-6"></div>
                     </div>
                 </div>
-                <p class="text-xs text-gray-500 mt-2">
-                    左侧为当前线上版本；右侧默认展示字符级 diff，点“编辑/预览”切换。
-                </p>
-                <div id="fields" class="mt-4 space-y-6"></div>
             </div>
 
             <div id="closed-alert-overlay" class="fixed inset-0 bg-gray-900 bg-opacity-75 z-[60] hidden flex items-center justify-center">
@@ -370,7 +396,8 @@
         function _unwrapPortraitPayload(obj) {
             if (!obj || typeof obj !== 'object') return null;
             if (obj.job_portrait && typeof obj.job_portrait === 'object') return obj.job_portrait;
-            if (obj.data && typeof obj.data === 'object') return obj.data;
+            if (obj.data && typeof obj.data === 'object' && obj.data.job_portrait && typeof obj.data.job_portrait === 'object') return obj.data.job_portrait;
+            if (obj.payload && typeof obj.payload === 'object' && obj.payload.job_portrait && typeof obj.payload.job_portrait === 'object') return obj.payload.job_portrait;
             return obj;
         }
 
@@ -386,6 +413,13 @@
         }
 
         async function pastePortraitJsonIntoEditors() {
+            // Stop animation on first interaction attempt
+            const pasteBtn = document.getElementById('btn-paste-json');
+            if (pasteBtn) {
+                pasteBtn.classList.remove('animate-jump-interval');
+                pasteBtn.classList.remove('ring-offset-2', 'ring-2', 'ring-green-400');
+            }
+
             try {
                 const raw = await _readClipboardText();
                 if (!raw || raw.trim().length < 2) {
@@ -450,7 +484,7 @@
                     item_ids: ITEM_IDS,
                     job_portrait: portrait,
                 });
-                showToast('已发布新版本，并关闭本次反馈', 'success');
+                showToast('已发布新版本' + (ITEM_IDS.length ? '，并关闭本次反馈' : ''), 'success');
                 setTimeout(() => {
                     window.location.href = `/jobs?tab=${encodeURIComponent(BASE_JOB_ID)}`;
                 }, 500);
@@ -460,14 +494,51 @@
             }
         }
 
+        function enterManualMode() {
+            // Hide progress
+            document.getElementById('gen-progress-card').classList.add('hidden');
+
+            // Simulate result payload with current portrait
+            const payload = {
+                data: {
+                    job_portrait: { ...currentPortrait },
+                    rationale: { overall_notes: '手动模式：请点击上方“粘贴剪切板 JSON”按钮导入待对比的配置。' }
+                },
+                current_job_portrait: currentPortrait
+            };
+
+            generatedPortrait = payload.data.job_portrait;
+            rationale = payload.data.rationale;
+            
+            // Show result
+            document.getElementById('gen-result').classList.remove('hidden');
+            
+            // Render fields
+            const overallEl = document.getElementById('gen-overall-notes');
+            if (overallEl) overallEl.textContent = rationale.overall_notes;
+            
+            _renderAllFields();
+
+            // Add animation to paste button
+            const pasteBtn = document.getElementById('btn-paste-json');
+            if (pasteBtn) {
+                pasteBtn.classList.add('animate-jump-interval');
+                pasteBtn.classList.add('ring-offset-2', 'ring-2', 'ring-green-400'); // Ring highlight
+            }
+
+            showToast('已进入手动对比模式，请粘贴 JSON', 'info');
+        }
+
         async function initPage() {
             BASE_JOB_ID = (_qs('job_id') || '').trim();
             const itemIdsRaw = (_qs('item_ids') || '').trim();
             ITEM_IDS = itemIdsRaw ? itemIdsRaw.split(',').map(s => decodeURIComponent(s)).filter(Boolean) : [];
-            if (!BASE_JOB_ID || !ITEM_IDS.length) {
-                showToast('缺少 job_id 或 item_ids 参数', 'error');
+            
+            if (!BASE_JOB_ID) {
+                showToast('缺少 job_id 参数', 'error');
                 return;
             }
+
             document.getElementById('job-base-id').textContent = `(${BASE_JOB_ID})`;
             document.getElementById('back-to-opt').href = `/jobs/optimize?job_id=${encodeURIComponent(BASE_JOB_ID)}`;
             document.getElementById('back-to-jobs').href = `/jobs?tab=${encodeURIComponent(BASE_JOB_ID)}`;
@@ -478,6 +549,11 @@
                 document.getElementById('job-position').textContent = currentPortrait.position || BASE_JOB_ID;
             } catch (e) {
                 document.getElementById('job-position').textContent = BASE_JOB_ID;
+            }
+
+            if (!ITEM_IDS.length) {
+                enterManualMode();
+                return;
             }
 
             const t0 = Date.now();
@@ -500,8 +576,13 @@
                 done = true;
                 document.getElementById('progress-bar').style.width = '100%';
                 document.getElementById('progress-percent').textContent = '100%';
-                document.getElementById('progress-card').classList.add('hidden');
-                document.getElementById('result-card').classList.remove('hidden');
+                document.getElementById('gen-progress-card').classList.add('hidden');
+                document.getElementById('gen-result').classList.remove('hidden');
+                
+                // Render fields (including overall notes)
+                const overallEl = document.getElementById('gen-overall-notes');
+                if (overallEl) overallEl.textContent = rationale.overall_notes || '暂无';
+                
                 _renderAllFields();
             } catch (e) {
                 console.error(e);
@@ -509,7 +590,7 @@
                 if (e.code === 'FEEDBACK_CLOSED' || e.message?.includes('已归档')) {
                     document.getElementById('closed-alert-msg').textContent = e.message;
                     document.getElementById('closed-alert-overlay').classList.remove('hidden');
-                    document.getElementById('progress-card').classList.add('hidden');
+                    document.getElementById('gen-progress-card').classList.add('hidden');
                 } else {
                     showToast('生成失败：' + e.message, 'error');
                     document.getElementById('progress-desc').textContent = '生成失败，请返回重试或检查 OpenAI 环境变量。';

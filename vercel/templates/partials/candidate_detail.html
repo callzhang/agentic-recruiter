@@ -9,6 +9,7 @@
 {% set view_mode = view_mode or 'interactive' %}
 {% set allow_optimization_feedback = allow_optimization_feedback if allow_optimization_feedback is defined else (view_mode != 'readonly') %}
 <div id="candidate-detail-root" class="space-y-6" data-view-mode="{{ view_mode }}">
+    {% set metadata = candidate.metadata if candidate.metadata else {} %}
     <!-- Header -->
     <div class="flex justify-between items-start">
         <div class="flex items-center gap-2">
@@ -23,6 +24,11 @@
             </button>
         </div>
         <div class="flex space-x-2">
+            {% if metadata.contacted %}
+            <span class="px-4 py-2 rounded-lg font-medium bg-indigo-100 text-indigo-700 border border-indigo-200">
+                已联系
+            </span>
+            {% endif %}
             {% if candidate.stage %}
             <span class="px-4 py-2 rounded-lg font-medium
                 {% if candidate.stage == 'PASS' %}bg-gray-200 text-gray-700
@@ -37,7 +43,6 @@
     </div>
     
     <!-- Contact Information Section -->
-    {% set metadata = candidate.metadata if candidate.metadata else {} %}
     {% set phone_number = metadata.phone_number if metadata and metadata.phone_number else None %}
     {% set wechat_number = metadata.wechat_number if metadata and metadata.wechat_number else None %}
     {% if phone_number or wechat_number %}
