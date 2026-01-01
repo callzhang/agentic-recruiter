@@ -43,3 +43,5 @@ openai:
   temperature: 0.7
   max_tokens: 2000
   base_url: https://api.openai.com/v1
+  # Public MCP endpoint for QS/211/985 lookup (must be reachable by OpenAI servers).
+  university_mcp_server_url: https://boss-hunter.vercel.app/api/mcp_university

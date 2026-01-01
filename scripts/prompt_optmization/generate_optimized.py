@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from datetime import datetime
@@ -38,6 +39,26 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from src.config import get_openai_config
 from src.global_logger import logger
 from src.prompts.assistant_actions_prompts import ACTION_PROMPTS as MODULE_ACTION_PROMPTS, AnalysisSchema, ChatActionSchema
+
+
+def _build_openai_tools(openai_config: dict[str, Any]) -> list[dict[str, Any]]:
+    tools: list[dict[str, Any]] = [{"type": "web_search"}]
+    mcp_url = (
+        os.getenv("UNIVERSITY_MCP_SERVER_URL")
+        or openai_config.get("university_mcp_server_url")
+        or openai_config.get("UNIVERSITY_MCP_SERVER_URL")
+    )
+    if mcp_url:
+        tools.append(
+            {
+                "type": "mcp",
+                "server_url": str(mcp_url).strip(),
+                "server_label": "UniversityDB",
+                "allowed_tools": ["lookup_university_background"],
+                "require_approval": "never",
+            }
+        )
+    return tools
 
 try:
     from openai import OpenAI  # type: ignore
@@ -244,6 +265,7 @@ def _gen_analysis(
     client: Any,
     model: str,
     analyze_prompt: str,
+    tools: list[dict[str, Any]],
     job_portrait: dict[str, Any],
     resume: str,
     history: list[dict[str, Any]],
@@ -270,6 +292,7 @@ def _gen_analysis(
             model=model,
             instructions=instructions,
             input=payload,
+            tools=tools,
             response_format={
                 "type": "json_schema",
                 "json_schema": {
@@ -293,6 +316,7 @@ def _gen_analysis(
                 model=model,
                 instructions=instructions,
                 input=payload,
+                tools=tools,
             )
         except Exception as exc:
             err = str(exc)
@@ -313,6 +337,7 @@ def _gen_message(
     client: Any,
     model: str,
     action_prompt: str,
+    tools: list[dict[str, Any]],
     job_portrait: dict[str, Any],
     resume: str,
     analysis: Optional[dict[str, Any]],
@@ -342,6 +367,7 @@ def _gen_message(
             instructions=instructions,
             input=payload,
             text_format=ChatActionSchema,
+            tools=tools,
         )
     except Exception as exc:
         logger.error("message call failed: %s", exc)
@@ -545,6 +571,7 @@ def main() -> int:
     if not api_key or not model:
         raise SystemExit("OpenAI config missing api_key or model")
     client = OpenAI(api_key=api_key, base_url=base_url)
+    tools = _build_openai_tools(openai_config)
 
     candidate_files = sorted(candidates_dir.glob("*.json"))
     if args.start_index > 1:
@@ -572,6 +599,7 @@ def main() -> int:
             client,
             model=str(model),
             analyze_prompt=analyze_prompt,
+            tools=tools,
             job_portrait=job_portrait,
             resume=resume,
             history=history,
@@ -585,6 +613,7 @@ def main() -> int:
             client,
             model=str(model),
             action_prompt=msg_prompt,
+            tools=tools,
             job_portrait=job_portrait,
             resume=resume,
             analysis=analysis,

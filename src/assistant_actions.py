@@ -1,4 +1,5 @@
 """Assistant actions for recruitment automation with AI and storage."""
+import os
 import json
 import time
 import hmac
@@ -12,7 +13,7 @@ from .candidate_store import upsert_candidate
 from .config import get_dingtalk_config, get_openai_config
 from .global_logger import logger
 from .assistant_utils import _openai_client
-from .prompts.assistant_actions_prompts import ACTION_PROMPTS, ACTION_SCHEMAS
+from .prompts.assistant_actions_prompts import ACTION_PROMPTS, ACTION_SCHEMAS, build_init_chat_prompt
 
 # Constants - Import from unified stage definition
 from .candidate_stages import ALL_STAGES as STAGES, STAGE_DESCRIPTIONS
@@ -56,14 +57,10 @@ def init_chat(
 
     
     # Add job description to thread
-    job_info_text = json.dumps(job_info, ensure_ascii=False)
     job_prompt = {
         'type': 'message', 
         'role': 'developer',    
-        'content': f'''你是招聘顾问，正在和候选人沟通。你的目标是根据岗位要求分析简历，
-            通过对话的方式判断候选人是否符合岗位要求，可以提出问题让候选人回答，也可以介绍岗位要求。
-            如果候选人的经验以及回复达到岗位要求，则可以推进到面试阶段，表达会通知HR尽快安排面试。
-            以下是岗位描述，用于分析候选人的匹配程度:\n{job_info_text}'''
+        'content': build_init_chat_prompt(job_info)
     }
     
     # Add candidate resume to thread
@@ -135,9 +132,27 @@ def generate_message(
     if isinstance(input_message, list):
         for item in input_message:
             assert 'role' in item and 'content' in item, "input_message must be a list of dict with role, content"
-    
+
     # Create a new run
     openai_config = get_openai_config()
+
+    tools: list[dict[str, Any]] = [{"type": "web_search"}]
+    # Prefer MCP tool for QS/211/985 lookup (the model extracts school names; we do not regex-extract).
+    mcp_url = (
+        os.getenv("UNIVERSITY_MCP_SERVER_URL")
+        or openai_config.get("university_mcp_server_url")
+        or openai_config.get("UNIVERSITY_MCP_SERVER_URL")
+    )
+    if mcp_url:
+        tools.append(
+            {
+                "type": "mcp",
+                "server_url": str(mcp_url).strip(),
+                "server_label": "UniversityDB",
+                "allowed_tools": ["lookup_university_background"],
+                "require_approval": "never",
+            }
+        )
     
     # Prefer parse() for reliable structured output (parse() does NOT support stream=True)
     # Use parse() directly for all purposes since they all have schemas
@@ -147,7 +162,7 @@ def generate_message(
         input=input_message,
         text_format=json_schema,
         model=openai_config["model"],
-        tools=[{"type": "web_search"}],  # Enable web search tool
+        tools=tools,
     )
     result = response.output_parsed.model_dump()
     

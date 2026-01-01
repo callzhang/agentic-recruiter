@@ -118,6 +118,38 @@ chmod +x ./vercel_safe.sh
 
 The pages will be available at:
 - Homepage: `http://localhost:3000`
+
+## MCP: University Lookup (QS/211/985)
+
+This repo exposes an MCP endpoint for university background lookup (QS 2026 rank + 211/985):
+
+- Prod: `https://boss-hunter.vercel.app/api/mcp_university`
+- Local: `http://localhost:3000/api/mcp_university`
+
+Quick test:
+
+```bash
+curl -s "http://localhost:3000/api/mcp_university"
+curl -s -X POST "http://localhost:3000/api/mcp_university" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"lookup_university_background","arguments":{"school_name":"清华大学"}}}'
+```
+
+### Python Test Script
+
+A python script is provided to test the OpenAI Responses API + MCP tool integration:
+
+```bash
+# Basic usage with config/secrets.yaml
+python scripts/test_mcp_university_tool.py --school "清华大学"
+
+# With custom MCP URL and detailed output
+python scripts/test_mcp_university_tool.py --school "清华大学" \
+  --mcp-url "http://localhost:3000/api/mcp_university" \
+  --verbose
+```
+
+Dataset file:
+- `vercel/api/2026_qs_world_university_rankings.xlsx`
 - Jobs Editor: `http://localhost:3000/jobs`
 
 ### Troubleshooting: `vercel dev` / `vercel --prod` hangs
