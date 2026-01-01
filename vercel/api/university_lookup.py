@@ -2,6 +2,9 @@
 
 Vercel Python runtime for this project does not include pandas/openpyxl, so we
 parse the XLSX (Office Open XML zip) directly.
+
+这是内部库代码，负责真正去读 2026_qs_world_university_rankings.xlsx 
+并实现 lookup_university_background(...) 的查询逻辑（纯 XLSX 解析，不依赖 pandas/openpyxl）。
 """
 
 from __future__ import annotations
@@ -78,6 +81,9 @@ class UniversityLookupResult:
 
 
 def _xlsx_sheet_name_to_path(zf: zipfile.ZipFile) -> dict[str, str]:
+    """
+    从 XLSX 文件中读取工作表名称到路径的映射。
+    """
     ns = {"m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
 
     workbook = ET.fromstring(zf.read("xl/workbook.xml"))
@@ -110,6 +116,9 @@ def _xlsx_sheet_name_to_path(zf: zipfile.ZipFile) -> dict[str, str]:
 
 
 def _xlsx_shared_strings(zf: zipfile.ZipFile) -> list[str]:
+    """
+    从 XLSX 文件中读取共享字符串表。
+    """
     path = "xl/sharedStrings.xml"
     if path not in zf.namelist():
         return []
@@ -132,6 +141,9 @@ def _xlsx_read_sheet_columns(
     sheet_name: str,
     col_letters: Iterable[str],
 ) -> list[dict[str, Any]]:
+    """
+    从 XLSX 文件中读取指定工作表的指定列。
+    """
     cols = {c.upper() for c in col_letters}
     with zipfile.ZipFile(xlsx_path, "r") as zf:
         sheet_map = _xlsx_sheet_name_to_path(zf)
@@ -170,6 +182,9 @@ def _xlsx_read_sheet_columns(
 
 @lru_cache(maxsize=1)
 def _load_university_lists_from_xlsx(xlsx_path: str) -> dict[str, Any]:
+    """
+    从 XLSX 文件中读取大学列表，包括 QS 排名、211/985 等信息。
+    """
     path = Path(xlsx_path)
     if not path.exists():
         raise FileNotFoundError(f"QS rankings file not found: {path}")
@@ -209,6 +224,9 @@ def lookup_university_background(
     school_name_zh: Optional[str] = None,
     xlsx_path: Path | str | None = None,
 ) -> UniversityLookupResult:
+    """
+    根据大学名称查询大学背景信息，包括 QS 排名、211/985 等信息。
+    """
     path = Path(xlsx_path) if xlsx_path is not None else _default_xlsx_path()
     data = _load_university_lists_from_xlsx(str(path))
 

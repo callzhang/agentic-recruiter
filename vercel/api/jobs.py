@@ -752,6 +752,8 @@ class handler(BaseHTTPRequestHandler):
         self.send_response(status_code)
         self.send_header('Content-type', 'application/json')
         self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
         self.send_header('Content-Length', str(len(response_body)))
         self.end_headers()
         self.wfile.write(response_body)
