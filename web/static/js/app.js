@@ -646,8 +646,6 @@ async function startProcessCandidate() {
     cycleReplyState.running = true;
     CycleReplyHelpers.setButton(true);
     
-    // Disable all candidate cards via event
-    document.dispatchEvent(new CustomEvent('candidates:disable-cards'));
     let total_processed = 0;
     let total_failed = 0;
     let total_skipped = 0;

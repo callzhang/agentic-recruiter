@@ -1,10 +1,12 @@
 <!-- Candidate card for list view -->
 <div class="candidate-card p-4 border rounded-lg cursor-pointer bg-white hover:bg-blue-50 transition {% if candidate.viewed %}opacity-60{% endif %}"
+    data-candidate-id="{{ candidate.candidate_id }}"
     hx-get="/candidates/detail" 
     hx-vals='{"candidate": {{ candidate | tojson | safe }} }'
     hx-target="#detail-pane"
     hx-include="#job-selector,#threshold-chat,#threshold-borderline"
-    hx-on::click="console.log('Candidate clicked:', JSON.parse(this.dataset.candidate));">
+    hx-trigger="custom-click" {# this is only triggered from processCandidateCard() #}
+    onclick="processCandidateCard(this).catch(err => console.error(err))">
     <div class="flex items-start space-x-3 relative" id="candidate-card-content">
         <!-- <input type="hidden" name="analysis" value="{{ analysis | tojson }}"> -->
         <!-- avatar -->

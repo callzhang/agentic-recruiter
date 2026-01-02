@@ -1,11 +1,3 @@
-<!-- Candidate detail view with automatic workflow 
-    the passed data:
-    - "analysis": data.pop("analysis"),
-    - "generated_message": data.pop("last_message"),
-    - "resume_text": data.pop("resume_text"),
-    - "full_resume": data.pop("full_resume"),
-    - "candidate": data,
--->
 {% set view_mode = view_mode or 'interactive' %}
 {% set allow_optimization_feedback = allow_optimization_feedback if allow_optimization_feedback is defined else (view_mode != 'readonly') %}
 <div id="candidate-detail-root" class="space-y-6" data-view-mode="{{ view_mode }}">
@@ -457,10 +449,10 @@ async function process_candidate() {
     let [newStage, currentScore, analysis, isFullAnalysis] = determineStage();
     try {
         // Step 0: short-circuit if already PASS
-        // if (getCandidateData('stage') === 'PASS') {
-        //     if (currentScore <= 4) await passCandidate('分数低于 4，不匹配');
-        //     return;
-        // }
+        if (getCandidateData('stage') === 'PASS') {
+            if (currentScore <= 4) await passCandidate('分数低于 4，不匹配');
+            return;
+        }
 
         // Step 1: Ensure resume is loaded
         const onlineResume = document.getElementById('resume-textarea-online');
@@ -532,8 +524,11 @@ async function process_candidate() {
     } finally {
         // update the candidate data in the cloud
         await updateCandidateData({ viewed: true, score: currentScore, stage: newStage });
-        // dispatch the candidate:processing-complete event to the candidate cards
-        document.dispatchEvent(new CustomEvent('candidate:processing-complete'));
+        
+        // dispatch the candidate:processing-complete event to the specific candidate card
+        const candidateId = getCandidateData('candidate_id');
+        const card = document.querySelector(`.candidate-card[data-candidate-id="${candidateId}"]`);
+        card.dispatchEvent(new CustomEvent('candidate:processing-complete', { bubbles: true }));
     }
 }
 
@@ -671,7 +666,7 @@ async function greetAndSendMessage() {
             return; // skip sending message if auto send is false and mode is not recommend
         }
     }
-    showToast(`发送消息: ${values.name}\n[${action}]: ${reason}\n${message}`, 'info', 60_000);
+    showToast(`[${action}]:${values.name} | \n[理由]：${reason} | \n[发送内容]：${message}`, 'info', 60_000);
     // send message
     await htmxAjaxPromise('POST', '/candidates/send', {
         target: '#message-content',
