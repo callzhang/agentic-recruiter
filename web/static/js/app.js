@@ -8,7 +8,8 @@
  * Toast notification helper
  * Displays temporary notification messages in the top-right corner
  */
-function showToast(message, type = 'info', duration = 180_000) {
+const default_duration = 180_000;
+function showToast(message, type = 'info', duration = default_duration) {
     // Also output to console based on type
     switch (type) {
         case 'error':
@@ -66,8 +67,14 @@ function showToast(message, type = 'info', duration = 180_000) {
         
         // Timeout if duration > 0
         if (duration <= 0) {
-            duration = 180_000;
+            duration = default_duration;
         }
+
+        // Mark custom duration for expireAllToasts protection
+        if (duration !== default_duration) {
+            toast.dataset.customDuration = 'true';
+        }
+
         const timeoutId = setTimeout(() => {
             removeToast(toast);
         }, duration); 
@@ -100,6 +107,11 @@ function expireAllToasts(timeoutMs = 1000) {
         toasts.forEach(t => {
             // If already fading out, ignore
             if (t.classList.contains('animate-fade-out')) return;
+
+            // Protect custom duration toasts
+            if (t.dataset.customDuration === 'true') {
+                return;
+            }
 
             // Clear existing long timeout
             if (t.dataset.timeoutId) {

@@ -423,7 +423,7 @@ async def _setup_wasm_route(context: BrowserContext) -> None:
     await context.route(glob_pattern, _route_resume)
 
 
-@retry(stop=stop_after_attempt(2), wait=wait_fixed(1))
+@retry(stop=stop_after_attempt(2), wait=wait_fixed(1), reraise=True)
 async def _capture_inline_resume(
     page_or_frame: Page | Frame,
     logger=None,
@@ -438,7 +438,7 @@ async def _capture_inline_resume(
         await asyncio.sleep(0.25)
     return None
 
-@retry(stop=stop_after_attempt(2), wait=wait_fixed(1))
+@retry(stop=stop_after_attempt(2), wait=wait_fixed(1), reraise=True)
 async def _open_online_resume(page: Page, chat_id: str, logger=None) -> Dict[str, Any]:
     target = page.locator(
         f"div.geek-item[id='{chat_id}'], div.geek-item[data-id='{chat_id}'], "
@@ -467,7 +467,7 @@ async def _open_online_resume(page: Page, chat_id: str, logger=None) -> Dict[str
 
     return {"success": True, "details": "已打开在线简历"}
 
-@retry(stop=stop_after_attempt(2), wait=wait_fixed(1))
+@retry(stop=stop_after_attempt(2), wait=wait_fixed(1), reraise=True)
 async def _get_resume_handle(page: Page, timeout_ms: int = 10000, logger=None) -> Dict[str, Any]:
     from .ui_utils import IFRAME_OVERLAY_SELECTOR, RESUME_OVERLAY_SELECTOR
 

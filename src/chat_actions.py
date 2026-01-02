@@ -30,7 +30,7 @@ RESUME_IFRAME_SELECTOR = "iframe.attachment-box"
 PDF_VIEWER_SELECTOR = "div.pdfViewer"
 
 
-@retry(stop=stop_after_attempt(2), wait=wait_fixed(1))
+@retry(stop=stop_after_attempt(2), wait=wait_fixed(1), reraise=True)
 async def _prepare_chat_page(page: Page, tab = None, status = None, job_title = None, timeout_s: int = 5) -> Page:
     """
     Navigates and configures the chat page for automated actions.
@@ -154,7 +154,7 @@ async def _go_to_chat_dialog(page: Page, chat_id: str, wait_timeout: int = 5) ->
 
 
 
-@retry(stop=stop_after_attempt(2), wait=wait_fixed(1))
+@retry(stop=stop_after_attempt(2), wait=wait_fixed(1), reraise=True)
 async def get_chat_stats_action(page: Page) -> Dict[str, Any]:
     """Get chat statistics including new message and greet counts."""
     # await _prepare_chat_page(page)
@@ -183,7 +183,7 @@ async def get_chat_stats_action(page: Page) -> Dict[str, Any]:
 
 
 
-@retry(stop=stop_after_attempt(2), wait=wait_fixed(1))
+@retry(stop=stop_after_attempt(2), wait=wait_fixed(1), reraise=True)
 async def send_message_action(page: Page, chat_id: str, message: str, timeout: int = 3000) -> bool:
     """Send message to candidate. Returns True on success, raises ValueError on failure."""
     if not message:
@@ -218,7 +218,7 @@ async def send_message_action(page: Page, chat_id: str, message: str, timeout: i
     return True
 
 
-# @retry(stop=stop_after_attempt(2), wait=wait_fixed(1))
+# @retry(stop=stop_after_attempt(2), wait=wait_fixed(1), reraise=True)
 async def discard_candidate_action(page: Page, chat_id: str, timeout: int = 3000) -> bool:
     """Skip (PASS) candidate. Returns True on success, raises ValueError on failure."""
     await _prepare_chat_page(page)
@@ -241,7 +241,7 @@ async def discard_candidate_action(page: Page, chat_id: str, timeout: int = 3000
     raise RuntimeError("PASS失败: 未删除对话")
     
 
-# @retry(stop=stop_after_attempt(2), wait=wait_fixed(1))
+# @retry(stop=stop_after_attempt(2), wait=wait_fixed(1), reraise=True)
 async def list_conversations_action(
     page: Page, 
     limit: int = 999, 
@@ -309,7 +309,7 @@ async def list_conversations_action(
     return messages
 
 
-# @retry(stop=stop_after_attempt(2), wait=wait_fixed(1))
+# @retry(stop=stop_after_attempt(2), wait=wait_fixed(1), reraise=True)
 async def get_chat_history_action(page: Page, chat_id: str, timeout: int = 200) -> List[Dict[str, Any]]:
     await _prepare_chat_page(page)
     await _go_to_chat_dialog(page, chat_id)
@@ -388,7 +388,7 @@ async def get_chat_history_action(page: Page, chat_id: str, timeout: int = 200) 
 # ------------------------------------------------------------
 # 在线简历
 # ------------------------------------------------------------
-# @retry(stop=stop_after_attempt(2), wait=wait_fixed(1))
+# @retry(stop=stop_after_attempt(2), wait=wait_fixed(1), reraise=True)
 async def view_online_resume_action(page: Page, chat_id: str, timeout: int = 20000) -> Dict[str, Any]:
     """View candidate's online resume. Returns dict with 'text', 'name', 'chat_id'. Raises ValueError on failure."""
     await _prepare_chat_page(page)
@@ -425,7 +425,7 @@ async def view_online_resume_action(page: Page, chat_id: str, timeout: int = 200
 # 离线简历
 #--------------------------------------------------
 
-# @retry(stop=stop_after_attempt(2), wait=wait_fixed(1))
+# @retry(stop=stop_after_attempt(2), wait=wait_fixed(1), reraise=True)
 async def request_full_resume_action(page: Page, chat_id: str, timeout: int = 3000) -> bool:
     """Request resume from candidate. Returns True on success, False on failure (e.g., dialog not found)."""
     await _prepare_chat_page(page)
@@ -463,7 +463,7 @@ async def request_full_resume_action(page: Page, chat_id: str, timeout: int = 30
         return True
     
 
-# @retry(stop=stop_after_attempt(2), wait=wait_fixed(1))
+# @retry(stop=stop_after_attempt(2), wait=wait_fixed(1), reraise=True)
 async def accept_full_resume_action(page: Page, chat_id: str, timeout_ms: int = 2000) -> bool:
     """Accept candidate's resume. Returns True on success, raises ValueError if accept button not found."""
     await _prepare_chat_page(page)
@@ -493,7 +493,7 @@ async def accept_full_resume_action(page: Page, chat_id: str, timeout_ms: int = 
     return False
 
 
-# @retry(stop=stop_after_attempt(2), wait=wait_fixed(1))
+# @retry(stop=stop_after_attempt(2), wait=wait_fixed(1), reraise=True)
 async def check_full_resume_available(page: Page, chat_id: str, timeout_ms: int = 2000):
     """Check if full resume is available. Returns resume_button Locator if available, None otherwise."""
     await _prepare_chat_page(page)
@@ -518,7 +518,7 @@ async def check_full_resume_available(page: Page, chat_id: str, timeout_ms: int 
     return False
 
 
-# @retry(stop=stop_after_attempt(2), wait=wait_fixed(1))
+# @retry(stop=stop_after_attempt(2), wait=wait_fixed(1), reraise=True)
 async def view_full_resume_action(page: Page, chat_id: str, request: bool = True, timeout_ms: int = 20000) -> Dict[str, Any]:
     """View candidate's full offline resume. Returns dict with 'text' and 'pages'. Raises ValueError on failure."""
     await _prepare_chat_page(page)
@@ -553,7 +553,7 @@ async def view_full_resume_action(page: Page, chat_id: str, request: bool = True
     }
 
 
-@retry(stop=stop_after_attempt(2), wait=wait_fixed(1))
+@retry(stop=stop_after_attempt(2), wait=wait_fixed(1), reraise=True)
 async def request_contact_action(page: Page, chat_id: str, request: bool = True, timeout_ms: int = 2000) -> bool:
     """Ask candidate for contact information in chat page. Returns True on success, raises ValueError on failure."""
     await _prepare_chat_page(page)

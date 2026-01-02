@@ -625,17 +625,14 @@ function getGeneratedMessage() {
     const container = document.getElementById('message-result-container');
     const textarea = document.getElementById('message-text');
     const message = textarea?.value?.trim() || '';
-    const action = container?.dataset?.action || '';
-    const reason = container?.dataset?.reason || '';
+    const action = container?.dataset?.action;
+    const reason = container?.dataset?.reason;
     return { action, reason, message };
 }
 
 async function generateMessage(force = false) {
-    const analysis_container = document.querySelector('#analysis-content #analysis-result-container');
-    const analysis = analysis_container ? JSON.parse(analysis_container.getAttribute('data-analysis')) : null;
-    // showToast(`生成消息...${analysis?.followup_tips}`, 'info');
-    showToast('生成消息...', 'info');
     const values = getCandidateData();
+    showToast(`正在为【${values.name}】生成消息...`, 'info');
     const mode = values.mode;
     // if force is true or mode is followup, use followup action
     const purpose = mode == 'followup' ? 'FOLLOWUP_ACTION' : 'CHAT_ACTION';
@@ -645,7 +642,6 @@ async function generateMessage(force = false) {
         values: {...values, purpose: purpose, force: force}
     });
     const message = getGeneratedMessage();
-    console.log('Generated message:', message.message||message.reason);
     await updateCandidateData({generated_message: message.message});
     return message;
 }
@@ -654,7 +650,8 @@ async function greetAndSendMessage() {
     const autoSend = document.getElementById('auto-send-checkbox')?.checked ?? true;
     const message_textarea = document.getElementById('message-text');
     const message = message_textarea.value.trim();
-    const action = document.getElementById('message-result-container')?.dataset?.action || '';
+    const action = document.getElementById('message-result-container')?.dataset?.action;
+    const reason = document.getElementById('message-result-container')?.dataset?.reason;
     const mode = getCandidateData('mode');
     let values = getCandidateData();
     if (message === '' || !autoSend) {
@@ -674,9 +671,8 @@ async function greetAndSendMessage() {
             return; // skip sending message if auto send is false and mode is not recommend
         }
     }
-
+    showToast(`发送消息: ${values.name}\n[${action}]: ${reason}\n${message}`, 'info', 60_000);
     // send message
-    showToast('正在发送消息...', 'info');
     await htmxAjaxPromise('POST', '/candidates/send', {
         target: '#message-content',
         swap: 'none',
@@ -737,9 +733,8 @@ async function startAnalysis() {
     // Extract analysis from data attribute
     const analysis_container = document.querySelector('#analysis-content #analysis-result-container');
     const analysis = analysis_container ? JSON.parse(analysis_container.getAttribute('data-analysis')) : null;
-    console.log('Analysis completed:', analysis);
     await updateCandidateData({score: analysis?.overall});
-    
+    showToast(`分析完成，分数：【${analysis?.overall}】\n后续沟通建议：${analysis?.followup_tips}`, 'info', 60_000);
     // Update resume type badge in tab row
     updateAnalysisResumeTypeBadge(analysis);
 }

@@ -81,7 +81,6 @@ except Exception as exc:
 # ------------------------------------------------------------------
 # Embedding Generation
 # ------------------------------------------------------------------
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
 @lru_cache(maxsize=1000)
 def get_embedding(text: str) -> Optional[List[float]]:
     """Generate embedding for text using OpenAI.

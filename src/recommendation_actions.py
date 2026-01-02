@@ -87,7 +87,7 @@ async def _prepare_recommendation_page(page: Page, job_title: str = None, *, wai
     return frame
 
 
-@retry(stop=stop_after_attempt(2), wait=wait_fixed(1))
+@retry(stop=stop_after_attempt(2), wait=wait_fixed(1), reraise=True)
 async def list_recommended_candidates_action(page: Page, *, limit: int = 999, job_applied: str, new_only: bool = True, filters: Dict[str, Any] = None) -> List[Dict[str, Any]]:
     """
     List recommended candidates from the Boss直聘推荐页面.
@@ -167,7 +167,7 @@ async def list_recommended_candidates_action(page: Page, *, limit: int = 999, jo
     return candidates
 
 
-@retry(stop=stop_after_attempt(2), wait=wait_fixed(1))
+@retry(stop=stop_after_attempt(2), wait=wait_fixed(1), reraise=True)
 async def view_recommend_candidate_resume_action(page: Page, index: int) -> Dict[str, Any]:
     """View recommended candidate's resume. Returns dict with 'text'. Raises ValueError on failure."""
     frame = await _prepare_recommendation_page(page)
@@ -194,7 +194,7 @@ async def view_recommend_candidate_resume_action(page: Page, index: int) -> Dict
     return result
 
 
-@retry(stop=stop_after_attempt(2), wait=wait_fixed(1))
+@retry(stop=stop_after_attempt(2), wait=wait_fixed(1), reraise=True)
 async def greet_recommend_candidate_action(page: Page, index: int, message: str = None) -> bool:
     """Greet recommended candidate with message. Returns True on success, raises ValueError on failure."""
     frame = await _prepare_recommendation_page(page)
@@ -249,7 +249,7 @@ async def greet_recommend_candidate_action(page: Page, index: int, message: str 
     return True
 
 
-@retry(stop=stop_after_attempt(2), wait=wait_fixed(1))
+@retry(stop=stop_after_attempt(2), wait=wait_fixed(1), reraise=True)
 async def discard_recommend_candidate_action(page: Page, index: int, reason: str = "过往经历不符") -> bool:
     """Discard a recommendation candidate.
     Args:
@@ -289,7 +289,7 @@ async def discard_recommend_candidate_action(page: Page, index: int, reason: str
     else:
         raise RuntimeError("未找到不合适原因")
 
-@retry(stop=stop_after_attempt(2), wait=wait_fixed(1))
+@retry(stop=stop_after_attempt(2), wait=wait_fixed(1), reraise=True)
 async def apply_filters(frame: Frame, filters: Dict[str, Any]) -> bool:
     """Apply filters to the recommendation page.
     
