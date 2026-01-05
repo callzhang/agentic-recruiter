@@ -449,10 +449,10 @@ async function process_candidate() {
     let [newStage, currentScore, analysis, isFullAnalysis] = determineStage();
     try {
         // Step 0: short-circuit if already PASS
-        if (getCandidateData('stage') === 'PASS') {
-            if (currentScore <= 4) await passCandidate('分数低于 4，不匹配');
-            return;
-        }
+        // if (getCandidateData('stage') === 'PASS') {
+        //     if (currentScore <= 4) await passCandidate('分数低于 4，不匹配');
+        //     return;
+        // }
 
         // Step 1: Ensure resume is loaded
         const onlineResume = document.getElementById('resume-textarea-online');
@@ -527,7 +527,7 @@ async function process_candidate() {
         
         // dispatch the candidate:processing-complete event to the specific candidate card
         const candidateId = getCandidateData('candidate_id');
-        const card = document.querySelector(`.candidate-card[data-candidate-id="${candidateId}"]`);
+        const card = document.querySelector(`.candidate-card[data-candidate-id="${candidateId}"]`) || document;
         card.dispatchEvent(new CustomEvent('candidate:processing-complete', { bubbles: true }));
     }
 }
@@ -666,7 +666,7 @@ async function greetAndSendMessage() {
             return; // skip sending message if auto send is false and mode is not recommend
         }
     }
-    showToast(`[${action}]:${values.name} | \n[理由]：${reason} | \n[发送内容]：${message}`, 'info', 60_000);
+    showToast(`[${action}]:${values.name} ：${message} [理由]：${reason}`, 'info', 60_000);
     // send message
     await htmxAjaxPromise('POST', '/candidates/send', {
         target: '#message-content',
@@ -729,7 +729,7 @@ async function startAnalysis() {
     const analysis_container = document.querySelector('#analysis-content #analysis-result-container');
     const analysis = analysis_container ? JSON.parse(analysis_container.getAttribute('data-analysis')) : null;
     await updateCandidateData({score: analysis?.overall});
-    showToast(`分析完成，分数：【${analysis?.overall}】\n后续沟通建议：${analysis?.followup_tips}`, 'info', 60_000);
+    showToast(`分析完成：【${values.name}】(${analysis?.overall})\n后续沟通建议：${analysis?.followup_tips}`, 'info', 60_000);
     // Update resume type badge in tab row
     updateAnalysisResumeTypeBadge(analysis);
 }
@@ -968,12 +968,13 @@ async function shouldReply() {
     const greeted = values.greeted;
     const viewed = values.viewed;
     const stage = values.stage;
-    // if Boss marks this conversation as unread, assume it needs a reply.
-    if (viewed === false) return true;
     // For recommend mode, only rely on greeted flag
     if (mode === 'recommend') {
-        return !greeted; // if not greeted, we need to reply
+        const reply = !(greeted || viewed); // if not greeted, we need to reply
+        return reply;
     }
+    // if Boss marks this conversation as unread, assume it needs a reply.
+    if (viewed === false) return true;
     // if the candidate is already passed, don't reply
     if (stage === 'PASS') return false;
 
