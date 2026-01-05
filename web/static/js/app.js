@@ -664,23 +664,17 @@ async function startProcessCandidate() {
         }
     }, 10000); // Check every 10 seconds
 
+    let processAllModes = document.getElementById('process-all-modes-checkbox')?.checked || false;
     try {
         while (cycleReplyState.running && !cycleReplyState.stopRequested) {
-            // Check if "process all modes" checkbox is checked
-            let processAllModes = document.getElementById('process-all-modes-checkbox')?.checked || false;
-            
-            // Determine current mode
             const candidateTabs = CycleReplyHelpers.getCandidateTabs();
             const mode = processAllModes ? CYCLE_MODES[cycleReplyState.modeIndex] : (candidateTabs.activeTab || 'recommend');
-            
-            // Process mode (switch tab if needed)
             let cards = Array.from(document.querySelectorAll('.candidate-card'));
             if (cards.length === 0) {
                 const result = await CycleReplyHelpers.processMode(mode, candidateTabs);
                 if (result.stopped) {
                     break;
                 }
-                // Handle errors
                 if (result.success === false) {
                     cycleReplyState.errorStreak += 1;
                     console.error(`处理模式 ${mode} 出错 (${cycleReplyState.errorStreak}/10): ${result.errorMessage}`);
@@ -779,6 +773,10 @@ async function startProcessCandidate() {
             } else {
                 // If not processing all modes, refresh the current candidate list and continue
                 console.log(`[${mode}] 准备刷新候选人列表以继续处理...`);
+                // Scroll recommendation frame to load more candidates (only for recommend mode)
+                if (mode === 'recommend') {
+                    await fetch('/candidates/scroll-recommendations', { method: 'POST' });
+                }
             }
             await CycleReplyHelpers.sleep(1000);
             // Clear the list so the next iteration forces a fetch
@@ -789,6 +787,9 @@ async function startProcessCandidate() {
                 }
             }
         }
+    } catch (error) {
+        console.error('处理候选人时发生错误:', error);
+        showToast('处理候选人时发生错误', 'error');
     } finally {
         // Re-enable candidate cards via event
         document.dispatchEvent(new CustomEvent('candidates:enable-cards'));

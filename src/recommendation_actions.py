@@ -87,6 +87,18 @@ async def _prepare_recommendation_page(page: Page, job_title: str = None, *, wai
     return frame
 
 
+async def scroll_to_load_more_candidates(frame: Frame) -> bool:
+    """
+    Scroll the recommendation frame down to trigger loading of new candidates.
+    """
+    # Scroll the window to the bottom to load more candidates
+    await frame.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+    logger.info("已滚动推荐页面到底部，等待新候选人加载")
+    # Wait for new candidates to load
+    await frame.wait_for_timeout(1000)
+    return True
+
+
 @retry(stop=stop_after_attempt(2), wait=wait_fixed(1), reraise=True)
 async def list_recommended_candidates_action(page: Page, *, limit: int = 999, job_applied: str, new_only: bool = True, filters: Dict[str, Any] = None) -> List[Dict[str, Any]]:
     """
@@ -392,6 +404,7 @@ async def pass_recommend_candidate_action(page: Page, index: int) -> bool:
 
 __all__ = [
     "_prepare_recommendation_page",
+    "scroll_to_load_more_candidates",
     "select_recommend_job_action",
     "list_recommended_candidates_action",
     "view_recommend_candidate_resume_action",
