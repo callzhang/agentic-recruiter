@@ -665,8 +665,7 @@ async def pass_candidate(
 async def scroll_recommendations():
     """Scroll the recommendation frame to trigger loading of new candidates."""
     page = await boss_service.service._ensure_browser_session()
-    frame = await recommendation_actions._prepare_recommendation_page(page)
-    result = await recommendation_actions.scroll_to_load_more_candidates(frame)
+    result = await recommendation_actions.scroll_to_load_more_candidates(page)
     if result:
         return {"success": True, "message": "已滚动推荐列表"}
     else:

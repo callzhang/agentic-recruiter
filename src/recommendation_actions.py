@@ -87,11 +87,12 @@ async def _prepare_recommendation_page(page: Page, job_title: str = None, *, wai
     return frame
 
 
-async def scroll_to_load_more_candidates(frame: Frame) -> bool:
+async def scroll_to_load_more_candidates(page: Page) -> bool:
     """
     Scroll the recommendation frame down to trigger loading of new candidates.
     """
     # Scroll the window to the bottom to load more candidates
+    frame = await _prepare_recommendation_page(page)
     await frame.evaluate("window.scrollTo(0, document.body.scrollHeight)")
     logger.info("已滚动推荐页面到底部，等待新候选人加载")
     # Wait for new candidates to load
@@ -202,7 +203,7 @@ async def view_recommend_candidate_resume_action(page: Page, index: int) -> Dict
         debug = await collect_resume_debug_info(page)
         raise RuntimeError(f"处理简历失败: {result.get('details', '未知错误')}, debug: {debug}")
     
-    logger.debug("处理推荐候选人简历结果: %s", result.get('text', '')[:100])
+    # logger.debug("处理推荐候选人简历结果: %s", result.get('text', '')[:100])
     return result
 
 

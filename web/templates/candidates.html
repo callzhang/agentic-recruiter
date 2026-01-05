@@ -875,17 +875,17 @@ async function processCandidateCard(card) {
             clearTimeout(swapTimeout);
             clearTimeout(processingTimeout);
             // Remove listeners from card
-            card.removeEventListener('candidate:processing-complete', onProcessingComplete);
+            document.removeEventListener('candidate:processing-complete', onProcessingComplete);
             // document listeners for htmx events (htmx events bubble)
             document.removeEventListener('htmx:afterSwap', onSwap); 
-            card.removeEventListener('htmx:sendError', onSendError); // triggered on triggering element
+            document.removeEventListener('htmx:sendError', onSendError); // triggered on triggering element
             document.removeEventListener('candidate:processing-error', onProcessingError); // still global? OR fetch error bubbles?
         };
         
         // Attach listeners
-        card.addEventListener('candidate:processing-complete', onProcessingComplete, { once: true });
+        document.addEventListener('candidate:processing-complete', onProcessingComplete, { once: true });
         // htmx:sendError is triggered on the element
-        card.addEventListener('htmx:sendError', onSendError, { once: true });
+        document.addEventListener('htmx:sendError', onSendError, { once: true });
         
         // htmx:afterSwap is dispatched on the target (#detail-pane), so we must listen on document or body 
         // to catch it bubble, or we could listen on #detail-pane if it exists? 

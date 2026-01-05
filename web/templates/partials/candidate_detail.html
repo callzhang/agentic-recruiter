@@ -524,11 +524,9 @@ async function process_candidate() {
     } finally {
         // update the candidate data in the cloud
         await updateCandidateData({ viewed: true, score: currentScore, stage: newStage });
-        
-        // dispatch the candidate:processing-complete event to the specific candidate card
-        const candidateId = getCandidateData('candidate_id');
-        const card = document.querySelector(`.candidate-card[data-candidate-id="${candidateId}"]`) || document;
-        card.dispatchEvent(new CustomEvent('candidate:processing-complete', { bubbles: true }));
+        // const candidateId = getCandidateData('candidate_id');
+        // const card = document.querySelector(`.candidate-card[data-candidate-id="${candidateId}"]`);
+        document.dispatchEvent(new CustomEvent('candidate:processing-complete', { bubbles: true }));
     }
 }
 
@@ -971,12 +969,13 @@ async function shouldReply() {
     // For recommend mode, only rely on greeted flag
     if (mode === 'recommend') {
         const reply = !(greeted || viewed); // if not greeted, we need to reply
+        // if(reply) debugger;
         return reply;
     }
-    // if Boss marks this conversation as unread, assume it needs a reply.
-    if (viewed === false) return true;
     // if the candidate is already passed, don't reply
     if (stage === 'PASS') return false;
+    // if Boss marks this conversation as unread, assume it needs a reply.
+    if (viewed === false) return true;
 
     function parseTimestamp(ts) {
         if (!ts) return null;

@@ -8,7 +8,8 @@ from .global_logger import logger
 
 # selectors reused across modules
 IFRAME_OVERLAY_SELECTOR = "iframe[src*='c-resume'], iframe[name='recommendFrame']"
-RESUME_OVERLAY_SELECTOR = "div.boss-popup__wrapper"
+RESUME_OVERLAY_SELECTOR = "div.resume-detail-wrap"
+RECOMMENDATION_DIV_REMOVE = "div.resume-detail-wrap, div.resume-anonymous-geek-card"
 CLOSE_BTN = "div.boss-popup__close"
 
 

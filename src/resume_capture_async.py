@@ -1202,6 +1202,9 @@ async def _process_resume_entry(page: Page, context_info: Dict[str, Any], logger
         entry = context_info.get("entry")
         if entry:
             text = await entry.inner_text()
+            from .ui_utils import RECOMMENDATION_DIV_REMOVE
+            # Get text while excluding unwanted overlay elements
+            text = text.split('牛人分析器')[0]
             html = await entry.inner_html()
             return {
                 "success": True,

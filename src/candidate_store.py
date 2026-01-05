@@ -505,12 +505,12 @@ def candidate_matched(candidate: Dict[str, Any], stored_candidate: Dict[str, Any
         from difflib import SequenceMatcher
         similarity = SequenceMatcher(lambda x: x in ['\n', '\r', '\t', ' '], last_message, last_message2).ratio()
         if similarity < 0.8:
-            logger.debug(f"last_message similarity ({candidate['name']}): {similarity*100:.2f}% < 90%\n{last_message}\n != \n{last_message2}")
+            logger.debug(f"last_message similarity ({candidate['name']}): {similarity*100:.2f}% < 80%\n{last_message}\n != \n{last_message2}")
             return False
     elif resume1 and resume2:
         similarity = calculate_resume_similarity(resume1, resume2)
-        if similarity < 0.9:
-            logger.debug(f"resume similarity mismatch: {similarity:.4f} for {candidate.get('name')} and {stored_candidate.get('name')}")
+        if similarity < 0.8:
+            logger.debug(f"resume similarity mismatch: {similarity*100:.2f}% for {candidate.get('name')} and {stored_candidate.get('name')}")
             return False
     return True
 

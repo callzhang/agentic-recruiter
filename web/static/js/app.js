@@ -792,9 +792,9 @@ async function startProcessCandidate() {
         showToast('处理候选人时发生错误', 'error');
     } finally {
         // Re-enable candidate cards via event
-        document.dispatchEvent(new CustomEvent('candidates:enable-cards'));
         CycleReplyHelpers.resetState();
         CycleReplyHelpers.setButton(false);
+        document.dispatchEvent(new CustomEvent('candidates:enable-cards'));
         showToast(processAllModes ? '循环处理已完成' : `批量处理已完成: 成功 ${total_processed}, 失败 ${total_failed}, 跳过 ${total_skipped}`, total_failed > 0 ? 'error' : 'success');
     }
 }
