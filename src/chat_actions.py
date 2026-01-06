@@ -525,11 +525,12 @@ async def view_full_resume_action(page: Page, chat_id: str, request: bool = True
     await _go_to_chat_dialog(page, chat_id)
     available = await check_full_resume_available(page, chat_id)
     if not available:
+        requested = False
         if request:
             requested = await request_full_resume_action(page, chat_id)
+            available = await check_full_resume_available(page, chat_id)
+        if not available:
             return {"text": None, "requested": requested}
-        else:
-            return { "text": None, "requested": False}
 
     resume_button = page.locator(RESUME_BUTTON_SELECTOR).first
     await resume_button.click()

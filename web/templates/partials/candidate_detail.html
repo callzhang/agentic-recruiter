@@ -972,11 +972,11 @@ async function shouldReply() {
         // if(reply) debugger;
         return reply;
     }
+    debugger;
     // if the candidate is already passed, don't reply
     if (stage === 'PASS') return false;
     // if Boss marks this conversation as unread, assume it needs a reply.
     if (viewed === false) return true;
-
     function parseTimestamp(ts) {
         if (!ts) return null;
         const d = new Date(String(ts).replace(' ', 'T'));

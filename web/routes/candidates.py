@@ -151,10 +151,15 @@ async def list_candidates(
             matched_candidate = get_candidate_by_dict(dict(**candidate, fields=fields))
 
         if matched_candidate:
-            if matched_candidate in found_candidates: found_candidates.remove(matched_candidate) # remove matched candidate from found_candidates to avoid duplicate matching
+            if matched_candidate in found_candidates: 
+                found_candidates.remove(matched_candidate) # remove matched candidate from found_candidates to avoid duplicate matching
+            # update candidate 
+            current_metadata = candidate.get("metadata", {})
+            current_metadata.update(matched_candidate.get("metadata", {}))
             candidate.update(matched_candidate) # last_message will be updated by saved candidate
+            candidate["metadata"] = current_metadata
+            # update candidate fields
             candidate["saved"] = True
-            # Extract score from analysis if available)
             candidate["score"] = matched_candidate.get("analysis", {}).get("overall", None)
             # update greeted status if the candidate is in chat, greet, or seek stage
             candidate['greeted'] = candidate.get('greeted', False)

@@ -158,7 +158,7 @@ async def list_recommended_candidates_action(page: Page, *, limit: int = 999, jo
         greeted = await card.locator("button:has-text('继续沟通')").count() > 0
         name = (await card.locator("span.name").inner_text(timeout=500)).strip()
         text = (await card.inner_text(timeout=500)).strip().replace('\n', ' ')
-        
+        avatar = await card.locator('div.avatar-wrap > img').get_attribute("src")
         # Create candidate dict with standardized field names for web UI
         if not new_only or not viewed:
             candidates.append({
@@ -169,6 +169,7 @@ async def list_recommended_candidates_action(page: Page, *, limit: int = 999, jo
                 "last_message": text,
                 "viewed": viewed,
                 "greeted": greeted,
+                "metadata": {'avatar': avatar}, # place to save
                 'mode': 'recommend',
             })
         if len(candidates) >= limit:

@@ -11,9 +11,19 @@
         <!-- <input type="hidden" name="analysis" value="{{ analysis | tojson }}"> -->
         <!-- avatar -->
         <div class="flex-shrink-0">
+            {% if metadata and metadata.avatar %}
+            <img src="{{ metadata.avatar }}" 
+                 alt="{{ candidate.name }}" 
+                 class="w-10 h-10 rounded-full object-cover"
+                 onerror="this.onerror=null; this.style.display='none'; this.nextElementSibling.style.display='flex';">
+            <div class="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center" style="display:none;">
+                <span class="text-lg">👤</span>
+            </div>
+            {% else %}
             <div class="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center">
                 <span class="text-lg">👤</span>
             </div>
+            {% endif %}
         </div>
         <!-- name and job applied -->
         <div class="flex-1 min-w-0">
