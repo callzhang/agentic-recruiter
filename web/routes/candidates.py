@@ -21,7 +21,7 @@ from src.jobs_store import get_job_by_id
 from src.global_logger import logger
 from src import chat_actions, assistant_actions, assistant_utils, recommendation_actions
 from src.assistant_actions import send_dingtalk_notification
-from src.candidate_stages import STAGE_PASS, STAGE_CHAT, STAGE_SEEK, STAGE_CONTACT
+from src.candidate_stages import STAGE_PASS, STAGE_CHAT, STAGE_SEEK, STAGE_CONTACT, ALL_STAGES, derive_stage_from_action
 import boss_service
 
 router = APIRouter()
@@ -245,8 +245,12 @@ async def init_chat(
     # Get all form data as kwargs
     form_data = await request.form()
     kwargs = dict(form_data)
-    if mode != "recommend":
-        assert chat_id is not None, "chat_id is required for chat/followup/greet mode"
+    
+    # Get job info
+    job_info = get_job_by_id(job_id)
+    if not job_info:
+        raise HTTPException(status_code=400, detail=f"未找到岗位: {job_id}")
+    
     # check if existing candidate has been saved before by using semantic search
     # use semantic search to find existing candidate
     candidate = get_candidate_by_dict(kwargs, strict=True)
@@ -259,16 +263,23 @@ async def init_chat(
         return candidate
     
     if mode == "recommend":
-        history = [{'role': 'developer', 'content': f"候选人: {name}, 申请岗位: {job_applied}, 基本信息: {last_message}"}]
+        history = [
+            {"role": "developer", "content": "系统推荐以下候选人，请分析是否匹配。如匹配可以主动和候选人沟通。"},
+            {'role': 'developer', 'content': f"候选人: {name}, 系统推荐岗位: {job_applied}, 基本信息: {last_message}"},
+            {'role': 'developer', 'content': f"以下是岗位信息（JSON，仅用于内部判断）：\n{job_info}"},
+            {"role": "assistant", "content": "你好，我们这个岗位正在招聘，想跟你沟通一下"}, 
+            {"role": "user", "content": "你好，有什么事？"},
+        ]
     else:
-        assert chat_id is not None, "chat_id is required for chat mode"
+        assert chat_id is not None, "chat_id is required for chat/followup/greet mode"
+        history = [
+            {"role": "developer", "content": "候选人主动投递简历，请分析是否匹配。如匹配可以主动和候选人沟通。"},
+            {'role': 'developer', 'content': f"候选人: {name}, 申请岗位: {job_applied}"},
+            {'role': 'developer', 'content': f"以下是岗位信息（JSON，仅用于内部判断）：\n{job_info}"},
+        ]
         page = await boss_service.service._ensure_browser_session()
-        history = await chat_actions.get_chat_history_action(page, chat_id)
+        history += await chat_actions.get_chat_history_action(page, chat_id)
     
-    # Get job info
-    job_info = get_job_by_id(job_id)
-    if not job_info:
-        raise HTTPException(status_code=400, detail=f"未找到岗位: {job_id}")
     # Init chat in thread pool to avoid blocking event loop (OpenAI API call)
     result = assistant_actions.init_chat(
         mode=mode,
@@ -283,51 +294,6 @@ async def init_chat(
     assert result.get("candidate_id"), "candidate_id is required"
     return result
 
-
-@router.post("/analyze")
-async def analyze_candidate(
-    request: Request,
-    mode: str = Form(...),
-    chat_id: Optional[str] = Form(None),
-    candidate_id: Optional[str] = Form(None),
-    conversation_id: str = Form(...),
-    job_applied: str = Form(...),
-    resume_text: str = Form(None),
-    full_resume: str = Form(None),
-    name: Optional[str] = Form(None),
-):
-    """Analyze candidate and return analysis result."""
-    
-    if full_resume:
-        assert len(full_resume) > 100, f"full_resume is required, but full_resume is:\n {full_resume} "
-        logger.debug("Analyzing full resume")
-        input_message=f'招聘顾问你好，请帮我分析一下我是否匹配{job_applied}这个岗位？以下是我的完整简历：\n{full_resume}'
-    else:
-        assert len(resume_text) > 100, f"online resume is required, but online resume is:\n {resume_text} "
-        logger.debug("Analyzing online resume")
-        input_message=f'招聘顾问你好，请帮我分析一下我是否匹配{job_applied}这个岗位？以下是我的在线简历：\n{resume_text}'
-    
-    # start analyze - run in thread pool to avoid blocking event loop (OpenAI API call)
-    analysis_result = await asyncio.to_thread(
-        assistant_actions.generate_message,
-        input_message=input_message,
-        conversation_id=conversation_id,
-        purpose="ANALYZE_ACTION"
-    )
-    resume_type = "online" if not full_resume else "full"
-    analysis_result["resume_type"] = resume_type
-    
-    # Save analysis (database operation, no browser lock needed)
-    upsert_candidate(
-        analysis=analysis_result,
-        candidate_id=candidate_id,
-        chat_id=chat_id,
-        mode=mode,
-        conversation_id=conversation_id,
-        job_applied=job_applied,
-        name=name,
-    )
-    return await _render_analysis_result(request, analysis_result)
 
 @router.post("/render-analysis-result")
 async def render_analysis_result(request: Request) -> HTMLResponse:
@@ -354,67 +320,133 @@ async def save_candidate_to_cloud(request: Request):
     return candidate_id
 
 
-@router.post("/generate-message", response_class=HTMLResponse)
-async def generate_message(
+@router.post("/analyze-and-generate", response_class=HTMLResponse)
+async def analyze_and_generate(
     request: Request,
-    name: str = Form(...),
     mode: str = Form(...),
-    candidate_id: str = Form(...),
     chat_id: Optional[str] = Form(None),
+    candidate_id: str = Form(...),
     conversation_id: str = Form(...),
+    job_applied: str = Form(...),
+    resume_text: str = Form(None),
+    full_resume: str = Form(None),
+    analysis: Optional[str] = Form(None),
+    name: str = Form(...),
     force: bool = Form(False),
-    index: Optional[int] = Form(None),
+    chat_threshold: float = Form(6.0),
+    borderline_threshold: float = Form(7.0),
 ):
-    """Generate message for candidate. Requires conversation_id to be initialized first."""
-    should_generate, new_user_messages, assistant_message, chat_history = await _should_generate_message(candidate_id, chat_id, mode, force)
-    # add "[沉默]" to the input message to prevent random errors with empty input
-    if (mode == 'followup' or force) and not new_user_messages:
-        new_user_messages = "[沉默]"
-    elif mode == 'recommend':
-        new_user_messages = [
-            {"role": "developer", "content": "系统推荐以下候选人，请问分析是否匹配。如匹配可以主动和候选人沟通。"},
-            {"role": "assistant", "content": "你好，我们这个岗位正在招聘，想跟你沟通一下"}, 
-            {"role": "user", "content": "你好，有什么事？"},
-        ]
-    elif not should_generate:
-        return templates.TemplateResponse(
-            "partials/message_result.html",
-            {"request": request, **assistant_message},
+    """Analyze candidate and (optionally) generate message in one request."""
+    analysis = json.loads(analysis) if analysis else None
+    resume_type = analysis['resume_type'] if analysis else None
+    new_user_messages = []
+    # check if should generate message
+    need_reply, user_messages, assistant_message, chat_history = await _should_generate_message(
+        candidate_id, chat_id, mode, force
+    )
+    # build user messages from resume
+    if full_resume and analysis and resume_type != "full":
+        need_reply = True
+        logger.debug(f"Analyzing full resume for {name}")
+        new_user_messages += [{"role": "developer", "content": f'这是候选人{name}的完整简历，结合已有对话记录，分析是否匹配{job_applied}这个岗位？\n{full_resume}'}]
+        resume_type = "full"
+    elif resume_text and not analysis:
+        need_reply = True
+        logger.debug(f"Analyzing online resume for {name}")
+        new_user_messages += [{"role": "developer", "content": f'这是候选人{name}的在线简历，结合已有对话记录，分析是否匹配{job_applied}这个岗位？\n{resume_text}'}]
+        resume_type = "online"
+        
+    # add new user messages
+    new_user_messages += user_messages
+    # Build input for followup action if needed
+    if (mode == "followup" or force) and not new_user_messages:
+        new_user_messages += [{"role": "user", "content": "[沉默]"}]
+        need_reply = True
+
+    if not need_reply:
+        return HTMLResponse(
+            content='',
+            status_code=200,
+            headers={"HX-Trigger": json.dumps({"showToast": {"message": "不需要回复", "type": "error"}}, ensure_ascii=True)}
         )
-    # generate message
-    generated = await asyncio.to_thread(
+
+    # Always re-run analysis on every request.
+    analysis_result = await asyncio.to_thread(
         assistant_actions.generate_message,
         input_message=new_user_messages,
         conversation_id=conversation_id,
-        purpose="FOLLOWUP_ACTION" if mode == "followup" else "CHAT_ACTION",
+        purpose="ANALYZE_AND_MESSAGE_ACTION",
     )
-    logger.debug("Generated message: %s", generated)
-    action = generated.get("action", "")
-    reason = generated.get("reason", "")
-    message_text = generated.get("message", "")
-
+    analysis_result["resume_type"] = resume_type
+    # 安全检查（基于规则），用于检测模型是否按照规则行事
+    action = analysis_result.get("action")
+    overall = analysis_result.get("overall")
+    message_text = analysis_result.get("message")
+    
+    # Validate action based on score thresholds
+    if overall < 4 and action != "PASS":
+        logger.warning(f"overall is {overall}, but action is {action}, forcing to PASS")
+        action = "PASS"
+    elif overall < 6 and action not in ["PASS", "CHAT", "WAIT"]:
+        logger.warning(f"overall is {overall}, but action is {action}, forcing to CHAT")
+        action = "CHAT"
+    
+    # WAIT 时，不应该有消息
+    if action == "WAIT" and message_text:
+        logger.warning(f"action is WAIT, but message_text is not empty: {message_text}")
+        message_text = ""
+    if not need_reply:
+        message_text = ""
+        action = "PASS" if overall < 4 else "WAIT"
+    # 未提供完整简历，不应该设置为强匹配
+    if action == "CONTACT" and resume_type != "full":
+        logger.warning(f"action is {action}, but resume_type is {resume_type}, downgrading to SEEK")
+        action = "SEEK"
+    
+    # Derive stage from action
+    stage = derive_stage_from_action(action)
+    # 构建历史记录
     generated_history_item: dict[str, Any] = {
         "role": "assistant",
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "content": message_text,
         "action": action,
-        "reason": reason,
+        "reason": analysis_result.get("reason"),
     }
-    # update candidate data - metadata merging handled automatically by upsert_candidate()
-    updates: dict[str, Any] = {
-        "candidate_id": candidate_id,
-        "chat_id": chat_id,
-        "mode": mode,
-        "conversation_id": conversation_id,
-        "metadata": {"history": chat_history + [generated_history_item]},
-        "generated_message": message_text,
-    }
-    upsert_candidate(**updates)
-    # return message result
-    return templates.TemplateResponse(
-        "partials/message_result.html",
-        {"request": request, "message": message_text, "action": action, "reason": reason},
+    # new_chat_history = chat_history + [generated_history_item]
+    # new_chat_history = [m for m in new_chat_history if m.get("role") in ["user", "assistant"]] # prevent json over size limit
+    # 更新数据
+    upsert_candidate(
+        analysis=analysis_result,
+        score=overall,
+        candidate_id=candidate_id,
+        chat_id=chat_id,
+        mode=mode,
+        conversation_id=conversation_id,
+        stage=stage,
+        generated_message=message_text,
+        metadata={
+            "history": chat_history + [generated_history_item]
+        }
     )
+    
+    # render analysis and message
+    analysis_html = templates.env.get_template("partials/analysis_result.html").render({
+        "request": request,
+        "analysis": analysis_result,
+    })
+    message_html = templates.env.get_template("partials/message_result.html").render({
+        "request": request,
+        "message": message_text,
+        "action": action,
+        "reason": analysis_result.get("reason"),
+        "generated": bool(message_text),
+    })
+    content = (
+        f'<div id="analysis-content" hx-swap-oob="true">{analysis_html}</div>'
+        f'<div id="message-content" hx-swap-oob="true">{message_html}</div>'
+    )
+    return HTMLResponse(content=content)
 
 @router.post("/should-reply")
 async def should_reply(
@@ -751,51 +783,6 @@ async def get_thread_history(
 #----------------------
 # Helper Functions
 #----------------------
-def _check_history(history, skip_words:tuple=(), detect_words:tuple=()):
-    assistant_message = {}
-    new_user_messages = []
-    skipped = False
-    detected = False
-    # { "role": "assistant/user", "timestamp": "2025-11-10 10:00:00", "content": "你好，我叫张三", "status": "未读" }
-    for msg in history[::-1]:
-        role = msg.get("role")
-        content = msg.get("content")
-        if role == "assistant":
-            skipped = any(skip in content for skip in skip_words)
-            detected = any(detect in content for detect in detect_words)
-            if not skipped:
-                assistant_message = msg
-                break
-            if not detected:
-                detected = True
-                break
-        elif role == "user":
-            new_user_messages.insert(0, {"content": content, "role": role})
-    return new_user_messages, assistant_message, skipped, detected
-
-
-async def _get_new_user_messages_and_assistant_message(candidate) -> Optional[dict]:
-    """Get new user messages and assistant action from candidate metadata, 
-    fall back to get chat history from browser(and upsert history if empty).
-    """
-    if not candidate.get("chat_id"):
-        return [], {}, []
-    # first check user messages from metadata -> this is not working to detect new user messages from browser
-    metadata_history = candidate.get('metadata', {}).get('history')
-    page = await boss_service.service._ensure_browser_session()
-    chat_history = await chat_actions.get_chat_history_action(page, candidate["chat_id"])
-    new_user_messages, assistant_message, _, _ = _check_history(chat_history, skip_words=('方便发一份简历过来吗'))
-    # update history if missing
-    if not metadata_history or len(metadata_history) < len(chat_history):
-        logger.warning(f"Candidate {candidate['candidate_id']} has no metadata history, updating...")
-        upsert_candidate(
-            candidate_id=candidate["candidate_id"],
-            metadata={
-                "history": chat_history
-            }
-        )
-    return new_user_messages, assistant_message, chat_history
-
 FOLLOWUP_DELTA_DAYS = 2
 MAX_FOLLOWUP_DAYS = 20
 async def _should_generate_message(candidate_id: str, chat_id: str, mode: str, force = False) -> tuple[bool, list]:
@@ -814,45 +801,103 @@ async def _should_generate_message(candidate_id: str, chat_id: str, mode: str, f
     candidate = get_candidate_by_dict({"candidate_id": candidate_id})
     # if candidate not saved, it's probably a new candidate, so we should generate message
     if not candidate: return True, [], {}, []
-    # For recommend mode, always return True (no chat history available)
-    if mode == "recommend": return True, [], {}, []
     # if the candidate is already passed, don't reply
     if candidate.get("stage") == STAGE_PASS: return False, [], {}, []
+    # Get analysis result
+    analysis_result = candidate.get("analysis")
     # Get new user messages and assistant message from candidate metadata
-    new_user_messages, assistant_message, chat_history = await _get_new_user_messages_and_assistant_message(candidate)
-    if bool(new_user_messages):
+    new_user_messages, assistant_message, chat_history = await _get_chat_history(candidate)
+    last_action = assistant_message.get("action")
+    # Derive stage from action in analysis if available
+    analysis_action = analysis_result.get("action") if analysis_result else None
+    analysis_derived_stage = derive_stage_from_action(analysis_action) if analysis_action else None
+    if analysis_derived_stage == STAGE_PASS:
+        should_generate = False
+    elif last_action in ['WAIT', 'PASS']:
+        should_generate = False
+    elif bool(new_user_messages):
         should_generate = True
     elif mode == "followup":
-        last_action = assistant_message.get("action")
         # check if updated_at has exceeded FOLLOWUP_MAX_DAYS
         updated_at = candidate.get("updated_at")
-        if updated_at:
-            if isinstance(updated_at, str):
-                updated_at = parser.parse(updated_at).replace(tzinfo=None)
-            if (datetime.now() - updated_at).days > MAX_FOLLOWUP_DAYS:
-                should_generate = True
-        # skip if last message is WAIT or PASS
-        if last_action in ['WAIT', 'PASS']:
-            should_generate = False
-        else:
-            # only generate message if last message is within followup_after_days
-            timestamp_str = assistant_message.get("timestamp", "")
-            try:
-                last_ts = parser.parse(timestamp_str).replace(tzinfo=None)
-                diff_days = (datetime.now() - last_ts).days
-                should_generate = diff_days >= FOLLOWUP_DELTA_DAYS
-            except (ValueError, Exception) as e:
-                # Extract date and time using regex, removing Chinese text like '昨天', '今天', etc.
-                # Pattern: YYYY-MM-DD ... HH:MM:SS or YYYY-MM-DD ... HH:MM
-                match = re.search(r'(\d{4}-\d{2}-\d{2})\s+.*?(\d{2}:\d{2}(?::\d{2})?)', timestamp_str)
-                if match:
-                    date_part = match.group(1)
-                    time_part = match.group(2)
-                    clean_timestamp = f"{date_part} {time_part}"
-                    last_ts = parser.parse(clean_timestamp).replace(tzinfo=None)
-                    diff_days = (datetime.now() - last_ts).days
-                    should_generate = diff_days >= FOLLOWUP_DELTA_DAYS
-                else:
-                    logger.warning(f"Failed to parse timestamp '{timestamp_str}': {e}")
-                    should_generate = False
+        updated_at = parser.parse(updated_at).replace(tzinfo=None)
+        diff_days = (datetime.now() - updated_at).days
+        if diff_days > FOLLOWUP_DELTA_DAYS and diff_days < MAX_FOLLOWUP_DAYS:
+            should_generate = True
     return should_generate, new_user_messages, assistant_message, chat_history
+
+
+async def _get_chat_history(candidate) -> Optional[dict]:
+    """Get chat history from candidate metadata, 
+    fall back to get chat history from browser(and upsert history if empty).
+    """
+    if not candidate.get("chat_id"):
+        return [], {}, []
+    # first check user messages from metadata -> this is not working to detect new user messages from browser
+    metadata_history = candidate.get('metadata', {}).get('history')
+    page = await boss_service.service._ensure_browser_session()
+    chat_history = await chat_actions.get_chat_history_action(page, candidate["chat_id"])
+    new_user_messages, assistant_message, _, _ = _extract_user_assistant_messages(chat_history, skip_words=['方便发一份简历过来吗'])
+    # merge history from browser to metadata
+    merged_history = _merge_history(metadata_history, chat_history)
+    if len(metadata_history) < len(merged_history):
+        upsert_candidate(
+            candidate_id=candidate["candidate_id"],
+            metadata={ "history": merged_history }
+        )
+    return new_user_messages, assistant_message, merged_history
+
+def _extract_user_assistant_messages(history, skip_words:list=[], detect_words:list=[]):
+    """Extract user and last assistant messages from history.
+    Args:
+        history: List of messages
+        skip_words: if matched skip word, the message is not a hit
+        detect_words: List of words to detect in assistant message
+    """
+    assert type(skip_words) == list and type(detect_words) == list, "skip_words and detect_words must be list"
+    assistant_message = {}
+    new_user_messages = []
+    skipped = False
+    detected = False
+    # { "role": "assistant/user", "timestamp": "2025-11-10 10:00:00", "content": "你好，我叫张三", "status": "未读" }
+    for msg in history[::-1]:
+        role = msg.get("role")
+        content = msg.get("content")
+        if role == "assistant":
+            skipped = any(skip in content for skip in skip_words)
+            detected = any(detect in content for detect in detect_words)
+            if not skipped:
+                assistant_message = msg
+                break
+            elif detected:
+                break
+        elif role == "user":
+            new_user_messages.insert(0, msg)
+    return new_user_messages, assistant_message, skipped, detected
+
+def _merge_history(metadata_history, browser_history):
+    ''' merge history from browser to metadata
+    metadata_history: list of dict [{"role": "user/assistant", "timestamp": "2025-11-10 10:00:00", "content": "你好，我叫张三", "status": "未读", "action": "CHAT"}]
+    browser_history: list of dict [{"role": "user/assistant", "timestamp": "2025-11-10 10:00:00", "content": "你好，我叫张三", "status": "未读"}]
+    '''
+    if not metadata_history:
+        return browser_history
+    if not browser_history:
+        return metadata_history
+    
+    merged = metadata_history.copy()
+    for msg in merged:
+        msg["timestamp"] = re.sub(r'[\u4e00-\u9fff]+', '', msg.get("timestamp", ""))
+    metadata_messages_set = {(msg.get("role"), msg.get("content")):msg for msg in metadata_history}
+    for browser_msg in browser_history:
+        key = (browser_msg.get("role"), browser_msg.get("content"))
+        if key not in metadata_messages_set:
+            timestamp_str = browser_msg.get("timestamp")
+            browser_msg['timestamp'] = re.sub(r'[\u4e00-\u9fff]+', '', timestamp_str)
+            merged.append(browser_msg)
+        else:
+            msg = metadata_messages_set[key]
+            msg["timestamp"] = re.sub(r'[\u4e00-\u9fff]+', '', browser_msg["timestamp"])
+    
+    merged.sort(key=lambda x: parser.parse(x.get("timestamp", "1970-01-01 00:00:00")))
+    return merged

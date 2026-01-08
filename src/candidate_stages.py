@@ -145,6 +145,31 @@ def get_stage_description(stage: Optional[str]) -> str:
     return STAGE_DESCRIPTIONS.get(stage_upper or "", "")
 
 
+def derive_stage_from_action(action: str) -> str:
+    """Derive stage from action.
+    
+    Args:
+        action: Action type (PASS, CHAT, SEEK, CONTACT, WAIT)
+    
+    Returns:
+        Stage name (PASS, CHAT, SEEK, CONTACT)
+    
+    Examples:
+        >>> derive_stage_from_action("PASS")
+        'PASS'
+        >>> derive_stage_from_action("WAIT")
+        'CHAT'
+        >>> derive_stage_from_action("SEEK")
+        'SEEK'
+    """
+    if action == "WAIT":
+        return STAGE_CHAT  # WAIT is a derived state of CHAT
+    elif action in [STAGE_PASS, STAGE_CHAT, STAGE_SEEK, STAGE_CONTACT]:
+        return action
+    else:
+        raise ValueError(f"Invalid action: {action}")
+
+
 # Export all public symbols
 __all__ = [
     "CandidateStage",
@@ -160,5 +185,6 @@ __all__ = [
     "is_valid_stage",
     "normalize_stage",
     "get_stage_description",
+    "derive_stage_from_action",
 ]
 

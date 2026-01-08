@@ -9,6 +9,7 @@
 <div class="space-y-2" id="message-result-container"
      data-action="{{ action or '' }}"
      data-reason="{{ reason or '' }}"
+     data-generated="{{ 'true' if generated else 'false' }}"
      data-payload='{{ payload | tojson if payload is not none else "{}" }}'>
     {% if action or reason %}
     <div class="flex items-start gap-2">

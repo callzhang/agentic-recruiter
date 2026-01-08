@@ -107,11 +107,10 @@ flowchart TD
     O6 --> P1
     P1 --> P
     
-    subgraph ANALYSIS ["🔬 startAnalysis"]
+    subgraph ANALYSIS ["🔬 analyzeAndGenerate"]
         N[ANALYSIS WORKFLOW]
-        N --> N1["POST /web/candidates/analyze HTMX"]
-        N1 --> N2["Returns analysis_result.html"]
-        N2 --> N3["🚨 PROBLEM: No automatic message generation!"]
+        N --> N1["POST /web/candidates/analyze-and-generate HTMX"]
+        N1 --> N2["Returns analysis_result.html + message_result.html (OOB)"]
     end
     
     subgraph ANALYSIS_DISPLAY ["📈 displayAnalysis"]
@@ -124,9 +123,9 @@ flowchart TD
         O4 --> O6["showManualGenerateButton"]
     end
     
-    subgraph MESSAGE_GEN ["💬 generateMessage"]
+    subgraph MESSAGE_GEN ["💬 analyzeAndGenerate (message)"]
         P["MESSAGE GENERATION"]
-        P --> P2["POST /web/candidates/generate-message"]
+        P --> P2["POST /web/candidates/analyze-and-generate"]
         P2 --> P3{"response.ok"}
         P3 -->|if| P4["SUCCESS"]
         P3 -->|else| P5["FAILURE"]
@@ -140,7 +139,6 @@ flowchart TD
     classDef decisionNode fill:none,stroke:#ffd43b,stroke-width:2px,color:#ffd43b
     classDef processNode fill:none,stroke:#74c0fc,stroke-width:1px,color:#74c0fc
     
-    class N3 problemNode
     class P4,P6 successNode
     class E,G2,H,I2,K2,L2,M2,M7,M11,M16,O2,P3 decisionNode
     class A,B,C,D,F,G,I,J,K,L,M,N,O,P processNode
