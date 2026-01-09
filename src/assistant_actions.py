@@ -13,7 +13,7 @@ from .candidate_store import upsert_candidate
 from .config import get_dingtalk_config, get_openai_config
 from .global_logger import logger
 from .assistant_utils import _openai_client
-from .prompts.assistant_actions_prompts import ACTION_PROMPTS, ACTION_SCHEMAS, build_init_chat_prompt
+from .prompts.assistant_actions_prompts import ACTION_PROMPTS, ACTION_SCHEMAS
 
 # Constants - Import from unified stage definition
 from .candidate_stages import ALL_STAGES as STAGES, STAGE_DESCRIPTIONS
@@ -54,30 +54,15 @@ def init_chat(
         "job_applied": job_info["position"],
         "mode": mode,
     }
-
-    
-    # Add job description to thread
-    job_prompt = {
-        'type': 'message', 
-        'role': 'developer',    
-        'content': build_init_chat_prompt(job_info)
-    }
-    
-    # Add candidate resume to thread
-    full_history = [job_prompt] + chat_history
     
     # Create openai conversation
-    full_history = [{'role': m['role'], 'content': m['content'], 'type': m.get('type', 'message')} for m in full_history]
+    full_history = [{'role': m['role'], 'content': m['content'], 'type': m.get('type', 'message')} for m in chat_history]
     conversation = _openai_client.conversations.create(
         metadata=conversation_metadata, 
         items=full_history
     )
 
     # create candidate record
-    kwargs.pop('chat_id', None)
-    kwargs.pop('stage', None)
-    kwargs.pop('conversation_id', None)
-    kwargs.pop('metadata', None)
     candidate_id = upsert_candidate(
         chat_id=chat_id,
         stage=None,  # Not analyzed yet
@@ -98,7 +83,8 @@ def init_chat(
 def generate_message(
     input_message: str|list[dict[str, str]],
     conversation_id: str,
-    purpose: str
+    purpose: str,
+    additional_instruction: Optional[str] = None,
 ) -> Any:
     """
     Generate message using openai's assistant api.
@@ -126,12 +112,19 @@ def generate_message(
     assert conversation_id and conversation_id != 'null', "conversation_id is required"
     logger.debug(f"Generating message for purpose: {purpose}")
     instruction = ACTION_PROMPTS[purpose]
+    instruction += "\n" + additional_instruction
     json_schema = ACTION_SCHEMAS.get(purpose)
 
     # check input_message if list: { "type": "message", "role": "user", "content": "This is my new input." },
+    _sage_message = lambda message: {'role': message['role'], 'content': message['content']}
     if isinstance(input_message, list):
-        for item in input_message:
-            assert 'role' in item and 'content' in item, "input_message must be a list of dict with role, content"
+        input_message = [_sage_message(m) for m in input_message]
+    elif isinstance(input_message, str):
+        input_message = {"role": "user", "content": input_message}
+    elif isinstance(input_message, dict):
+        input_message = _sage_message(input_message)
+    else:
+        raise ValueError("input_message must be a list of dict with role, content or a string")
 
     # Create a new run
     openai_config = get_openai_config()

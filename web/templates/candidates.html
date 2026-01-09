@@ -539,18 +539,30 @@ function disableAllCards() {
     const cards = document.querySelectorAll('.candidate-card');
     cards.forEach(card => {
         card.style.pointerEvents = 'none';
-        // card.style.opacity = '0.6';
+        card.style.cursor = 'not-allowed';
+        card.style.opacity = '0.6';
         card.classList.remove('bg-blue-50', 'border-blue-500', 'ring-2', 'ring-blue-300');
         card.classList.add('border-gray-200');
     });
+    
+    // Disable the auto-process button
+    if (!window.cycleReplyState?.running) {
+        const cycleBtn = document.getElementById('cycle-reply-btn');
+        if (cycleBtn) cycleBtn.disabled = true;
+    }
 }
 
 function enableAllCards() {
     const cards = document.querySelectorAll('.candidate-card');
     cards.forEach(card => {
         card.style.pointerEvents = '';
-        // card.style.opacity = '';
+        card.style.cursor = '';
+        card.style.opacity = '';
     });
+    
+    // Enable the auto-process button
+    const cycleBtn = document.getElementById('cycle-reply-btn');
+    if (cycleBtn) cycleBtn.disabled = false;
 }
 // Functions are already global (defined with 'function' keyword)
 // They can be accessed via window.disableAllCards or directly as disableAllCards
@@ -818,22 +830,16 @@ async function processCandidateCard(card) {
     }
     
     console.log(`正在处理候选人: ${name} (ID: ${candidateId})`);
-    
-    if (window.cycleReplyState?.running) {
-        document.dispatchEvent(new CustomEvent('candidates:disable-cards'));
-    }
 
     // Combined promise: wait for swap, then processing
-    let swapTimeout = null;
     let processingTimeout = null;
     let cleanup = null;
 
     const processingPromise = new Promise((resolve, reject) => {
-        // Set up processing event listeners (registered on the specific card)
+        // Set up processing event listeners (scoped to card for isolation)
         const onProcessingComplete = (event) => {
             console.log(`候选人: ${name} 处理完成`);
             cleanup();
-            if (!window.cycleReplyState?.running) enableAllCards();
             resolve();
         };
         
@@ -842,16 +848,13 @@ async function processCandidateCard(card) {
             reject(new Error(event.detail?.error || event.detail?.message || 'Processing failed'));
         };
 
-        // Set up swap event listeners (global htmx events but we check target if possible, 
-        // essentially htmx:afterSwap is dispatched on the target element swapped)
+        // Set up swap event listeners (must be on document since htmx events bubble from #detail-pane)
         const onSwap = (event) => {
             // Check if this swap is for our detail pane
             if (event.target.id === 'detail-pane' || event.detail.target.id === 'detail-pane') {
-                clearTimeout(swapTimeout);
                 // limit 180s for candidate processing logic after swap
                 processingTimeout = setTimeout(() => {
                     cleanup();
-                    if (!window.cycleReplyState?.running) enableAllCards();
                     reject(new Error('Processing timeout (180s)'));
                 }, 180000);
             }
@@ -865,36 +868,22 @@ async function processCandidateCard(card) {
             }
         };
         
-        // Swap timeout
-        swapTimeout = setTimeout(() => {
-            cleanup();
-            reject(new Error('HTMX swap timeout'));
-        }, 15000); // 15s for swap
-        
         cleanup = () => {
-            clearTimeout(swapTimeout);
+            if (!window.cycleReplyState?.running) enableAllCards();
             clearTimeout(processingTimeout);
-            // Remove listeners from card
-            document.removeEventListener('candidate:processing-complete', onProcessingComplete);
-            // document listeners for htmx events (htmx events bubble)
-            document.removeEventListener('htmx:afterSwap', onSwap); 
-            document.removeEventListener('htmx:sendError', onSendError); // triggered on triggering element
-            document.removeEventListener('candidate:processing-error', onProcessingError); // still global? OR fetch error bubbles?
+            // Only need to remove document listeners (card listeners auto-remove with { once: true })
+            document.removeEventListener('htmx:afterSwap', onSwap);
+            document.removeEventListener('htmx:sendError', onSendError);
         };
         
         // Attach listeners
-        document.addEventListener('candidate:processing-complete', onProcessingComplete, { once: true });
-        // htmx:sendError is triggered on the element
-        document.addEventListener('htmx:sendError', onSendError, { once: true });
+        // Custom events: scope to card with { once: true } for auto-cleanup
+        card.addEventListener('candidate:processing-complete', onProcessingComplete, { once: true });
+        card.addEventListener('candidate:processing-error', onProcessingError, { once: true });
         
-        // htmx:afterSwap is dispatched on the target (#detail-pane), so we must listen on document or body 
-        // to catch it bubble, or we could listen on #detail-pane if it exists? 
-        // Document listener is safest for swap success
+        // HTMX events: must listen on document since they're dispatched on #detail-pane and bubble up
+        document.addEventListener('htmx:sendError', onSendError);
         document.addEventListener('htmx:afterSwap', onSwap);
-        
-        // Error handling - if error happens inside detail pane, we dispatch candidate:processing-error on document currently.
-        // We should probably update that to card too, but for now listen on document
-        document.addEventListener('candidate:processing-error', onProcessingError, { once: true });
     });
     
     // Trigger HTMX click

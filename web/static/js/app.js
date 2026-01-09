@@ -460,26 +460,36 @@ window.htmxAjaxPromise = function htmxAjaxPromise(method, url, options) {
     return new Promise((resolve, reject) => {
         const target = document.querySelector(options.target);
         if (!target) {
-            reject(new Error(`Target should be provided to use htmxAjaxPromise: ${options} or use fetch instead`));
+            reject(new Error(`Target element not found: ${options.target}`));
             return;
         }
         
         // Listen for swap completion
         const afterSwap = (evt) => {
-            target.removeEventListener('htmx:afterSwap', afterSwap);
-            target.removeEventListener('htmx:responseError', onError);
-            resolve(target.textContent.trim());
+            // Check if this swap is for our target element
+            const swapTarget = evt.target;
+            const isTargetSwap = swapTarget === target || swapTarget?.id === target.id;
+            if (isTargetSwap) {
+                cleanup();
+                resolve(target.textContent.trim());
+            }
         };
         
         const onError = (evt) => {
-            target.removeEventListener('htmx:afterSwap', afterSwap);
-            target.removeEventListener('htmx:responseError', onError);
+            cleanup();
             const errorMsg = evt.detail?.error || evt.detail?.message || 'HTMX request failed';
             reject(new Error(errorMsg));
         };
         
-        target.addEventListener('htmx:afterSwap', afterSwap, { once: true });
-        target.addEventListener('htmx:responseError', onError, { once: true });
+        const cleanup = () => {
+            document.removeEventListener('htmx:afterSwap', afterSwap);
+            document.removeEventListener('htmx:responseError', onError);
+        };
+    
+        
+        // Listen on document to catch both regular and OOB swaps
+        document.addEventListener('htmx:afterSwap', afterSwap, {once: true});
+        document.addEventListener('htmx:responseError', onError, {once: true});
         
         // Trigger the ajax call
         htmx.ajax(method, url, options);

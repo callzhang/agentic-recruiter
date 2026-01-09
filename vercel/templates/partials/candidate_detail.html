@@ -157,7 +157,7 @@
             </button>
             {% endif %}
             {% if view_mode != 'readonly' %}
-            <button onclick="startAnalysis()"
+            <button onclick="analyzeAndGenerate()"
                     class="px-3 py-1 text-xs bg-purple-100 text-purple-700 rounded hover:bg-purple-200 transition flex items-center gap-1">
                 <span>🔄</span>
                 <span>重新分析</span>
@@ -253,7 +253,7 @@
         <div class="flex border-b bg-gray-100 items-center p-2">
             <h3 class="font-bold text-gray-800">✨ 自动生成消息</h3>
             <div class="flex-1"></div>
-            <button onclick="generateMessage()"
+            <button onclick="analyzeAndGenerate({ force: true })"
                     class="px-3 py-1 text-xs bg-indigo-100 text-indigo-700 rounded hover:bg-indigo-200 transition flex items-center gap-1">
                 <span>🔄</span>
                 <span>重新生成消息</span>
@@ -519,14 +519,10 @@ if (typeof showToast !== 'function') {
 }
 
 async function process_candidate() {
-    let newStage, currentScore, analysis;
-    
+    let [newStage, currentScore, analysis, isFullAnalysis] = extractStage();
+    let latestMessage = null;
+    let messageGeneratedThisRun = false;
     try {
-        // Step 0: short-circuit if already PASS
-        if (getCandidateData('stage') === 'PASS') {
-            return;
-        }
-
         // Step 1: Ensure resume is loaded
         const onlineResume = document.getElementById('resume-textarea-online');
         if (!onlineResume?.value || onlineResume.value.includes('⏳') || onlineResume.value.length < 100) {
@@ -538,66 +534,18 @@ async function process_candidate() {
             await initializeNewChat();
         }
 
-        // Step 3: Start analysis if not rendered or pending
+        // Step 3: Start analysis (combined with message generation) if not rendered or pending
         const analysisDiv = document.getElementById('analysis-content');
         const hasAnalysis = !!document.querySelector('#analysis-content #analysis-result-container');
         if (!hasAnalysis || analysisDiv?.textContent?.includes('⏳')) {
-            await startAnalysis();
+            const combined = await analyzeAndGenerate();
+            latestMessage = combined?.message || getGeneratedMessage();
+            messageGeneratedThisRun = !!latestMessage?.generated;
+            [newStage, currentScore, analysis, isFullAnalysis] = extractStage();
         }
 
         // Step 4: Determine stage (PASS/CHAT/SEEK by score thresholds)
-        [newStage, currentScore, analysis] = determineStage();
-        let isFullAnalysis = analysis?.resume_type === 'full';
-        let needReply = await shouldReply();
-        const mode = getCandidateData('mode');
-
-        const finish = async (updates = {}) => {
-            await updateCandidateData({ viewed: true, score: currentScore, stage: newStage, ...updates });
-        };
-
-        const handleChatAction = async (gen) => {
-            const action = gen?.action || '';
-            if (action === 'PASS') {
-                newStage = 'PASS';
-                await finish({ stage: 'PASS' });
-                return true;
-            }
-            if (action === 'WAIT') {
-                await finish({});
-                return true;
-            }
-            if (action === 'CONTACT') {
-                newStage = 'CONTACT';
-                if (!getCandidateData('notified')) {
-                    await sendDingNotification(analysis, getCandidateData('name'), getCandidateData('job_applied'));
-                }
-                await greetAndSendMessage();
-                if (mode !== 'recommend') {
-                    await requestContact();
-                }
-                await finish({ stage: 'CONTACT' });
-                return true;
-            }
-            await greetAndSendMessage();
-            return false;
-        };
-
-        // Hard stop: score-based PASS (must still emit completion event for batch runner)
-        if (currentScore <= 4) {
-            await passCandidate();
-            newStage = 'PASS';
-            await finish({ stage: 'PASS' });
-            return;
-        }
-
-        // Step 4a: CHAT stage -> generate message if needed
-        if (newStage === 'CHAT' && needReply) {
-            const gen = await generateMessage(false);
-            if (await handleChatAction(gen)) return;
-            needReply = false;
-        }
-
-        // Step 4b/4c: SEEK stage -> (chat mode) fetch full resume and re-analyze; then followup generation if needed
+        const {mode, name, job_applied, notified} = getCandidateData();
         if (newStage === 'SEEK') {
             if (mode !== 'recommend') {
                 let fullResume = document.getElementById('resume-textarea-full')?.value?.trim() || '';
@@ -606,27 +554,47 @@ async function process_candidate() {
                     fullResume = document.getElementById('resume-textarea-full')?.value?.trim() || '';
                 }
                 if (!isFullAnalysis && fullResume.length > 100) {
-                    await startAnalysis();
-                    [newStage, currentScore, analysis] = determineStage();
-                    isFullAnalysis = analysis?.resume_type === 'full';
-                    if (newStage === 'SEEK') {
-                        needReply = true;
+                    const combined = await analyzeAndGenerate();
+                    latestMessage = combined?.message || getGeneratedMessage();
+                    messageGeneratedThisRun = !!latestMessage?.generated;
+                    [newStage, currentScore, analysis, isFullAnalysis] = extractStage();
+                    if (newStage === 'SEEK' && isFullAnalysis) {
+                        sendDingNotification(analysis, name, job_applied);
                     }
                 }
-            }
-
-            if (needReply && !getCandidateData('notified')) {
-                await sendDingNotification(analysis, getCandidateData('name'), getCandidateData('job_applied'));
-            }
-
-            if (needReply) {
-                const gen = await generateMessage(true);
-                if (await handleChatAction(gen)) return;
-                needReply = false;
+                if (isFullAnalysis && ['SEEK', 'CONTACT'].includes(newStage)) {
+                    await requestContact();
+                }
             }
         }
-
-        await finish({ stage: newStage, score: currentScore });
+        // Step 4c: if message was generated in combined call, handle it now
+        if (messageGeneratedThisRun && latestMessage) {
+            const action = latestMessage?.action;
+            const reason = latestMessage?.reason || '';
+            switch (action) {
+                case 'PASS':
+                    await passCandidate(reason);
+                    break;
+                case 'WAIT':
+                    console.log(`WAIT: ${reason}`);
+                    break;
+                case 'CONTACT':
+                    if (!notified) await sendDingNotification(analysis, name, job_applied);
+                    await requestContact();
+                    await greetAndSendMessage();
+                    break;
+                default:
+                    await greetAndSendMessage();
+                    break;
+            }
+        }
+        // Step 5: PASS stage
+        if (currentScore < 4) {
+            if (newStage !== 'PASS') showToast(`分数低于 4，但是当前状态：${newStage}`, 'error');
+            // 兜底策略，确保低分都PASS掉
+            await passCandidate('分数低于 4，不匹配');
+            newStage = 'PASS';
+        }
     } catch (error) {
         console.error('Error processing candidate:', error);
         showToast(`处理候选人时出错: ${error.message || String(error)}`, 'error');
@@ -698,6 +666,52 @@ async function fetchFullResume() {
     switchResumeTab('full');
 }
 
+function getGeneratedMessage() {
+    const container = document.getElementById('message-result-container');
+    const textarea = document.getElementById('message-text');
+    const message = textarea?.value?.trim() || '';
+    const action = container?.dataset?.action;
+    const reason = container?.dataset?.reason;
+    const generated = container?.dataset?.generated === 'true';
+    return { action, reason, message, generated };
+}
+
+async function analyzeAndGenerate({ force = false } = {}) {
+    const resume_text = document.getElementById('resume-textarea-online')?.value?.trim() || '';
+    const full_resume = document.getElementById('resume-textarea-full')?.value?.trim() || '';
+    const has_full_resume = !full_resume.includes('⏳') && full_resume.length > 0;
+    const has_online_resume = !resume_text.includes('⏳') && resume_text.length > 0;
+    if (has_full_resume) {
+        showToast('正在分析完整简历...', 'info');
+    } else if (has_online_resume) {
+        showToast('正在分析在线简历...', 'info');
+    } else {
+        showToast('正在基于对话记录进行分析...', 'info');
+    }
+    const values = getCandidateData();
+    const { chat_threshold, borderline_threshold } = getThresholdValues();
+    values.resume_text = resume_text.includes('⏳') ? '' : resume_text;
+    values.full_resume = full_resume.includes('⏳') ? '' : full_resume;
+    values.force = force;
+    values.chat_threshold = chat_threshold;
+    values.borderline_threshold = borderline_threshold;
+    await htmxAjaxPromise('POST', '/candidates/analyze-and-generate', {
+        target: '#analysis-content',
+        swap: 'innerHTML',
+        values: values
+    });
+    const analysis_container = document.querySelector('#analysis-content #analysis-result-container');
+    const analysis = analysis_container ? JSON.parse(analysis_container.getAttribute('data-analysis')) : null;
+    await updateCandidateData({
+        score: analysis?.overall,
+        stage: analysis?.stage,
+        analysis: analysis,
+        generated_message: getGeneratedMessage()?.message
+    });
+    showToast(`分析完成：【${values.name}】(${analysis?.overall})\n后续沟通建议：${analysis?.followup_tips}`, 'info', 60_000);
+    return { analysis, message: getGeneratedMessage() };
+}
+
 function getMessageResultState(purpose = '') {
     const container = document.getElementById('message-result-container');
     const textarea = document.getElementById('message-text');
@@ -714,20 +728,6 @@ function getMessageResultState(purpose = '') {
         }
     }
     return { action, reason, message, purpose, payload };
-}
-
-async function generateMessage(force = false) {
-    const values = getCandidateData();
-    const purpose = force ? 'FOLLOWUP_ACTION' : 'CHAT_ACTION';
-    await htmxAjaxPromise('POST', '/candidates/generate-message', {
-        target: '#message-content',
-        swap: 'innerHTML',
-        values: {...values, purpose: purpose}
-    });
-    const state = getMessageResultState(purpose);
-    console.log('Generated message:', state);
-    await updateCandidateData({generated_message: state.message});
-    return state;
 }
 
 async function greetAndSendMessage() {
@@ -779,56 +779,6 @@ async function greetAndSendMessage() {
 }
 
 
-/**
- * Start analysis (current flow)
- */
-async function startAnalysis() {
-    const resume_text = document.getElementById('resume-textarea-online')?.value?.trim() || '';
-    const full_resume = document.getElementById('resume-textarea-full')?.value?.trim() || '';
-    const has_full_resume = !full_resume.includes('⏳') && full_resume.length > 0;
-    const has_online_resume = !resume_text.includes('⏳') && resume_text.length > 0;
-    
-    if (has_full_resume) {
-        showToast('正在分析完整简历...', 'info');
-    } else if(has_online_resume) {
-        showToast('正在分析在线简历...', 'info');
-    } else {
-        throw new Error('没有可分析的简历,请先请求简历');
-    }
-    
-    const values = getCandidateData();
-    values.resume_text = resume_text.includes('⏳') ? '' : resume_text;
-    values.full_resume = full_resume.includes('⏳') ? '' : full_resume;
-    
-    const result = await htmxAjaxPromise('POST', '/candidates/analyze', {
-        target: '#analysis-content',
-        swap: 'innerHTML',
-        values: values
-    });
-    console.log('Analysis completed:', result.overall);
-    // Extract analysis from data attribute
-    const analysis_container = document.querySelector('#analysis-content #analysis-result-container');
-    const analysis = analysis_container ? JSON.parse(analysis_container.getAttribute('data-analysis')) : null;
-    await updateCandidateData({score: analysis?.overall});
-    
-    // Update resume type badge in tab row
-    updateAnalysisResumeTypeBadge(analysis);
-}
-
-/**
- * Update the resume type badge in the analysis section tab row
- */
-function updateAnalysisResumeTypeBadge(analysis) {
-    const badgeContainer = document.getElementById('analysis-resume-type-badge');
-    if (badgeContainer && analysis) {
-        const resumeType = analysis.resume_type || 'online';
-        const badgeClass = resumeType === 'full' 
-            ? 'inline-block px-3 py-1 text-xs font-medium rounded-full bg-indigo-100 text-indigo-700'
-            : 'inline-block px-3 py-1 text-xs font-medium rounded-full bg-blue-100 text-blue-700';
-        const badgeText = resumeType === 'full' ? '📄 完整简历' : '🌐 在线简历';
-        badgeContainer.innerHTML = `<span class="${badgeClass}">${badgeText}</span>`;
-    }
-}
 
 /**
  * Request contact information from candidate
@@ -971,22 +921,35 @@ async function initializeNewChat() {
 // ============================================================================
 // Candidate Detail Helper Functions
 // ============================================================================
-function determineStage() {
+function extractStage() {
     let stage = 'PASS';
     const analysis_container = document.querySelector('#analysis-content #analysis-result-container');
     const { chat_threshold, borderline_threshold } = getThresholdValues();
     const analysis = analysis_container ? JSON.parse(analysis_container.getAttribute('data-analysis')) : null;
     const {overall, skill, startup_fit, background} = analysis || {};
-    if (overall <= 4) {
-        stage = 'PASS';
-        return [stage, overall, analysis];
+    const isFullAnalysis = analysis?.resume_type === 'full';
+    const modelStage = (analysis?.stage || '').toString().toUpperCase();
+    if (modelStage) {
+        stage = modelStage;
+        if (overall !== undefined && overall !== null) {
+            if (overall < 4) {
+                stage = 'PASS';
+            } else if (overall < 6 && !['PASS', 'CHAT'].includes(stage)) {
+                stage = 'CHAT';
+            }
+        }
+    } else {
+        if (overall >= borderline_threshold){
+            stage = 'SEEK';
+        }else if(overall >= chat_threshold || skill >= borderline_threshold || startup_fit >= borderline_threshold || background >= borderline_threshold){
+            stage = 'CHAT';
+        }else if (overall <= chat_threshold) {
+            stage = 'PASS';
+        }else {
+            stage = 'PASS';
+        }
     }
-    if (overall >= borderline_threshold){
-        stage = 'SEEK';
-    } else if(overall >= chat_threshold || skill >= borderline_threshold || startup_fit >= borderline_threshold || background >= borderline_threshold){
-        stage = 'CHAT';
-    }
-    return [stage, overall, analysis];
+    return [stage, overall, analysis, isFullAnalysis];
 }
 
 
@@ -1116,6 +1079,15 @@ async function updateCandidateData(data) {
             values: { analysis: JSON.stringify(data.analysis) },
             target: '#analysis-content',
         });
+        const badgeContainer = document.getElementById('analysis-resume-type-badge');
+        if (badgeContainer) {
+            const resumeType = data.analysis.resume_type || 'online';
+            const badgeClass = resumeType === 'full'
+                ? 'inline-block px-3 py-1 text-xs font-medium rounded-full bg-indigo-100 text-indigo-700'
+                : 'inline-block px-3 py-1 text-xs font-medium rounded-full bg-blue-100 text-blue-700';
+            const badgeText = resumeType === 'full' ? '📄 完整简历' : '🌐 在线简历';
+            badgeContainer.innerHTML = `<span class="${badgeClass}">${badgeText}</span>`;
+        }
         delete data.analysis;
     }
     if (data.generated_message) {
