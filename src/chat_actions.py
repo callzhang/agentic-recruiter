@@ -287,6 +287,7 @@ async def list_conversations_action(
             text = (await item.locator("span.push-text").inner_text(timeout=100)).strip()
             timestamp = (await item.locator("span.time").inner_text(timeout=100)).strip()
             unread = await item.locator("span.badge-count").count() > 0
+            avatar = await item.locator("div.image-content > img").get_attribute("src", timeout=100)
         except Exception as exc:  # noqa: BLE001
             logger.debug("读取列表项失败 #%s: %s", i, exc)
             continue
@@ -299,6 +300,7 @@ async def list_conversations_action(
                     "last_message": text,
                     "timestamp": timestamp,
                     "viewed": not unread,
+                    "metadata": {"avatar": avatar}
                 }
             )
         if len(messages) >= limit:

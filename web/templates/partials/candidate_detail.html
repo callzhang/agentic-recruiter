@@ -441,16 +441,13 @@
 // Use var to allow redeclaration when HTMX swaps content multiple times
 var root = document.getElementById('candidate-detail-root');
 var viewMode = root?.dataset?.viewMode || 'interactive';
-// Persist on window for other scripts
-window.__candidate_detail_root = window.__candidate_detail_root || root;
-window.__candidate_detail_view_mode = window.__candidate_detail_view_mode || viewMode;
+
 
 async function process_candidate() {
     let [stage, score] = extractStage();
     let generatedMessage = null;
     console.log('process_candidate', getCandidateData());
     try {
-        debugger;
         // Step 1: Ensure resume is loaded
         const onlineResume = document.getElementById('resume-textarea-online');
         if (!onlineResume?.value || onlineResume.value.includes('⏳') || onlineResume.value.length < 100) {
@@ -527,13 +524,15 @@ async function process_candidate() {
     } catch (error) {
         error_message = error.message || String(error);
         showToast(`处理候选人时出错: ${error_message}`, 'error');
-        document.dispatchEvent(new CustomEvent('candidate:processing-error', { detail: { error: error_message } }));
+        const candidateId = getCandidateData('candidate_id');
+        const card = document.querySelector(`.candidate-card[data-candidate-id="${candidateId}"]`);
+        card?.dispatchEvent(new CustomEvent('candidate:processing-error', { detail: { error: error_message } }));
     } finally {
         // update the candidate data in the cloud
         await updateCandidateData({ viewed: true, score: score, stage: stage });
-        // const candidateId = getCandidateData('candidate_id');
-        // const card = document.querySelector(`.candidate-card[data-candidate-id="${candidateId}"]`);
-        document.dispatchEvent(new CustomEvent('candidate:processing-complete', { bubbles: true }));
+        const candidateId = getCandidateData('candidate_id');
+        const card = document.querySelector(`.candidate-card[data-candidate-id="${candidateId}"]`);
+        card?.dispatchEvent(new CustomEvent('candidate:processing-complete', { bubbles: true }));
     }
 }
 
@@ -624,10 +623,11 @@ async function analyzeAndGenerate({ force = false } = {}) {
     // get resume text
     const resume_text = document.getElementById('resume-textarea-online')?.value?.trim() || '';
     const full_resume = document.getElementById('resume-textarea-full')?.value?.trim() || '';
-    if (!full_resume.includes('⏳') && full_resume.length > 100) {
+    debugger;
+    if (!full_resume.includes('⏳') && values.analysis?.resume_type !== 'full') {
         showToast('正在分析完整简历...', 'info');
         values.full_resume = full_resume;
-    } else if (!resume_text.includes('⏳') && resume_text.length > 100) {
+    } else if (!resume_text.includes('⏳') && values.analysis === null) {
         showToast('正在分析在线简历...', 'info');
         values.resume_text = resume_text;
     } else {
@@ -855,8 +855,11 @@ async function initializeNewChat() {
 // Candidate Detail Helper Functions
 // ============================================================================
 function extractStage(analysis) {
+    if (analysis === null) {
+        debugger;
+    }
     let stage = null;
-    if (!analysis) analysis = getAnalysis();
+    if (analysis === undefined) analysis = getAnalysis();
     const { chat_threshold, borderline_threshold } = getThresholdValues();
     const {overall, skill, startup_fit, background, action} = analysis || {};
     const isFullAnalysis = analysis?.resume_type === 'full';
@@ -960,7 +963,6 @@ async function shouldReply() {
         // if(reply) debugger;
         return reply;
     }
-    debugger;
     // if the candidate is already passed, don't reply
     if (stage === 'PASS') return false;
     // if Boss marks this conversation as unread, assume it needs a reply.
@@ -1481,28 +1483,25 @@ function switchResumeTab(tab) {
     }
 }
 
-// Run initialization when partial is loaded via HTMX
-// This ensures process_candidate() runs on each HTMX swap
-(function () {
-    // Update copy link button on initial load
-    updateCopyLinkButton();
+// Update copy link button on initial load
+updateCopyLinkButton();
+
+// Function to run process_candidate with proper error handling
+async function runProcessCandidate() {
+    
+    // Set initial tab state - show online tab if resume_text exists, otherwise show full tab
+    const fullTextarea = document.getElementById('resume-textarea-full');
+    switchResumeTab( fullTextarea?.value?.trim().length > 100 ? 'full' : 'online');
     
     // 当在搜索页面查看候选人详情时，使用 readonly 模式，不应该执行
-    const viewMode = window.__candidate_detail_view_mode || 'interactive';
-    if (viewMode === 'readonly') return;
-    
-    // Function to run process_candidate with proper error handling
-    async function runProcessCandidate() {
-        // Set initial tab state - show online tab if resume_text exists, otherwise show full tab
-        const fullTextarea = document.getElementById('resume-textarea-full');
-        switchResumeTab( fullTextarea?.value?.trim().length > 100 ? 'full' : 'online');
+    if (viewMode !== 'readonly') {
         await process_candidate();
     }
-    
-    // Use setTimes paused when the tab is not visible, but setTimeout is only throttled
-    setTimeout(() => {
-        runProcessCandidate();
-    }, 100);
-})();
+}
+
+// Use setTimes paused when the tab is not visible, but setTimeout is only throttled
+requestAnimationFrame(() => {
+    runProcessCandidate();
+});
 
 </script>

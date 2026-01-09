@@ -83,7 +83,8 @@ def init_chat(
 def generate_message(
     input_message: str|list[dict[str, str]],
     conversation_id: str,
-    purpose: str
+    purpose: str,
+    additional_instruction: Optional[str] = None,
 ) -> Any:
     """
     Generate message using openai's assistant api.
@@ -111,6 +112,7 @@ def generate_message(
     assert conversation_id and conversation_id != 'null', "conversation_id is required"
     logger.debug(f"Generating message for purpose: {purpose}")
     instruction = ACTION_PROMPTS[purpose]
+    instruction += "\n" + additional_instruction
     json_schema = ACTION_SCHEMAS.get(purpose)
 
     # check input_message if list: { "type": "message", "role": "user", "content": "This is my new input." },

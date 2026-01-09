@@ -267,7 +267,7 @@ async def init_chat(
             {"role": "developer", "content": "系统推荐以下候选人，请分析是否匹配。如匹配可以主动和候选人沟通。"},
             {'role': 'developer', 'content': f"候选人: {name}, 系统推荐岗位: {job_applied}, 基本信息: {last_message}"},
             {'role': 'developer', 'content': f"以下是岗位信息（JSON，仅用于内部判断）：\n{job_info}"},
-            {"role": "assistant", "content": "你好，我们这个岗位正在招聘，想跟你沟通一下"}, 
+            {"role": "assistant", "content": f"你好，我们正在诚招{job_applied}，想跟你沟通一下。"}, 
             {"role": "user", "content": "你好，有什么事？"},
         ]
     else:
@@ -371,11 +371,13 @@ async def analyze_and_generate(
         )
 
     # Always re-run analysis on every request.
+    additional_instruction = f'HR设定的沟通阈值（action=CHAT）是{chat_threshold}， 推荐阈值（action=SEEK）是{borderline_threshold}，请在分析打分时参考。'
     analysis_result = await asyncio.to_thread(
         assistant_actions.generate_message,
         input_message=new_user_messages,
         conversation_id=conversation_id,
         purpose="ANALYZE_AND_MESSAGE_ACTION",
+        additional_instruction=additional_instruction,
     )
     analysis_result["resume_type"] = resume_type
     # 安全检查（基于规则），用于检测模型是否按照规则行事
