@@ -29,6 +29,8 @@ RESUME_BUTTON_SELECTOR = "div.resume-file-content, a.resume-btn-file, div.resume
 RESUME_IFRAME_SELECTOR = "iframe.attachment-box"
 PDF_VIEWER_SELECTOR = "div.pdfViewer"
 
+# name dict that stores chat_id:name
+NAME_DICT = {}
 
 @retry(stop=stop_after_attempt(2), wait=wait_fixed(1), reraise=True)
 async def _prepare_chat_page(page: Page, tab = None, status = None, job_title = None, timeout_s: int = 5) -> Page:
@@ -129,18 +131,22 @@ async def _go_to_chat_dialog(page: Page, chat_id: str, wait_timeout: int = 5) ->
     Returns:
         Optional[Locator]: The locator to the chat dialog, or None if not found.
     '''
-    target = await _find_chat_dialog(page, chat_id, wait_timeout)
-    if not target:
+    card = await _find_chat_dialog(page, chat_id, wait_timeout)
+    if not card:
+        name = NAME_DICT.get(chat_id)
+        panel_name = await page.locator(f'span.name-box').inner_text()
+        if name == panel_name:
+            return True
         raise RuntimeError(f"未找到指定对话项 (chat_id: {chat_id})")
     # check if the target is already selected
     # await target.scroll_into_view_if_needed(timeout=1000) # the list will change if we scroll
-    classes = await target.get_attribute("class") or ""
+    classes = await card.get_attribute("class") or ""
     # prepare for the click - get old_text before clicking
     if "selected" not in classes:
         old_conversation_selector = page.locator(CONVERSATION_SELECTOR)
         old_text = await old_conversation_selector.inner_text(timeout=1000) if await old_conversation_selector.count() > 0 else ""
         # click the target
-        await target.click(timeout=1000)
+        await card.click(timeout=1000)
         # wait for the conversation panel to refresh
         t0 = time.time()
         while time.time() - t0 < wait_timeout:
@@ -150,7 +156,8 @@ async def _go_to_chat_dialog(page: Page, chat_id: str, wait_timeout: int = 5) ->
             await page.wait_for_timeout(200)
         else:
             logger.warning("等待对话面板刷新失败")
-    return target
+            return False
+    return True
 
 
 
@@ -222,7 +229,11 @@ async def send_message_action(page: Page, chat_id: str, message: str, timeout: i
 async def discard_candidate_action(page: Page, chat_id: str, timeout: int = 3000) -> bool:
     """Skip (PASS) candidate. Returns True on success, raises ValueError on failure."""
     await _prepare_chat_page(page)
-    await _go_to_chat_dialog(page, chat_id)
+    try:
+        await _go_to_chat_dialog(page, chat_id)
+    except Exception as e:
+        logger.error(f"跳过候选人失败: {e}")
+        return False
 
     not_fit_button = page.locator("div.not-fit-wrap").first
     await not_fit_button.wait_for(state="visible", timeout=timeout)
@@ -235,6 +246,7 @@ async def discard_candidate_action(page: Page, chat_id: str, timeout: int = 3000
         await not_fit_button.click()
         await page.wait_for_timeout(1000)
         if not await _find_chat_dialog(page, chat_id):
+            logger.info(f"跳过候选人成功: {chat_id}")
             return True  # Successfully discarded
     
     # If we get here, the dialog wasn't deleted
@@ -303,6 +315,8 @@ async def list_conversations_action(
                     "metadata": {"avatar": avatar}
                 }
             )
+            # keep a reference for backup use
+            NAME_DICT[data_id] = name
         if len(messages) >= limit:
             logger.debug("成功获取 %s 条候选人", len(messages))
             break

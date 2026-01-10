@@ -239,7 +239,7 @@ ACTION_PROMPTS: dict[str, str] = {
 
 【计算（必须按此计算，避免自洽性错误）】
 - effective_total = sum_over_dims(min(weight, confirmed + potential/2))（0-100）
-- overall(1-10) = clamp(1,10, round(effective_total / 10))（四舍五入到整数）
+- overall(1-10) = clamp(1,10, effective_total / 10)
 - 额外输出三个“聚合评分”（仍为1-10，强制）：
   - 先把每个维度归类到以下三桶之一（按维度名/说明语义判断；不需要完全准确，但要自洽）：
     1) skill：岗位核心专业能力（例如技术深度/方案能力/销售方法论/运营策略/行业知识/谈判能力/交付能力等）
@@ -254,7 +254,7 @@ ACTION_PROMPTS: dict[str, str] = {
 【输出要求（必须遵守）】
 - 必须按 AnalysisSchema 输出全部字段（skill/startup_fit/background/overall/summary/followup_tips）。
 - summary <=320字：只写“概述”（不是下一步 action），必须严格遵守以下换行与前缀格式（不要合并成一行）：
-  1) 第一行必须以“评分表：”开头：按 requirements 的维度逐个给出“维度名=confirmed/weight(+潜力折半贡献)”并给出总分（维度名可适当缩写<=4字，但要可读且能对应岗位要求；用 `;` 分隔更易读；例如：评分表：硬技=28/40(+4);架效=18/30(+2);治理=10/20;沟通=6/10;总分=64(+6)/100=>6/10）
+  1) 第一行必须以“评分表：”开头：按 requirements 的维度逐个给出“维度名=confirmed/weight(+潜力折半贡献)”并给出总分（维度名要可读且能对应岗位要求；用 `;` 分隔更易读；例如：评分表：硬技=28/40(+4);架效=18/30(+2);治理=10/20;沟通=6/10;总分=64(+6)/10=>6/10）
   2) 第二行必须以“画像判断：”开头，且字段顺序固定：主观=不匹配/有潜力/匹配；阶段=PASS/CHAT/SEEK/CONTACT；建议=推进/保留观察/不推进；专业深度=顶尖/优秀/合格/欠缺；抽象能力=顶尖/优秀/合格/欠缺；结构化=顶尖/优秀/合格/欠缺；加分点=…;风险=…;潜力来源=…
      - 加分点/风险/潜力来源必须按“短语@[原文证据]”的形式写在同一行（例如：加分点=规模化落地@[简历:上线后…];风险=缺少关键取舍@[对话:没提取舍];潜力来源=提过关键场景@[简历:关键场景]）。
 - 阶段建议由你判断，但必须遵守**分数兜底规则**：overall<4 → PASS；4<=overall<6 → 只允许 PASS/CHAT
@@ -317,7 +317,7 @@ class AnalyzeAndMessageSchema(BaseModel):
     overall: int = Field(description="综合评分，满分10分，6分为及格/待定，7分为基本满足岗位要求/推进面试，8分为优秀，9分为卓越，10分为完全满足岗位要求")
     summary: str = Field(description="分析总结，不要超过200字")
     followup_tips: str = Field(description="后续招聘顾问跟进的沟通策略，不要超过200字")
-    analysis: str = Field(description="分析概述（等同于 summary）")
+    # analysis: str = Field(description="分析概述（等同于 summary）")
 
     # Action + message fields (stage is derived from action)
     action: Literal["PASS", "CHAT", "SEEK", "CONTACT", "WAIT"] = Field(description="下一步动作")
@@ -415,6 +415,7 @@ ACTION_PROMPTS["ANALYZE_AND_MESSAGE_ACTION"] = """
 - 不讨论敏感信息：年龄/性别/婚育/学历门槛（985/211/QS/大专等）等；这些只能写在 reason，严禁写入 message。
 - 不向候选人询问任何学历/排名相关问题（包括是否985/211/QS、是否双一流、排名区间、第一学历等）；这些只写在内部分析理由中，候选人聊天中不要提及。
 - 不要询问候选人的工作年限，请从简历中推断。
+- 当系统提示候选人发送简历时，或者候选人表达发送简历时，请忽略，系统会自动获取简历并给你简历内容，请等待后续developer消息。
 - 不索取任何材料（代码/PR/架构图/文档/截图/附件等）。
 - 不在聊天里问管理/团队治理类问题（制度、绩效、推进、组织摩擦等）；这类留给线下面试/HR。
 - 系统禁止口头交换联系方式(微信、电话)，不要问候选人联系方式，也不要口头索要联系方式；如需联系后续人，请返回 action=CONTACT。

@@ -997,8 +997,11 @@ async function shouldReply() {
     }
     // Followup: if no new user messages, allow followup after a time window unless last action says WAIT/PASS.
     if (mode === 'followup') {
+        const analysis = getAnalysis();
+        const overall = analysis?.overall;
         const diffDays = diffMinutes / (60 * 24);
-        return diffDays >= 3; // followup after 3 days
+        const { chat_threshold, borderline_threshold } = getThresholdValues();
+        return diffDays >= 3 && overall > borderline_threshold; // followup after 3 days
     }
     // if updated less than 5 minutes, repy on local metadata
     if (diffMinutes < 5) {

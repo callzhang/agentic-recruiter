@@ -338,7 +338,7 @@ async def analyze_and_generate(
 ):
     """Analyze candidate and (optionally) generate message in one request."""
     analysis = json.loads(analysis) if analysis else None
-    resume_type = analysis['resume_type'] if analysis else None
+    resume_type = analysis.get('resume_type') if analysis else None
     new_user_messages = []
     # check if should generate message
     need_reply, user_messages, assistant_message, chat_history = await _should_generate_message(
