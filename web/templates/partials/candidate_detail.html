@@ -521,12 +521,6 @@ async function process_candidate() {
             await passCandidate('分数低于 4，不匹配');
             stage = 'PASS';
         }
-    } catch (error) {
-        error_message = error.message || String(error);
-        showToast(`处理候选人时出错: ${error_message}`, 'error');
-        const candidateId = getCandidateData('candidate_id');
-        const card = document.querySelector(`.candidate-card[data-candidate-id="${candidateId}"]`);
-        card?.dispatchEvent(new CustomEvent('candidate:processing-error', { detail: { error: error_message } }));
     } finally {
         // update the candidate data in the cloud
         await updateCandidateData({ viewed: true, score: score, stage: stage });
@@ -900,7 +894,6 @@ function extractStage(analysis) {
 }
 
 async function passCandidate(reason = '') {
-    url = '/candidates/pass';
     const values = getCandidateData();
     const chat_id = values.chat_id;
     const candidate_id = values.candidate_id;
@@ -908,16 +901,11 @@ async function passCandidate(reason = '') {
     const mode = values.mode;
     
     showToast('正在标记为 PASS...', 'info');
-    
-    const response = await fetch(url, {
+    debugger;
+    const response = await fetch('/candidates/pass', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ 
-            mode: mode,
-            index: index,
-            chat_id: chat_id,
-            candidate_id: candidate_id
-        })
+        body: JSON.stringify({ mode, index, chat_id, candidate_id })
     });
     try{
         const data = await window.handleApiResponse(response);
